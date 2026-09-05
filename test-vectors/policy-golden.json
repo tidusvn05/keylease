@@ -1,0 +1,29 @@
+[
+  {
+    "name": "default deny",
+    "rules": [],
+    "request": {"schema_version":1,"request_id":"req_test","subject":{"agent_id":"agent_a","workload_id":null,"human_principal":null,"on_behalf_of":null,"client_session_id":"s"},"task_id":null,"connection_id":"conn_a","resource":"fake:resource/1","action":"fake.read","arguments":{},"idempotency_key":"i1"},
+    "expected": "deny"
+  },
+  {
+    "name": "explicit allow",
+    "rules": [{"id":"allow-read","version":1,"effect":"allow","agent_id":"agent_a","connection_id":"conn_a","resource_prefix":"fake:resource","actions":["fake.read"],"argument_equals":{},"not_before":null,"expires_at":null,"max_lease_ttl_seconds":600,"max_uses":3,"budget":{"max_items":10,"max_cells":null,"max_response_bytes":4096,"max_rows_changed":null,"max_concurrent":1}}],
+    "request": {"schema_version":1,"request_id":"req_test","subject":{"agent_id":"agent_a","workload_id":null,"human_principal":null,"on_behalf_of":null,"client_session_id":"s"},"task_id":null,"connection_id":"conn_a","resource":"fake:resource/1","action":"fake.read","arguments":{},"idempotency_key":"i2"},
+    "expected":"allow"
+  },
+  {
+    "name": "deny wins",
+    "rules": [
+      {"id":"allow","version":1,"effect":"allow","agent_id":"agent_a","connection_id":null,"resource_prefix":"fake:resource","actions":["fake.write"],"argument_equals":{},"not_before":null,"expires_at":null,"max_lease_ttl_seconds":600,"max_uses":1,"budget":{"max_items":null,"max_cells":null,"max_response_bytes":null,"max_rows_changed":null,"max_concurrent":null}},
+      {"id":"deny","version":1,"effect":"deny","agent_id":null,"connection_id":null,"resource_prefix":"fake:resource/blocked","actions":["fake.write"],"argument_equals":{},"not_before":null,"expires_at":null,"max_lease_ttl_seconds":0,"max_uses":0,"budget":{"max_items":null,"max_cells":null,"max_response_bytes":null,"max_rows_changed":null,"max_concurrent":null}}
+    ],
+    "request":{"schema_version":1,"request_id":"req_test","subject":{"agent_id":"agent_a","workload_id":null,"human_principal":null,"on_behalf_of":null,"client_session_id":"s"},"task_id":null,"connection_id":"conn_a","resource":"fake:resource/blocked/1","action":"fake.write","arguments":{},"idempotency_key":"i3"},
+    "expected":"deny"
+  },
+  {
+    "name":"unknown argument does not satisfy constrained rule",
+    "rules":[{"id":"bounded","version":1,"effect":"allow","agent_id":null,"connection_id":null,"resource_prefix":"fake:resource","actions":["fake.write"],"argument_equals":{"/mode":"safe"},"not_before":null,"expires_at":null,"max_lease_ttl_seconds":60,"max_uses":1,"budget":{"max_items":null,"max_cells":null,"max_response_bytes":null,"max_rows_changed":null,"max_concurrent":null}}],
+    "request":{"schema_version":1,"request_id":"req_test","subject":{"agent_id":"agent_a","workload_id":null,"human_principal":null,"on_behalf_of":null,"client_session_id":"s"},"task_id":null,"connection_id":"conn_a","resource":"fake:resource/1","action":"fake.write","arguments":{"other":true},"idempotency_key":"i4"},
+    "expected":"deny"
+  }
+]

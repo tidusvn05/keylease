@@ -1,0 +1,29 @@
+[package]
+name = "keylease-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64.workspace = true
+chrono.workspace = true
+keylease-core = { path = "../keylease-core" }
+keylease-1pux = { path = "../keylease-1pux" }
+keylease-kdbx = { path = "../keylease-kdbx" }
+keylease-store = { path = "../keylease-store" }
+leasegate-connectors = { path = "../leasegate-connectors" }
+leasegate-policy = { path = "../leasegate-policy" }
+rand.workspace = true
+reqwest.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+totp-rs.workspace = true
+url.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

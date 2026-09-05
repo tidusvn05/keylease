@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/keylease-core",
+  "crates/keylease-crypto",
+  "crates/keylease-store",
+  "crates/keylease-kdbx",
+  "crates/keylease-1pux",
+  "crates/keylease-sync",
+  "crates/leasegate-policy",
+  "crates/leasegate-connectors",
+  "crates/keylease-service",
+  "crates/keylease-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.88"
+
+[workspace.dependencies]
+anyhow = "1.0"
+argon2 = "0.5"
+async-trait = "0.1"
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
+data-encoding = "2.9"
+hkdf = "0.12"
+hmac = "0.12"
+keepass = { version = "0.13.25", features = ["save_kdbx4", "totp"] }
+rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rpassword = "7.4"
+rusqlite = { version = "0.37", features = ["bundled", "chrono"] }
+schemars = { version = "1.0", features = ["chrono04", "uuid1"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+subtle = "2.6"
+tempfile = "3.21"
+thiserror = "2.0"
+tokio = { version = "1.47", features = ["full"] }
+totp-rs = { version = "5.7", features = ["otpauth"] }
+url = { version = "2.5", features = ["serde"] }
+uuid = { version = "1.18", features = ["v4", "v7", "serde"] }
+zeroize = { version = "1.8", features = ["derive"] }
+zip = { version = "7.2", default-features = false, features = ["deflate"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

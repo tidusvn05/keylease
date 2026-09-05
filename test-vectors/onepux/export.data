@@ -1,0 +1,68 @@
+{
+  "accounts": [{
+    "attrs": {
+      "accountName": "Fixture Account",
+      "email": "fixture@example.test",
+      "uuid": "ACCOUNTFIXTURE00000000000001"
+    },
+    "vaults": [{
+      "attrs": {
+        "uuid": "vaultfixture000000000000001",
+        "name": "Personal",
+        "type": "P"
+      },
+      "items": [{
+        "uuid": "itemfixture0000000000000001",
+        "favIndex": 1,
+        "createdAt": 1614298956,
+        "updatedAt": 1635346445,
+        "state": "active",
+        "categoryUuid": "001",
+        "details": {
+          "loginFields": [{
+            "value": "wendy@example.test",
+            "id": "username-id",
+            "name": "username",
+            "fieldType": "E",
+            "designation": "username"
+          }, {
+            "value": "most-secure-password-ever!",
+            "id": "password-id",
+            "name": "password",
+            "fieldType": "P",
+            "designation": "password"
+          }],
+          "notesPlain": "Fixture note with markdown.",
+          "sections": [{
+            "title": "Security",
+            "name": "security-section",
+            "fields": [{
+              "title": "PIN",
+              "id": "pin-id",
+              "value": {"concealed": "12345"}
+            }, {
+              "title": "Support email",
+              "id": "email-id",
+              "value": {"email": "help@example.test"}
+            }]
+          }],
+          "passwordHistory": [{
+            "value": "old-password",
+            "time": 1458322355
+          }],
+          "documentAttributes": {
+            "fileName": "recovery.txt",
+            "documentId": "documentfixture000000000001",
+            "decryptedSize": 27
+          }
+        },
+        "overview": {
+          "title": "Fixture Login",
+          "url": "https://example.test/login",
+          "urls": [{"label": "Login", "url": "https://example.test/login"}],
+          "tags": ["fixture", "migration"]
+        }
+      }]
+    }]
+  }]
+}
