@@ -4,6 +4,7 @@ use keylease_core::*;
 use keylease_service::{EntryPatch, KeyLeaseService, NewEntryInput};
 use keylease_store::NativeStore;
 use leasegate_connectors::Connector;
+use leasegate_policy::{PolicyTemplateInput, PolicyTemplateKind, materialize_provider_template};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -148,8 +149,24 @@ enum ClientCommand {
 #[derive(Subcommand)]
 enum GrantCommand {
     Create(GrantArgs),
+    Template(GrantTemplateArgs),
     List,
     Revoke { id: String },
+}
+#[derive(Args)]
+struct GrantTemplateArgs {
+    #[arg(long)]
+    client: String,
+    #[arg(long)]
+    connection_id: String,
+    #[arg(long)]
+    provider: String,
+    #[arg(long)]
+    resource: String,
+    #[arg(long, default_value = "read_only", value_parser = ["read_only", "contributor"])]
+    profile: String,
+    #[arg(long, default_value_t = 28800)]
+    ttl_seconds: u64,
 }
 #[derive(Args)]
 struct GrantArgs {
@@ -181,6 +198,16 @@ struct GrantArgs {
     max_rows_changed: u64,
     #[arg(long, default_value_t = 1)]
     max_concurrent: u32,
+    #[arg(long)]
+    max_task_requests: Option<u64>,
+    #[arg(long)]
+    max_task_items: Option<u64>,
+    #[arg(long)]
+    max_task_cells: Option<u64>,
+    #[arg(long)]
+    max_task_response_bytes: Option<u64>,
+    #[arg(long)]
+    max_task_rows_changed: Option<u64>,
 }
 #[derive(Subcommand)]
 enum GroupCommand {
@@ -330,6 +357,10 @@ enum GateCommand {
 #[derive(Subcommand)]
 enum AuditCommand {
     Query {
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+    },
+    Recovery {
         #[arg(long, default_value_t = 100)]
         limit: u32,
     },
@@ -603,6 +634,9 @@ async fn run() -> Result<()> {
             let service = admin_service(&cli.db)?;
             match command {
                 AuditCommand::Query { limit } => print_json(&service.audit_query(limit)?),
+                AuditCommand::Recovery { limit } => {
+                    print_json(&service.list_execution_recovery(limit)?)
+                }
             }
         }
         Command::KillSwitch { state } => {
@@ -810,8 +844,36 @@ fn grant_command(db: &Path, command: GrantCommand) -> Result<()> {
                     max_response_bytes: Some(args.max_response_bytes),
                     max_rows_changed: Some(args.max_rows_changed),
                     max_concurrent: Some(args.max_concurrent),
+                    max_task_requests: args.max_task_requests,
+                    max_task_items: args.max_task_items,
+                    max_task_cells: args.max_task_cells,
+                    max_task_response_bytes: args.max_task_response_bytes,
+                    max_task_rows_changed: args.max_task_rows_changed,
                 },
             };
+            service.add_grant(rule.clone())?;
+            print_json(&rule)
+        }
+        GrantCommand::Template(args) => {
+            let ttl =
+                i64::try_from(args.ttl_seconds).map_err(|_| KeyLeaseError::InvalidRequest {
+                    reason: "grant template TTL is too large".into(),
+                })?;
+            let kind = if args.profile == "contributor" {
+                PolicyTemplateKind::Contributor
+            } else {
+                PolicyTemplateKind::ReadOnly
+            };
+            let rule = materialize_provider_template(PolicyTemplateInput {
+                rule_id: format!("grant_{}", uuid_text()),
+                version: 1,
+                agent_id: AgentId(args.client),
+                connection_id: args.connection_id,
+                provider: args.provider,
+                exact_resource: args.resource,
+                kind,
+                expires_at: Utc::now() + Duration::seconds(ttl),
+            })?;
             service.add_grant(rule.clone())?;
             print_json(&rule)
         }
@@ -1770,6 +1832,9 @@ mod tests {
             action: None,
             resource: None,
             created_at: None,
+            task_id: None,
+            risk: None,
+            semantic_summary: None,
         };
         store.save_approval(&approval).unwrap();
         let auth = RpcAuth {

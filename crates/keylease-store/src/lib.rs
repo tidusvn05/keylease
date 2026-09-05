@@ -4,8 +4,8 @@ use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
 use chrono::{DateTime, Utc};
 use keylease_core::{
     AccessLease, AccountId, AgentId, ApprovalRecord, ApprovalState, AuditEvent, ConnectionId,
-    ConnectionRecord, GroupId, ItemId, KeyLeaseError, PolicyRule, Result, VaultGroup, VaultId,
-    VaultItem,
+    ConnectionRecord, DataBudget, DataUsage, GroupId, ItemId, KeyLeaseError, PolicyRule, Result,
+    VaultGroup, VaultId, VaultItem,
 };
 use keylease_crypto::{
     EncryptedItem, PasswordSlot, SecretKey, WrappedKey, create_password_slot, decrypt_item,
@@ -52,6 +52,25 @@ pub struct MutationContext<'a> {
     pub idempotency_key: &'a str,
     pub request_material: &'a [u8],
     pub audit_event: Option<&'a AuditEvent>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskBudgetContext {
+    pub task_id: String,
+    pub connection_id: String,
+    pub policy_version: u64,
+    pub budget: DataBudget,
+    pub initial_usage: DataUsage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionRecoveryRecord {
+    pub idempotency_key: String,
+    pub request_digest: String,
+    pub error: KeyLeaseError,
+    pub reconciliation_required: bool,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1190,6 +1209,28 @@ impl NativeStore {
             .map_err(|_| KeyLeaseError::Storage)?;
         Ok(())
     }
+    pub fn replace_policy_rules(&self, rules: &[PolicyRule]) -> Result<()> {
+        let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        transaction
+            .execute("DELETE FROM policy_rules", [])
+            .map_err(|_| KeyLeaseError::Storage)?;
+        for rule in rules {
+            transaction
+                .execute(
+                    "INSERT INTO policy_rules(rule_id,record_json) VALUES(?1,?2)",
+                    params![rule.id, json(rule)?],
+                )
+                .map_err(|_| KeyLeaseError::Storage)?;
+        }
+        // A new policy version invalidates every outstanding local lease.
+        transaction
+            .execute("UPDATE leases SET revoked=1 WHERE revoked=0", [])
+            .map_err(|_| KeyLeaseError::Storage)?;
+        transaction.commit().map_err(|_| KeyLeaseError::Storage)
+    }
     pub fn load_policy_rules(&self) -> Result<Vec<PolicyRule>> {
         let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
         let mut stmt = connection
@@ -1293,6 +1334,19 @@ impl NativeStore {
         idempotency_key: &str,
         now: DateTime<Utc>,
     ) -> Result<LeaseConsume> {
+        self.consume_lease_with_budget(token, request_digest_hex, idempotency_key, now, None)
+    }
+
+    /// Atomically reserves a lease use, an idempotency key and the predictable
+    /// portion of a cumulative task budget before connector dispatch.
+    pub fn consume_lease_with_budget(
+        &self,
+        token: &str,
+        request_digest_hex: &str,
+        idempotency_key: &str,
+        now: DateTime<Utc>,
+        task_budget: Option<&TaskBudgetContext>,
+    ) -> Result<LeaseConsume> {
         let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1308,6 +1362,18 @@ impl NativeStore {
             return Err(KeyLeaseError::Denied {
                 reason: "global kill switch is active".into(),
             });
+        }
+        if let Some(raw) = tx
+            .query_row(
+                "SELECT record_json FROM execution_failures WHERE idempotency_key=?1",
+                [idempotency_key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|_| KeyLeaseError::Storage)?
+        {
+            let failure: ExecutionRecoveryRecord = from_json(&raw)?;
+            return Err(failure.error);
         }
         if let Some((digest,response)) = tx.query_row("SELECT request_digest,response_json FROM execution_journal WHERE idempotency_key=?1", [idempotency_key], |r| Ok((r.get::<_,String>(0)?,r.get::<_,Option<String>>(1)?))).optional().map_err(|_| KeyLeaseError::Storage)? {
             if digest != request_digest_hex { return Err(KeyLeaseError::IdempotencyConflict); }
@@ -1337,6 +1403,9 @@ impl NativeStore {
                 reason: "lease is bound to a different canonical request".into(),
             });
         }
+        if let Some(context) = task_budget {
+            reserve_task_usage(&tx, context, &context.initial_usage)?;
+        }
         tx.execute(
             "UPDATE leases SET remaining_uses=remaining_uses-1 WHERE token_hash=?1",
             [&token_hash],
@@ -1355,10 +1424,61 @@ impl NativeStore {
         response_json: &str,
         audit_event: Option<&AuditEvent>,
     ) -> Result<()> {
+        self.complete_execution_with_usage(
+            idempotency_key,
+            response_json,
+            audit_event,
+            None,
+            &DataUsage::default(),
+            false,
+        )
+    }
+
+    pub fn complete_execution_with_usage(
+        &self,
+        idempotency_key: &str,
+        response_json: &str,
+        audit_event: Option<&AuditEvent>,
+        task_budget: Option<&TaskBudgetContext>,
+        completion_usage: &DataUsage,
+        reconciliation_required_on_budget_failure: bool,
+    ) -> Result<()> {
         let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| KeyLeaseError::Storage)?;
+        if let Some(context) = task_budget
+            && let Err(error) = reserve_task_usage(&transaction, context, completion_usage)
+        {
+            let request_digest: String = transaction
+                .query_row(
+                    "SELECT request_digest FROM execution_journal WHERE idempotency_key=?1",
+                    [idempotency_key],
+                    |row| row.get(0),
+                )
+                .map_err(|_| KeyLeaseError::Storage)?;
+            let failure = ExecutionRecoveryRecord {
+                idempotency_key: idempotency_key.into(),
+                request_digest,
+                error: error.clone(),
+                reconciliation_required: reconciliation_required_on_budget_failure,
+                created_at: Utc::now(),
+            };
+            transaction
+                .execute(
+                    "INSERT OR REPLACE INTO execution_failures(idempotency_key,record_json,reconciliation_required,created_at) VALUES(?1,?2,?3,?4)",
+                    params![idempotency_key, json(&failure)?, reconciliation_required_on_budget_failure, failure.created_at.to_rfc3339()],
+                )
+                .map_err(|_| KeyLeaseError::Storage)?;
+            transaction
+                .execute(
+                    "UPDATE execution_journal SET status='budget_denied' WHERE idempotency_key=?1 AND status='reserved'",
+                    [idempotency_key],
+                )
+                .map_err(|_| KeyLeaseError::Storage)?;
+            transaction.commit().map_err(|_| KeyLeaseError::Storage)?;
+            return Err(error);
+        }
         let changed = transaction.execute("UPDATE execution_journal SET status='complete',response_json=?1 WHERE idempotency_key=?2 AND status='reserved'", params![response_json,idempotency_key]).map_err(|_| KeyLeaseError::Storage)?;
         if changed != 1 {
             return Err(KeyLeaseError::Storage);
@@ -1372,6 +1492,90 @@ impl NativeStore {
                 .map_err(|_| KeyLeaseError::Storage)?;
         }
         transaction.commit().map_err(|_| KeyLeaseError::Storage)
+    }
+
+    pub fn mark_execution_failed(
+        &self,
+        idempotency_key: &str,
+        error: &KeyLeaseError,
+        reconciliation_required: bool,
+    ) -> Result<ExecutionRecoveryRecord> {
+        let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let request_digest: String = tx
+            .query_row(
+                "SELECT request_digest FROM execution_journal WHERE idempotency_key=?1 AND status='reserved'",
+                [idempotency_key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| KeyLeaseError::Storage)?
+            .ok_or_else(|| KeyLeaseError::NotFound {
+                resource: idempotency_key.into(),
+            })?;
+        let record = ExecutionRecoveryRecord {
+            idempotency_key: idempotency_key.into(),
+            request_digest,
+            error: error.clone(),
+            reconciliation_required,
+            created_at: Utc::now(),
+        };
+        tx.execute(
+            "UPDATE execution_journal SET status=?1 WHERE idempotency_key=?2 AND status='reserved'",
+            params![
+                if reconciliation_required {
+                    "failed_uncertain"
+                } else {
+                    "failed_safe"
+                },
+                idempotency_key
+            ],
+        )
+        .map_err(|_| KeyLeaseError::Storage)?;
+        tx.execute(
+            "INSERT OR REPLACE INTO execution_failures(idempotency_key,record_json,reconciliation_required,created_at) VALUES(?1,?2,?3,?4)",
+            params![idempotency_key, json(&record)?, reconciliation_required, record.created_at.to_rfc3339()],
+        )
+        .map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().map_err(|_| KeyLeaseError::Storage)?;
+        Ok(record)
+    }
+
+    pub fn list_execution_recovery(&self, limit: u32) -> Result<Vec<ExecutionRecoveryRecord>> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT record_json FROM execution_failures WHERE reconciliation_required=1 ORDER BY created_at DESC LIMIT ?1",
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let rows = statement
+            .query_map([limit.min(1000)], |row| row.get::<_, String>(0))
+            .map_err(|_| KeyLeaseError::Storage)?;
+        rows.map(|row| from_json(&row.map_err(|_| KeyLeaseError::Storage)?))
+            .collect()
+    }
+
+    pub fn task_usage(&self, task_id: &str, connection_id: &str) -> Result<DataUsage> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .query_row(
+                "SELECT requests,items,cells,response_bytes,rows_changed FROM task_budget_usage WHERE task_id=?1 AND connection_id=?2",
+                params![task_id, connection_id],
+                |row| {
+                    Ok(DataUsage {
+                        requests: row.get(0)?,
+                        items: row.get(1)?,
+                        cells: row.get(2)?,
+                        response_bytes: row.get(3)?,
+                        rows_changed: row.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|_| KeyLeaseError::Storage)
+            .map(|value| value.unwrap_or_default())
     }
 
     pub fn raw_item_ciphertext(&self, id: &ItemId) -> Result<String> {
@@ -1469,6 +1673,56 @@ fn random_session_id() -> String {
     format!("session_{}", STANDARD_NO_PAD.encode(b))
 }
 
+fn reserve_task_usage(
+    transaction: &rusqlite::Transaction<'_>,
+    context: &TaskBudgetContext,
+    addition: &DataUsage,
+) -> Result<()> {
+    let current = transaction
+        .query_row(
+            "SELECT requests,items,cells,response_bytes,rows_changed FROM task_budget_usage WHERE task_id=?1 AND connection_id=?2",
+            params![context.task_id, context.connection_id],
+            |row| {
+                Ok(DataUsage {
+                    requests: row.get(0)?,
+                    items: row.get(1)?,
+                    cells: row.get(2)?,
+                    response_bytes: row.get(3)?,
+                    rows_changed: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|_| KeyLeaseError::Storage)?
+        .unwrap_or_default();
+    let next = current
+        .checked_add(addition)
+        .ok_or_else(|| KeyLeaseError::Denied {
+            reason: "task data budget counter overflow".into(),
+        })?;
+    if !next.fits_task_budget(&context.budget) {
+        return Err(KeyLeaseError::Denied {
+            reason: "cumulative task data budget exceeded".into(),
+        });
+    }
+    transaction
+        .execute(
+            "INSERT INTO task_budget_usage(task_id,connection_id,policy_version,requests,items,cells,response_bytes,rows_changed) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(task_id,connection_id) DO UPDATE SET policy_version=excluded.policy_version,requests=excluded.requests,items=excluded.items,cells=excluded.cells,response_bytes=excluded.response_bytes,rows_changed=excluded.rows_changed",
+            params![
+                context.task_id,
+                context.connection_id,
+                context.policy_version,
+                next.requests,
+                next.items,
+                next.cells,
+                next.response_bytes,
+                next.rows_changed,
+            ],
+        )
+        .map_err(|_| KeyLeaseError::Storage)?;
+    Ok(())
+}
+
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS vault_meta(account_id TEXT PRIMARY KEY,vault_id TEXT NOT NULL,password_slot TEXT NOT NULL,wrapped_vault_key TEXT NOT NULL,schema_version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS items(item_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,envelope TEXT NOT NULL,updated_at TEXT NOT NULL);
@@ -1480,6 +1734,8 @@ CREATE TABLE IF NOT EXISTS audit_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,ti
 CREATE TABLE IF NOT EXISTS approvals(approval_id TEXT PRIMARY KEY,record_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS leases(lease_id TEXT PRIMARY KEY,token_hash TEXT UNIQUE NOT NULL,record_json TEXT NOT NULL,remaining_uses INTEGER NOT NULL,revoked INTEGER NOT NULL,expires_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS execution_journal(idempotency_key TEXT PRIMARY KEY,request_digest TEXT NOT NULL,status TEXT NOT NULL,response_json TEXT,created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS execution_failures(idempotency_key TEXT PRIMARY KEY,record_json TEXT NOT NULL,reconciliation_required INTEGER NOT NULL,created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS task_budget_usage(task_id TEXT NOT NULL,connection_id TEXT NOT NULL,policy_version INTEGER NOT NULL,requests INTEGER NOT NULL,items INTEGER NOT NULL,cells INTEGER NOT NULL,response_bytes INTEGER NOT NULL,rows_changed INTEGER NOT NULL,PRIMARY KEY(task_id,connection_id));
 CREATE TABLE IF NOT EXISTS runtime_flags(name TEXT PRIMARY KEY,value INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS clients(agent_id TEXT PRIMARY KEY,token_hash TEXT NOT NULL,revoked INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS policy_rules(rule_id TEXT PRIMARY KEY,record_json TEXT NOT NULL);
@@ -1652,6 +1908,93 @@ mod tests {
     }
 
     #[test]
+    fn cumulative_task_budget_is_reserved_atomically_and_survives_replay() {
+        let store = NativeStore::open_in_memory_for_test();
+        let lease = AccessLease {
+            id: keylease_core::LeaseId::new(),
+            token: "kl_live_task_budget".into(),
+            request_digest_hex: "task-digest".into(),
+            policy_version: 3,
+            action: "fake.resource.read".into(),
+            resource: "fake:resource/1".into(),
+            audience: "fake".into(),
+            expires_at: Utc::now() + chrono::Duration::minutes(1),
+            max_uses: 3,
+            remaining_uses: 3,
+            budget: DataBudget {
+                max_task_requests: Some(1),
+                max_task_response_bytes: Some(4),
+                ..Default::default()
+            },
+            approval_id: None,
+            session_id: "s".into(),
+            revoked: false,
+        };
+        store.save_lease(&lease).unwrap();
+        let context = TaskBudgetContext {
+            task_id: "task-one".into(),
+            connection_id: "conn-one".into(),
+            policy_version: 3,
+            budget: lease.budget.clone(),
+            initial_usage: DataUsage {
+                requests: 1,
+                ..Default::default()
+            },
+        };
+        assert!(matches!(
+            store
+                .consume_lease_with_budget(
+                    &lease.token,
+                    "task-digest",
+                    "task-operation-one",
+                    Utc::now(),
+                    Some(&context),
+                )
+                .unwrap(),
+            LeaseConsume::Reserved { .. }
+        ));
+        assert!(matches!(
+            store.consume_lease_with_budget(
+                &lease.token,
+                "task-digest",
+                "task-operation-two",
+                Utc::now(),
+                Some(&context),
+            ),
+            Err(KeyLeaseError::Denied { reason }) if reason.contains("cumulative task")
+        ));
+        assert_eq!(
+            store.task_usage("task-one", "conn-one").unwrap().requests,
+            1
+        );
+
+        let completion = store.complete_execution_with_usage(
+            "task-operation-one",
+            "{}",
+            None,
+            Some(&context),
+            &DataUsage {
+                response_bytes: 5,
+                ..Default::default()
+            },
+            true,
+        );
+        assert!(matches!(completion, Err(KeyLeaseError::Denied { .. })));
+        let recovery = store.list_execution_recovery(10).unwrap();
+        assert_eq!(recovery.len(), 1);
+        assert!(recovery[0].reconciliation_required);
+        assert!(matches!(
+            store.consume_lease(
+                &lease.token,
+                "task-digest",
+                "task-operation-one",
+                Utc::now()
+            ),
+            Err(KeyLeaseError::Denied { .. })
+        ));
+    }
+
+    #[test]
     fn approval_consumption_and_lease_issue_are_atomic_and_single_use() {
         let store = std::sync::Arc::new(NativeStore::open_in_memory_for_test());
         let approval = ApprovalRecord {
@@ -1666,6 +2009,9 @@ mod tests {
             action: None,
             resource: None,
             created_at: None,
+            task_id: None,
+            risk: None,
+            semantic_summary: None,
         };
         store.save_approval(&approval).unwrap();
         store

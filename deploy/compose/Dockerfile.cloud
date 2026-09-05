@@ -1,0 +1,12 @@
+FROM rust:1.94-bookworm AS build
+WORKDIR /src
+COPY . .
+RUN cargo build --locked --release -p keylease-cloud
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN useradd --system --uid 10001 --create-home keylease
+COPY --from=build /src/target/release/keylease-cloud /usr/local/bin/keylease-cloud
+COPY --from=build /src/target/release/keylease-cloud-worker /usr/local/bin/keylease-cloud-worker
+USER keylease
+ENTRYPOINT ["keylease-cloud"]

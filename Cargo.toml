@@ -11,23 +11,30 @@ members = [
   "crates/leasegate-connectors",
   "crates/keylease-service",
   "crates/keylease-cli",
+  "crates/leasegate-control",
+  "crates/leasegate-policy-bundle",
+  "crates/keylease-cloud",
+  "crates/leasegate-edge",
+  "crates/leasegate-mcp",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-rust-version = "1.88"
+rust-version = "1.94"
 
 [workspace.dependencies]
 anyhow = "1.0"
 argon2 = "0.5"
 async-trait = "0.1"
+axum = "0.8.9"
 base64 = "0.22"
 chacha20poly1305 = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }
 data-encoding = "2.9"
+ed25519-dalek = { version = "3.0", features = ["rand_core"] }
 hkdf = "0.12"
 hmac = "0.12"
 keepass = { version = "0.13.25", features = ["save_kdbx4", "totp"] }
@@ -38,11 +45,17 @@ rusqlite = { version = "0.37", features = ["bundled", "chrono"] }
 schemars = { version = "1.0", features = ["chrono04", "uuid1"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_json_canonicalizer = "0.3.2"
 sha2 = "0.10"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "chrono", "uuid", "json", "migrate", "macros"] }
 subtle = "2.6"
 tempfile = "3.21"
 thiserror = "2.0"
 tokio = { version = "1.47", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "request-id", "trace", "limit", "timeout", "catch-panic", "sensitive-headers"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 totp-rs = { version = "5.7", features = ["otpauth"] }
 url = { version = "2.5", features = ["serde"] }
 uuid = { version = "1.18", features = ["v4", "v7", "serde"] }

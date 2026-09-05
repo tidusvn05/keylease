@@ -33,6 +33,8 @@ pub struct ActionSpec {
     pub risk: RiskTier,
     pub allowed_fields: BTreeMap<String, JsonType>,
     pub required_fields: BTreeSet<String>,
+    #[serde(default)]
+    pub required_permissions: Vec<String>,
     pub content_access: ContentAccess,
     pub default_budget: DataBudget,
     pub idempotent: bool,
@@ -115,6 +117,54 @@ pub fn validate_connection_credential(provider: &str, value: &str) -> Result<()>
         });
     }
     Ok(())
+}
+
+/// Convert provider-reported OAuth scopes into LeaseGate's stable action
+/// permissions. Unknown scopes never create authority.
+pub fn normalized_permissions(provider: &str, scopes: &[String]) -> Vec<String> {
+    let mut permissions = BTreeSet::new();
+    for scope in scopes {
+        match (provider, scope.as_str()) {
+            ("google_workspace", "https://www.googleapis.com/auth/drive.file") => {
+                permissions.insert(scope.clone());
+            }
+            ("github", "repo") => {
+                for permission in [
+                    "metadata:read",
+                    "issues:read",
+                    "issues:write",
+                    "pull_requests:read",
+                    "pull_requests:write",
+                    "checks:read",
+                ] {
+                    permissions.insert(permission.into());
+                }
+            }
+            ("linear", "read") => {
+                permissions.insert("issues:read".into());
+            }
+            ("linear", "write" | "issues:create" | "comments:create") => {
+                permissions.insert("issues:write".into());
+            }
+            (_, value)
+                if matches!(
+                    value,
+                    "metadata:read"
+                        | "issues:read"
+                        | "issues:write"
+                        | "pull_requests:read"
+                        | "pull_requests:write"
+                        | "checks:read"
+                        | "content:read"
+                        | "content:write"
+                ) =>
+            {
+                permissions.insert(value.into());
+            }
+            _ => {}
+        }
+    }
+    permissions.into_iter().collect()
 }
 impl std::fmt::Debug for ConnectorCredential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -385,6 +435,7 @@ impl Connector for FakeConnector {
                     risk: RiskTier::R1,
                     allowed_fields: fields(&[("page", JsonType::Number)]),
                     required_fields: required(&[]),
+                    required_permissions: Vec::new(),
                     content_access: ContentAccess::BoundedContent,
                     default_budget: DataBudget {
                         max_items: Some(10),
@@ -399,6 +450,7 @@ impl Connector for FakeConnector {
                     risk: RiskTier::R2,
                     allowed_fields: fields(&[("value", JsonType::String)]),
                     required_fields: required(&["value"]),
+                    required_permissions: Vec::new(),
                     content_access: ContentAccess::None,
                     default_budget: Default::default(),
                     idempotent: false,
@@ -804,10 +856,10 @@ impl Connector for BuiltinConnector {
         if self.manifest.provider == "github" {
             builder = builder
                 .header("user-agent", "KeyLease/0.1")
-                .header("x-github-api-version", "2022-11-28");
+                .header("x-github-api-version", "2026-03-10");
         }
         if self.manifest.provider == "notion" {
-            builder = builder.header("notion-version", "2025-09-03");
+            builder = builder.header("notion-version", "2026-03-11");
         }
         if let Some(body) = request.body {
             builder = builder.json(&body);
@@ -896,7 +948,7 @@ impl Connector for BuiltinConnector {
             request = request.header("user-agent", "KeyLease/0.1");
         }
         if self.manifest.provider == "notion" {
-            request = request.header("notion-version", "2025-09-03");
+            request = request.header("notion-version", "2026-03-11");
         }
         if let Some(body) = body {
             request = request.json(&body);
@@ -937,33 +989,52 @@ impl Connector for BuiltinConnector {
             "google_workspace" => "https://oauth2.googleapis.com/token",
             "github" => "https://github.com/login/oauth/access_token",
             "linear" => "https://api.linear.app/oauth/token",
-            "notion" => return Ok(None),
+            "notion" => "https://api.notion.com/v1/oauth/token",
             _ => {
                 return Err(KeyLeaseError::Denied {
                     reason: "unknown provider".into(),
                 });
             }
         };
-        let mut form = vec![
-            ("grant_type", "refresh_token".to_owned()),
-            ("refresh_token", refresh_token),
-            ("client_id", client_id),
-        ];
-        if let Some(secret) = oauth.client_secret.clone() {
-            form.push(("client_secret", secret));
-        }
-        let response = self
+        let mut request = self
             .client
             .post(endpoint)
-            .header("accept", "application/json")
-            .form(&form)
+            .header("accept", "application/json");
+        if self.manifest.provider == "notion" {
+            let secret = oauth
+                .client_secret
+                .clone()
+                .ok_or_else(|| KeyLeaseError::Denied {
+                    reason: "Notion refresh requires the OAuth client secret".into(),
+                })?;
+            request = request
+                .basic_auth(&client_id, Some(secret))
+                .header("notion-version", "2026-03-11")
+                .json(&json!({"grant_type":"refresh_token","refresh_token":refresh_token}));
+        } else {
+            let mut form = vec![
+                ("grant_type", "refresh_token".to_owned()),
+                ("refresh_token", refresh_token),
+                ("client_id", client_id),
+            ];
+            if let Some(secret) = oauth.client_secret.clone() {
+                form.push(("client_secret", secret));
+            }
+            request = request.form(&form);
+        }
+        let response = request
             .send()
             .await
             .map_err(|_| KeyLeaseError::ConnectorUnavailable { retryable: true })?;
         let status = response.status();
-        let body: Value = response
-            .json()
+        let bytes = response
+            .bytes()
             .await
+            .map_err(|_| KeyLeaseError::ConnectorUnavailable { retryable: true })?;
+        if bytes.len() > 1024 * 1024 {
+            return Err(KeyLeaseError::ConnectorUnavailable { retryable: false });
+        }
+        let body: Value = serde_json::from_slice(&bytes)
             .map_err(|_| KeyLeaseError::ConnectorUnavailable { retryable: false })?;
         if !status.is_success() {
             return Err(KeyLeaseError::Denied {
@@ -978,6 +1049,9 @@ impl Connector for BuiltinConnector {
         if let Some(value) = body.get("refresh_token").and_then(Value::as_str) {
             oauth.refresh_token = Some(value.into());
         }
+        if let Some(scope) = body.get("scope").and_then(Value::as_str) {
+            oauth.scopes = scope.split_whitespace().map(str::to_owned).collect();
+        }
         oauth.expires_at = body
             .get("expires_in")
             .and_then(Value::as_i64)
@@ -987,17 +1061,75 @@ impl Connector for BuiltinConnector {
         Ok(Some(ConnectorCredential::new(serialized)))
     }
     async fn revoke(&self, credential: &ConnectorCredential) -> Result<()> {
-        if self.manifest.provider != "google_workspace" {
-            return Ok(());
+        let token = credential.bearer_token().into_owned();
+        let response = match self.manifest.provider.as_str() {
+            "google_workspace" => self
+                .client
+                .post("https://oauth2.googleapis.com/revoke")
+                .form(&[("token", token.as_str())])
+                .send()
+                .await,
+            "github" => {
+                let oauth = credential.oauth().ok_or_else(|| KeyLeaseError::Denied {
+                    reason: "GitHub upstream revoke requires a structured OAuth credential".into(),
+                })?;
+                let client_id = oauth.client_id.clone().ok_or_else(|| KeyLeaseError::Denied {
+                    reason: "GitHub upstream revoke requires the OAuth client ID".into(),
+                })?;
+                let client_secret = oauth.client_secret.clone().ok_or_else(|| KeyLeaseError::Denied {
+                    reason: "GitHub upstream revoke requires the OAuth client secret".into(),
+                })?;
+                if client_id.len() > 128
+                    || !client_id
+                        .chars()
+                        .all(|value| value.is_ascii_alphanumeric() || "._-".contains(value))
+                {
+                    return Err(KeyLeaseError::InvalidRequest {
+                        reason: "invalid GitHub OAuth client ID".into(),
+                    });
+                }
+                self.client
+                    .delete(format!(
+                        "https://api.github.com/applications/{client_id}/grant"
+                    ))
+                    .basic_auth(client_id, Some(client_secret))
+                    .header("accept", "application/vnd.github+json")
+                    .header("x-github-api-version", "2026-03-10")
+                    .header("user-agent", "KeyLease/0.1")
+                    .json(&json!({"access_token":token}))
+                    .send()
+                    .await
+            }
+            "notion" => {
+                let oauth = credential.oauth().ok_or_else(|| KeyLeaseError::Denied {
+                    reason: "Notion upstream revoke requires a structured OAuth credential".into(),
+                })?;
+                let client_id = oauth.client_id.clone().ok_or_else(|| KeyLeaseError::Denied {
+                    reason: "Notion upstream revoke requires the OAuth client ID".into(),
+                })?;
+                let client_secret = oauth.client_secret.clone().ok_or_else(|| KeyLeaseError::Denied {
+                    reason: "Notion upstream revoke requires the OAuth client secret".into(),
+                })?;
+                self.client
+                    .post("https://api.notion.com/v1/oauth/revoke")
+                    .basic_auth(client_id, Some(client_secret))
+                    .header("notion-version", "2026-03-11")
+                    .json(&json!({"token":token}))
+                    .send()
+                    .await
+            }
+            "linear" => {
+                return Err(KeyLeaseError::Denied {
+                    reason: "Linear does not publish an upstream token revocation endpoint; connection remains locally revoked".into(),
+                });
+            }
+            _ => {
+                return Err(KeyLeaseError::Denied {
+                    reason: "unknown provider".into(),
+                });
+            }
         }
-        let token = credential.bearer_token();
-        let response = self
-            .client
-            .post("https://oauth2.googleapis.com/revoke")
-            .form(&[("token", token.as_ref())])
-            .send()
-            .await
-            .map_err(|_| KeyLeaseError::ConnectorUnavailable { retryable: true })?;
+        .map_err(|_| KeyLeaseError::ConnectorUnavailable { retryable: true })?;
         if response.status().is_success() {
             Ok(())
         } else {
@@ -1934,6 +2066,7 @@ fn spec(
         risk,
         allowed_fields: fields(allowed),
         required_fields: required(required_fields),
+        required_permissions: permissions_for_action(name),
         content_access,
         default_budget: DataBudget {
             max_items: Some(100),
@@ -1941,9 +2074,35 @@ fn spec(
             max_response_bytes: Some(1_048_576),
             max_rows_changed: Some(1_000),
             max_concurrent: Some(1),
+            ..Default::default()
         },
         idempotent,
     }
+}
+
+fn permissions_for_action(action: &str) -> Vec<String> {
+    let permissions: &[&str] = match action {
+        action if action.starts_with("google_") => &["https://www.googleapis.com/auth/drive.file"],
+        "github.repository.get_metadata" => &["metadata:read"],
+        "github.issue.list" | "github.issue.get" => &["issues:read"],
+        "github.issue.create" | "github.issue.comment" => &["issues:write"],
+        "github.pull_request.list" | "github.pull_request.get" => &["pull_requests:read"],
+        "github.pull_request.create_draft" | "github.pull_request.comment" => {
+            &["pull_requests:write"]
+        }
+        "github.checks.read" => &["checks:read"],
+        "linear.issue.list" | "linear.issue.get" => &["issues:read"],
+        "linear.issue.create" | "linear.comment.create" => &["issues:write"],
+        "notion.page.search_authorized" | "notion.page.get_markdown" => &["content:read"],
+        "notion.page.create" | "notion.page.append_markdown" | "notion.page.update_markdown" => {
+            &["content:write"]
+        }
+        _ => &[],
+    };
+    permissions
+        .iter()
+        .map(|value| (*value).to_owned())
+        .collect()
 }
 
 pub fn response_hash(value: &Value) -> String {
@@ -2035,6 +2194,45 @@ mod tests {
                 assert!(!action.name.contains("formula"));
             }
         }
+    }
+    #[test]
+    fn provider_scopes_normalize_without_granting_unknown_authority() {
+        assert_eq!(
+            normalized_permissions("linear", &["read".into(), "unknown".into()]),
+            ["issues:read"]
+        );
+        let github = normalized_permissions("github", &["repo".into()]);
+        assert!(github.contains(&"issues:write".into()));
+        assert!(github.contains(&"pull_requests:write".into()));
+        assert!(normalized_permissions("github", &["user:email".into()]).is_empty());
+    }
+
+    #[tokio::test]
+    async fn unsupported_or_malformed_provider_revocation_fails_closed() {
+        let linear = BuiltinConnector::linear();
+        assert!(
+            linear
+                .revoke(&ConnectorCredential::new("linear-token".into()))
+                .await
+                .is_err()
+        );
+        let github = BuiltinConnector::github();
+        let malformed = OAuthCredential {
+            access_token: "github-token".into(),
+            refresh_token: None,
+            client_id: Some("../invalid".into()),
+            client_secret: Some("client-secret".into()),
+            expires_at: None,
+            scopes: vec!["repo".into()],
+        };
+        assert!(
+            github
+                .revoke(&ConnectorCredential::new(
+                    serde_json::to_string(&malformed).unwrap()
+                ))
+                .await
+                .is_err()
+        );
     }
     #[test]
     fn google_sheet_writes_are_raw_only() {

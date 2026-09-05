@@ -1,0 +1,10 @@
+target
+.git
+**/.dart_tool
+**/build
+deploy/compose/secrets
+deploy/compose/.env
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.kdbx

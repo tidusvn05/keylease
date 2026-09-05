@@ -1,0 +1,18 @@
+FROM ghcr.io/cirruslabs/flutter@sha256:46691e311715845de03a3ba4753a475476936805b29431b1f00f1816981033f8 AS build
+ARG KEYLEASE_CLOUD_URL
+ARG KEYLEASE_ORGANIZATION_ID=""
+ARG KEYLEASE_PROJECT_ID=""
+ARG KEYLEASE_APPROVER_ID=""
+WORKDIR /app
+COPY apps/approval-flutter/pubspec.yaml apps/approval-flutter/analysis_options.yaml ./
+RUN flutter pub get
+COPY apps/approval-flutter .
+RUN flutter build web --release \
+    --dart-define=KEYLEASE_CLOUD_URL=${KEYLEASE_CLOUD_URL} \
+    --dart-define=KEYLEASE_ORGANIZATION_ID=${KEYLEASE_ORGANIZATION_ID} \
+    --dart-define=KEYLEASE_PROJECT_ID=${KEYLEASE_PROJECT_ID} \
+    --dart-define=KEYLEASE_APPROVER_ID=${KEYLEASE_APPROVER_ID}
+
+FROM caddy:2.10-alpine
+COPY deploy/compose/Caddyfile /etc/caddy/Caddyfile
+COPY --from=build /app/build/web /srv

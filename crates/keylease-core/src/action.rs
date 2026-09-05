@@ -101,6 +101,61 @@ pub struct DataBudget {
     pub max_response_bytes: Option<u64>,
     pub max_rows_changed: Option<u64>,
     pub max_concurrent: Option<u32>,
+    /// Cumulative request limit for one task. `None` leaves the task unbounded.
+    #[serde(default)]
+    pub max_task_requests: Option<u64>,
+    /// Cumulative returned/changed item limit for one task.
+    #[serde(default)]
+    pub max_task_items: Option<u64>,
+    /// Cumulative read/changed cell limit for one task.
+    #[serde(default)]
+    pub max_task_cells: Option<u64>,
+    /// Cumulative response-byte limit for one task.
+    #[serde(default)]
+    pub max_task_response_bytes: Option<u64>,
+    /// Cumulative changed-row limit for one task.
+    #[serde(default)]
+    pub max_task_rows_changed: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DataUsage {
+    pub requests: u64,
+    pub items: u64,
+    pub cells: u64,
+    pub response_bytes: u64,
+    pub rows_changed: u64,
+}
+
+impl DataUsage {
+    pub fn checked_add(&self, other: &Self) -> Option<Self> {
+        Some(Self {
+            requests: self.requests.checked_add(other.requests)?,
+            items: self.items.checked_add(other.items)?,
+            cells: self.cells.checked_add(other.cells)?,
+            response_bytes: self.response_bytes.checked_add(other.response_bytes)?,
+            rows_changed: self.rows_changed.checked_add(other.rows_changed)?,
+        })
+    }
+
+    pub fn fits_task_budget(&self, budget: &DataBudget) -> bool {
+        !budget
+            .max_task_requests
+            .is_some_and(|limit| self.requests > limit)
+            && !budget
+                .max_task_items
+                .is_some_and(|limit| self.items > limit)
+            && !budget
+                .max_task_cells
+                .is_some_and(|limit| self.cells > limit)
+            && !budget
+                .max_task_response_bytes
+                .is_some_and(|limit| self.response_bytes > limit)
+            && !budget
+                .max_task_rows_changed
+                .is_some_and(|limit| self.rows_changed > limit)
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, JsonSchema, PartialEq)]

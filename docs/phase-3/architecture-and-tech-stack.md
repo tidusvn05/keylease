@@ -1,8 +1,8 @@
 # Phase 3 architecture and technical stack
 
-Status: proposed
+Status: implemented beta; see `../phase-2-3-implementation.md` for evidence and limitations
 
-Last updated: 2026-09-05
+Last updated: 2026-09-06
 
 Scope: KeyLease Cloud + LeaseGate Edge/MCP Beta
 

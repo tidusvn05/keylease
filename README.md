@@ -23,7 +23,15 @@ without going through `KeyLeaseService`.
 - `leasegate-connectors`: connector trait, fake conformance connector and providers.
 - `keylease-service`: the only mutation/policy/connector orchestration layer.
 - `keylease-cli`: headless CLI and local Unix-socket daemon.
+- `keylease-cloud`: PostgreSQL-backed Phase 3 control API and worker.
+- `leasegate-control` / `leasegate-policy-bundle`: versioned Cloud/Edge wire
+  contracts and Ed25519/JCS signatures.
+- `leasegate-edge`: Linux Edge control cache, offline enforcement and encrypted
+  audit spool.
+- `leasegate-mcp`: authenticated Streamable HTTP MCP adapter over the canonical
+  service boundary.
 - `apps/desktop-flutter`: macOS presentation shell (requires Flutter locally).
+- `apps/approval-flutter`: responsive remote approval and Edge-health web app.
 
 ## Development
 
@@ -39,6 +47,10 @@ identity, trust-mode or connector boundaries.
 The proposed Phase 3 Cloud/Edge/MCP architecture, including the single-VPS
 self-hosted profile and technical stack, is documented in
 [`docs/phase-3/architecture-and-tech-stack.md`](docs/phase-3/architecture-and-tech-stack.md).
+Implemented Phase 2/3 scope and explicit beta limitations are tracked in
+[`docs/phase-2-3-implementation.md`](docs/phase-2-3-implementation.md). To run
+the complete beta profile on one VPS, follow
+[`docs/self-hosted-vps.md`](docs/self-hosted-vps.md).
 
 For an Intel Mac (`x86_64`) build and release-acceptance walkthrough, see
 [`docs/macos-x86_64-build-test.md`](docs/macos-x86_64-build-test.md). The

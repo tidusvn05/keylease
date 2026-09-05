@@ -50,6 +50,11 @@ opaque_id!(LeaseId, "lease_");
 opaque_id!(ApprovalId, "approval_");
 opaque_id!(RequestId, "req_");
 opaque_id!(ActionId, "action_");
+opaque_id!(MembershipId, "membership_");
+opaque_id!(EdgeId, "edge_");
+opaque_id!(ControlEventId, "event_");
+opaque_id!(SyncMutationId, "mutation_");
+opaque_id!(PolicyBundleId, "policy_bundle_");
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

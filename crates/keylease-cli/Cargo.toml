@@ -16,6 +16,7 @@ keylease-core = { path = "../keylease-core" }
 keylease-service = { path = "../keylease-service" }
 keylease-store = { path = "../keylease-store" }
 leasegate-connectors = { path = "../leasegate-connectors" }
+leasegate-policy = { path = "../leasegate-policy" }
 rpassword.workspace = true
 schemars.workspace = true
 serde.workspace = true

@@ -1,0 +1,9 @@
+{
+  "name": "LeaseGate Approval",
+  "short_name": "LeaseGate",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#f7faf8",
+  "theme_color": "#315c4a",
+  "description": "Remote exact-request approval and Edge health for KeyLease Cloud"
+}

@@ -8,11 +8,13 @@ use keylease_1pux::{
 };
 use keylease_core::*;
 use keylease_kdbx::{ImportPreview, KdbxAdapter, KeepassRsAdapter, MigrationReport};
-use keylease_store::{LeaseConsume, MutationContext, NativeStore, UnlockedVault};
+use keylease_store::{
+    LeaseConsume, MutationContext, NativeStore, TaskBudgetContext, UnlockedVault,
+};
 use leasegate_connectors::{
     BuiltinConnector, CanonicalAction, Connector, ConnectorCredential, FakeConnector,
-    OAuthCredential, a1_cell_count, enforce_response_budget, validate_connection_credential,
-    validate_enrolled_resource,
+    OAuthCredential, a1_cell_count, enforce_response_budget, normalized_permissions,
+    validate_connection_credential, validate_enrolled_resource,
 };
 use leasegate_policy::RulePolicyEngine;
 use rand::RngCore;
@@ -186,7 +188,7 @@ impl std::fmt::Debug for EntryPatch {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum LeaseRequestOutcome {
     Issued { lease: Box<AccessLease> },
-    ApprovalRequired { approval: ApprovalRecord },
+    ApprovalRequired { approval: Box<ApprovalRecord> },
 }
 
 impl KeyLeaseService {
@@ -379,6 +381,13 @@ impl KeyLeaseService {
         }
         self.store.save_policy_rule(&rule)?;
         let rules = self.store.load_policy_rules()?;
+        *self.policy.write().map_err(|_| KeyLeaseError::Storage)? = RulePolicyEngine::new(rules);
+        Ok(())
+    }
+    /// Atomically activates a complete signed-policy rule set at the local
+    /// enforcement boundary and revokes leases issued under the old version.
+    pub fn replace_policy_rules(&self, rules: Vec<PolicyRule>) -> Result<()> {
+        self.store.replace_policy_rules(&rules)?;
         *self.policy.write().map_err(|_| KeyLeaseError::Storage)? = RulePolicyEngine::new(rules);
         Ok(())
     }
@@ -1354,6 +1363,10 @@ impl KeyLeaseService {
                 })?;
         let manifest = connector.manifest();
         validate_connection_credential(provider, &credential)?;
+        let granted_permissions = ConnectorCredential::new(credential.clone())
+            .oauth()
+            .map(|oauth| normalized_permissions(provider, &oauth.scopes))
+            .unwrap_or_default();
         let mut authorized_resources = authorized_resources
             .iter()
             .map(|resource| validate_enrolled_resource(&manifest, resource))
@@ -1417,6 +1430,11 @@ impl KeyLeaseService {
                 execution_location: "local".into(),
                 credential_item_id: item.id.0,
                 health: ConnectionHealth::Connected,
+                health_reason: None,
+                reauthorization_required: false,
+                granted_permissions,
+                last_checked_at: None,
+                last_refreshed_at: None,
                 authorized_resources,
                 created_at: now,
                 updated_at: now,
@@ -1426,8 +1444,27 @@ impl KeyLeaseService {
         })
     }
     pub async fn test_connection(&self, id: &ConnectionId) -> Result<()> {
-        let (record, credential) = self.connection_credential(id)?;
-        self.connector(&record)?.test_connection(&credential).await
+        let (mut record, credential) = self.connection_credential(id)?;
+        let result = self.connector(&record)?.test_connection(&credential).await;
+        record.last_checked_at = Some(Utc::now());
+        record.updated_at = Utc::now();
+        match &result {
+            Ok(()) => {
+                record.health = ConnectionHealth::Connected;
+                record.health_reason = None;
+            }
+            Err(KeyLeaseError::Denied { .. }) => {
+                record.health = ConnectionHealth::Expired;
+                record.health_reason = Some("upstream authorization was rejected".into());
+                record.reauthorization_required = true;
+            }
+            Err(_) => {
+                record.health = ConnectionHealth::Degraded;
+                record.health_reason = Some("upstream health check failed".into());
+            }
+        }
+        self.store.save_connection(&record)?;
+        result
     }
     pub fn list_connections(&self) -> Result<Vec<ConnectionRecord>> {
         self.store.list_connections()
@@ -1891,7 +1928,26 @@ impl KeyLeaseService {
     pub async fn refresh_connection(&self, id: &ConnectionId) -> Result<ConnectionRecord> {
         let (mut record, credential) = self.connection_credential(id)?;
         let connector = self.connector(&record)?;
-        if let Some(refreshed) = connector.refresh(&credential).await? {
+        let refreshed = match connector.refresh(&credential).await {
+            Ok(value) => value,
+            Err(error) => {
+                record.health = if matches!(error, KeyLeaseError::Denied { .. }) {
+                    ConnectionHealth::Expired
+                } else {
+                    ConnectionHealth::Degraded
+                };
+                record.health_reason = Some("credential refresh failed closed".into());
+                record.reauthorization_required = matches!(error, KeyLeaseError::Denied { .. });
+                record.updated_at = Utc::now();
+                self.store.save_connection(&record)?;
+                return Err(error);
+            }
+        };
+        if let Some(refreshed) = refreshed {
+            let refreshed_permissions = refreshed
+                .oauth()
+                .map(|oauth| normalized_permissions(&record.provider, &oauth.scopes))
+                .unwrap_or_else(|| record.granted_permissions.clone());
             self.with_vault(|vault| {
                 let item_id = ItemId(record.credential_item_id.clone());
                 let mut item = self.store.get_item(vault, &item_id)?;
@@ -1919,8 +1975,12 @@ impl KeyLeaseService {
                     },
                 )
             })?;
+            record.granted_permissions = refreshed_permissions;
         }
         record.health = ConnectionHealth::Connected;
+        record.health_reason = None;
+        record.reauthorization_required = false;
+        record.last_refreshed_at = Some(Utc::now());
         record.updated_at = Utc::now();
         self.store.save_connection(&record)?;
         Ok(record)
@@ -1928,17 +1988,31 @@ impl KeyLeaseService {
     pub fn disconnect_connection(&self, id: &ConnectionId) -> Result<ConnectionRecord> {
         let mut record = self.store.get_connection(id)?;
         record.health = ConnectionHealth::Disconnected;
+        record.health_reason = Some("disconnected locally".into());
         record.updated_at = Utc::now();
         self.store.save_connection(&record)?;
         Ok(record)
     }
     pub async fn revoke_connection(&self, id: &ConnectionId) -> Result<ConnectionRecord> {
         let (mut record, credential) = self.connection_credential(id)?;
-        self.connector(&record)?.revoke(&credential).await?;
+        // Revoke locally before contacting the provider. A provider outage must
+        // never leave the gateway capable of using a connection the user has
+        // revoked.
         record.health = ConnectionHealth::Revoked;
+        record.health_reason = Some("revoked locally".into());
+        record.reauthorization_required = false;
         record.updated_at = Utc::now();
         self.store.save_connection(&record)?;
-        Ok(record)
+        match self.connector(&record)?.revoke(&credential).await {
+            Ok(()) => Ok(record),
+            Err(error) => {
+                record.health_reason =
+                    Some("revoked locally; upstream revoke requires retry".into());
+                record.updated_at = Utc::now();
+                self.store.save_connection(&record)?;
+                Err(error)
+            }
+        }
     }
 
     pub fn preview_kdbx_import(&self, bytes: &[u8], password: &str) -> Result<ImportPreview> {
@@ -2133,6 +2207,7 @@ impl KeyLeaseService {
         let record = self.store.get_connection(&request.connection_id)?;
         let connector = self.connector(&record)?;
         let canonical = connector.canonicalize(&request).await?;
+        validate_connection_permissions(&record, &canonical.spec)?;
         if !is_local_authorized_listing(&canonical)
             && !record
                 .authorized_resources
@@ -2199,6 +2274,9 @@ impl KeyLeaseService {
                             action: Some(canonical.request.action.clone()),
                             resource: Some(canonical.request.resource.clone()),
                             created_at: Some(now),
+                            task_id: canonical.request.task_id.clone(),
+                            risk: Some(canonical.spec.risk.clone()),
+                            semantic_summary: Some(approval_semantic_summary(&canonical)),
                         };
                         let event = self.action_audit_event(
                             actor,
@@ -2209,7 +2287,9 @@ impl KeyLeaseService {
                             None,
                         );
                         self.store.save_approval_with_audit(&approval, &event)?;
-                        return Ok(LeaseRequestOutcome::ApprovalRequired { approval });
+                        return Ok(LeaseRequestOutcome::ApprovalRequired {
+                            approval: Box::new(approval),
+                        });
                     }
                 }
             };
@@ -2279,6 +2359,26 @@ impl KeyLeaseService {
             )?;
             Ok(())
         })
+    }
+    pub fn accept_remote_approval(
+        &self,
+        id: &str,
+        request_digest: &str,
+        policy_version: u64,
+    ) -> Result<()> {
+        let approval = self.store.get_approval(id)?;
+        if approval.request_digest_hex != request_digest
+            || approval.policy_version != policy_version
+            || approval.state != ApprovalState::Pending
+            || approval.expires_at <= Utc::now()
+        {
+            return Err(KeyLeaseError::Denied {
+                reason: "remote approval is not bound to the pending local request".into(),
+            });
+        }
+        self.store
+            .decide_pending_approval(id, ApprovalState::Approved, Utc::now(), None)?;
+        Ok(())
     }
     pub fn list_pending_approvals_authorized(
         &self,
@@ -2368,6 +2468,7 @@ impl KeyLeaseService {
         }
         let connector = self.connector(&record)?;
         let canonical = connector.canonicalize(&request).await?;
+        validate_connection_permissions(&record, &canonical.spec)?;
         if !is_local_authorized_listing(&canonical)
             && !record
                 .authorized_resources
@@ -2412,11 +2513,15 @@ impl KeyLeaseService {
             });
         }
         validate_action_budget(&canonical, &lease.budget)?;
+        let task_budget = task_budget_context(&canonical, &lease)?;
         let _execution_slot = self.acquire_execution_slot(&lease)?;
-        match self
-            .store
-            .consume_lease(token, &digest, &request.idempotency_key, Utc::now())?
-        {
+        match self.store.consume_lease_with_budget(
+            token,
+            &digest,
+            &request.idempotency_key,
+            Utc::now(),
+            task_budget.as_ref(),
+        )? {
             LeaseConsume::Replay {
                 response_json: Some(raw),
             } => serde_json::from_str(&raw).map_err(|_| KeyLeaseError::Storage),
@@ -2476,15 +2581,34 @@ impl KeyLeaseService {
                             Some(lease.policy_version),
                             Some(&response),
                         );
-                        self.store.complete_execution(
+                        let usage = completion_usage(&response, canonical.spec.idempotent)?;
+                        if let Err(error) = self.store.complete_execution_with_usage(
                             &request.idempotency_key,
                             &serde_json::to_string(&response)
                                 .map_err(|_| KeyLeaseError::Storage)?,
                             Some(&audit),
-                        )?;
+                            task_budget.as_ref(),
+                            &usage,
+                            !canonical.spec.idempotent,
+                        ) {
+                            self.audit_action(
+                                actor,
+                                &canonical,
+                                "deny",
+                                "task_budget_exceeded",
+                                Some(lease.policy_version),
+                                None,
+                            )?;
+                            return Err(error);
+                        }
                         Ok(response)
                     }
                     Err(error) => {
+                        self.store.mark_execution_failed(
+                            &request.idempotency_key,
+                            &error,
+                            !canonical.spec.idempotent,
+                        )?;
                         self.audit_action(
                             actor,
                             &canonical,
@@ -2502,6 +2626,12 @@ impl KeyLeaseService {
 
     pub fn audit_query(&self, limit: u32) -> Result<Vec<AuditEvent>> {
         self.store.query_audit(limit.min(1000))
+    }
+    pub fn list_execution_recovery(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<keylease_store::ExecutionRecoveryRecord>> {
+        self.store.list_execution_recovery(limit)
     }
     pub fn audit_query_authorized(
         &self,
@@ -3198,6 +3328,68 @@ fn intersect_budget(policy: &DataBudget, connector: &DataBudget) -> DataBudget {
         max_response_bytes: minimum(policy.max_response_bytes, connector.max_response_bytes),
         max_rows_changed: minimum(policy.max_rows_changed, connector.max_rows_changed),
         max_concurrent: minimum(policy.max_concurrent, connector.max_concurrent),
+        max_task_requests: minimum(policy.max_task_requests, connector.max_task_requests),
+        max_task_items: minimum(policy.max_task_items, connector.max_task_items),
+        max_task_cells: minimum(policy.max_task_cells, connector.max_task_cells),
+        max_task_response_bytes: minimum(
+            policy.max_task_response_bytes,
+            connector.max_task_response_bytes,
+        ),
+        max_task_rows_changed: minimum(
+            policy.max_task_rows_changed,
+            connector.max_task_rows_changed,
+        ),
+    }
+}
+
+fn approval_semantic_summary(action: &CanonicalAction) -> ApprovalSemanticSummary {
+    let mut changed_fields = action
+        .request
+        .arguments
+        .as_object()
+        .map(|arguments| arguments.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    changed_fields.sort();
+    let argument_fingerprints = changed_fields
+        .iter()
+        .filter_map(|field| {
+            let value = action.request.arguments.get(field)?;
+            let canonical = serde_json::to_vec(&keylease_core::canonical_json(value)).ok()?;
+            let value_type = match value {
+                Value::Null => "null",
+                Value::Bool(_) => "boolean",
+                Value::Number(_) => "number",
+                Value::String(_) => "string",
+                Value::Array(_) => "array",
+                Value::Object(_) => "object",
+            };
+            let length = match value {
+                Value::String(value) => Some(value.len() as u64),
+                Value::Array(value) => Some(value.len() as u64),
+                Value::Object(value) => Some(value.len() as u64),
+                _ => None,
+            };
+            Some(ArgumentFingerprint {
+                field: field.clone(),
+                value_type: value_type.into(),
+                length,
+                sha256: hex(&Sha256::digest(canonical)),
+            })
+        })
+        .collect();
+    let blast_radius = match action.spec.risk {
+        RiskTier::R0 => "metadata-only; no side effect",
+        RiskTier::R1 => "bounded read from one enrolled resource",
+        RiskTier::R2 => "reversible write to one enrolled resource",
+        RiskTier::R3 => "high-impact write to one exact enrolled resource",
+        RiskTier::R4 => "critical or destructive action",
+    };
+    ApprovalSemanticSummary {
+        operation: action.request.action.clone(),
+        target: action.request.resource.clone(),
+        changed_fields,
+        argument_fingerprints,
+        blast_radius: blast_radius.into(),
     }
 }
 fn validate_action_budget(action: &CanonicalAction, budget: &DataBudget) -> Result<()> {
@@ -3269,6 +3461,105 @@ fn validate_action_budget(action: &CanonicalAction, budget: &DataBudget) -> Resu
         }
     }
     Ok(())
+}
+
+fn task_budget_context(
+    action: &CanonicalAction,
+    lease: &AccessLease,
+) -> Result<Option<TaskBudgetContext>> {
+    let has_task_limit = lease.budget.max_task_requests.is_some()
+        || lease.budget.max_task_items.is_some()
+        || lease.budget.max_task_cells.is_some()
+        || lease.budget.max_task_response_bytes.is_some()
+        || lease.budget.max_task_rows_changed.is_some();
+    let Some(task_id) = action.request.task_id.as_ref() else {
+        if has_task_limit {
+            return Err(KeyLeaseError::Denied {
+                reason: "a task_id is required by the cumulative task budget".into(),
+            });
+        }
+        return Ok(None);
+    };
+    let mut initial_usage = DataUsage {
+        requests: 1,
+        ..Default::default()
+    };
+    if !action.spec.idempotent {
+        initial_usage.items = 1;
+    }
+    if matches!(
+        action.request.action.as_str(),
+        "google_sheets.rows.append" | "google_sheets.values.update"
+    ) {
+        let rows = action
+            .request
+            .arguments
+            .get("values")
+            .and_then(Value::as_array)
+            .ok_or_else(|| KeyLeaseError::InvalidRequest {
+                reason: "values must be an array".into(),
+            })?;
+        initial_usage.rows_changed = rows.len() as u64;
+        initial_usage.cells = rows
+            .iter()
+            .map(|row| row.as_array().map_or(0, |values| values.len() as u64))
+            .sum();
+    }
+    Ok(Some(TaskBudgetContext {
+        task_id: task_id.0.clone(),
+        connection_id: action.request.connection_id.0.clone(),
+        policy_version: lease.policy_version,
+        budget: lease.budget.clone(),
+        initial_usage,
+    }))
+}
+
+fn validate_connection_permissions(
+    connection: &ConnectionRecord,
+    action: &leasegate_connectors::ActionSpec,
+) -> Result<()> {
+    // Empty means the provider/token type cannot report permissions. When a
+    // structured OAuth credential does report them, enforce incrementally per
+    // action instead of treating connection-level authentication as authority.
+    if connection.granted_permissions.is_empty() {
+        return Ok(());
+    }
+    let missing = action
+        .required_permissions
+        .iter()
+        .filter(|permission| !connection.granted_permissions.contains(permission))
+        .cloned()
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(KeyLeaseError::Denied {
+            reason: format!(
+                "incremental reauthorization required for permissions: {}",
+                missing.join(",")
+            ),
+        })
+    }
+}
+
+fn completion_usage(response: &ActionResponse, idempotent: bool) -> Result<DataUsage> {
+    Ok(DataUsage {
+        requests: 0,
+        items: if idempotent {
+            response.item_count.unwrap_or(0)
+        } else {
+            0
+        },
+        cells: if idempotent {
+            response.cell_count.unwrap_or(0)
+        } else {
+            0
+        },
+        response_bytes: serde_json::to_vec(&response.body)
+            .map_err(|_| KeyLeaseError::Storage)?
+            .len() as u64,
+        rows_changed: 0,
+    })
 }
 
 pub fn generate_password(length: usize) -> Result<String> {
@@ -3939,7 +4230,7 @@ mod tests {
             schema_version: 1,
             request_id: RequestId::new(),
             subject: actor.clone(),
-            task_id: None,
+            task_id: Some(TaskId("task-approved-write".into())),
             connection_id: connection.id,
             resource: "fake:resource/1".into(),
             action: "fake.resource.write".into(),
@@ -3954,6 +4245,11 @@ mod tests {
             LeaseRequestOutcome::ApprovalRequired { approval } => approval,
             _ => panic!("approval expected"),
         };
+        assert_eq!(approval.task_id, request.task_id);
+        let summary = approval.semantic_summary.as_ref().unwrap();
+        assert_eq!(summary.operation, "fake.resource.write");
+        assert_eq!(summary.changed_fields, ["value"]);
+        assert!(!serde_json::to_string(summary).unwrap().contains("approved"));
         service.approve(&approval.id.0).unwrap();
         let mut changed = request.clone();
         changed.arguments = serde_json::json!({"value":"changed-after-approval"});

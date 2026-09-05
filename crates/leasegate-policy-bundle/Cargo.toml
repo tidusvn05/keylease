@@ -1,0 +1,19 @@
+[package]
+name = "leasegate-policy-bundle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64.workspace = true
+chrono.workspace = true
+ed25519-dalek.workspace = true
+keylease-core = { path = "../keylease-core" }
+leasegate-control = { path = "../leasegate-control" }
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_json_canonicalizer.workspace = true
+sha2.workspace = true
+zeroize.workspace = true

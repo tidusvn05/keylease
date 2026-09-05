@@ -7,3 +7,5 @@
 .flutter-plugins*
 .packages
 build/
+deploy/compose/.env
+deploy/compose/secrets/

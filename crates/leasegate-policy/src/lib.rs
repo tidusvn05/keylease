@@ -2,8 +2,148 @@
 
 use chrono::{DateTime, Utc};
 use keylease_core::{
-    ActionRequest, PolicyDecision, PolicyEffect, PolicyEngine, PolicyRule, RiskTier,
+    ActionRequest, AgentId, DataBudget, KeyLeaseError, PolicyDecision, PolicyEffect, PolicyEngine,
+    PolicyRule, Result, RiskTier,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyTemplateKind {
+    ReadOnly,
+    Contributor,
+}
+
+#[derive(Debug, Clone)]
+pub struct PolicyTemplateInput {
+    pub rule_id: String,
+    pub version: u64,
+    pub agent_id: AgentId,
+    pub connection_id: String,
+    pub provider: String,
+    pub exact_resource: String,
+    pub kind: PolicyTemplateKind,
+    pub expires_at: DateTime<Utc>,
+}
+
+/// Materializes a deterministic provider template into an explicit rule.
+/// Templates are onboarding helpers; the returned rule is the authorization
+/// artifact that is stored, reviewed and evaluated.
+pub fn materialize_provider_template(input: PolicyTemplateInput) -> Result<PolicyRule> {
+    if input.rule_id.is_empty()
+        || input.connection_id.is_empty()
+        || input.exact_resource.is_empty()
+        || input.exact_resource.ends_with('/')
+    {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "policy template requires exact non-empty identifiers".into(),
+        });
+    }
+    let (prefix, read_actions, write_actions): (&str, &[&str], &[&str]) =
+        match input.provider.as_str() {
+            "github" => (
+                "github:repository/",
+                &[
+                    "github.repository.get_metadata",
+                    "github.issue.list",
+                    "github.issue.get",
+                    "github.pull_request.list",
+                    "github.pull_request.get",
+                    "github.checks.read",
+                ],
+                &[
+                    "github.issue.create",
+                    "github.issue.comment",
+                    "github.pull_request.create_draft",
+                    "github.pull_request.comment",
+                ],
+            ),
+            "linear" => (
+                "linear:team/",
+                &["linear.issue.list", "linear.issue.get"],
+                &["linear.issue.create", "linear.comment.create"],
+            ),
+            "notion" => (
+                "notion:page/",
+                &["notion.page.get_markdown"],
+                &[
+                    "notion.page.create",
+                    "notion.page.append_markdown",
+                    "notion.page.update_markdown",
+                ],
+            ),
+            "google_workspace" => (
+                "google:",
+                &[
+                    "google_drive.file.get_metadata",
+                    "google_drive.file.export_text",
+                    "google_docs.document.get",
+                    "google_sheets.spreadsheet.get_metadata",
+                    "google_sheets.values.read",
+                    "google_sheets.values.batch_read",
+                ],
+                &[
+                    "google_docs.document.create",
+                    "google_docs.document.append",
+                    "google_docs.document.update",
+                    "google_sheets.rows.append",
+                    "google_sheets.values.update",
+                    "google_sheets.spreadsheet.create",
+                ],
+            ),
+            _ => {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "unsupported provider policy template".into(),
+                });
+            }
+        };
+    if !input.exact_resource.starts_with(prefix) {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "resource does not belong to template provider".into(),
+        });
+    }
+    let mut actions = read_actions
+        .iter()
+        .map(|value| (*value).to_owned())
+        .collect::<Vec<_>>();
+    let effect = match input.kind {
+        PolicyTemplateKind::ReadOnly => PolicyEffect::Allow,
+        PolicyTemplateKind::Contributor => {
+            actions.extend(write_actions.iter().map(|value| (*value).to_owned()));
+            // A contributor template requires approval for all actions. A human
+            // may split the materialized rule into read/allow and write/approval
+            // rules after review; the safe one-rule default never silently
+            // grants writes.
+            PolicyEffect::RequireApproval
+        }
+    };
+    actions.sort();
+    actions.dedup();
+    Ok(PolicyRule {
+        id: input.rule_id,
+        version: input.version,
+        effect,
+        agent_id: Some(input.agent_id),
+        connection_id: Some(input.connection_id),
+        resource_prefix: input.exact_resource,
+        actions,
+        argument_equals: Default::default(),
+        not_before: None,
+        expires_at: Some(input.expires_at),
+        max_lease_ttl_seconds: 300,
+        max_uses: 25,
+        budget: DataBudget {
+            max_items: Some(100),
+            max_cells: Some(10_000),
+            max_response_bytes: Some(1_048_576),
+            max_rows_changed: Some(1_000),
+            max_concurrent: Some(1),
+            max_task_requests: Some(100),
+            max_task_items: Some(1_000),
+            max_task_cells: Some(50_000),
+            max_task_response_bytes: Some(10 * 1_048_576),
+            max_task_rows_changed: Some(5_000),
+        },
+    })
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct RulePolicyEngine {
@@ -163,6 +303,47 @@ mod tests {
         request.arguments = serde_json::json!({"title":"different"});
         let second = engine.evaluate(&request, RiskTier::R3, Utc::now());
         assert_ne!(digest(first), digest(second));
+    }
+
+    #[test]
+    fn provider_templates_are_exact_deterministic_and_write_safe() {
+        let expires = Utc::now() + chrono::Duration::hours(1);
+        let input = PolicyTemplateInput {
+            rule_id: "github-contributor".into(),
+            version: 2,
+            agent_id: AgentId("agent_release".into()),
+            connection_id: "conn_github".into(),
+            provider: "github".into(),
+            exact_resource: "github:repository/123".into(),
+            kind: PolicyTemplateKind::Contributor,
+            expires_at: expires,
+        };
+        let first = materialize_provider_template(input.clone()).unwrap();
+        let second = materialize_provider_template(input).unwrap();
+        assert_eq!(first.actions, second.actions);
+        assert_eq!(first.resource_prefix, "github:repository/123");
+        assert_eq!(first.effect, PolicyEffect::RequireApproval);
+        assert!(
+            first
+                .actions
+                .contains(&"github.pull_request.create_draft".into())
+        );
+        assert!(!first.actions.iter().any(|action| action.contains("delete")));
+    }
+
+    #[test]
+    fn provider_template_rejects_cross_provider_resource() {
+        let result = materialize_provider_template(PolicyTemplateInput {
+            rule_id: "bad".into(),
+            version: 1,
+            agent_id: AgentId("agent".into()),
+            connection_id: "conn".into(),
+            provider: "github".into(),
+            exact_resource: "notion:page/abc".into(),
+            kind: PolicyTemplateKind::ReadOnly,
+            expires_at: Utc::now() + chrono::Duration::hours(1),
+        });
+        assert!(matches!(result, Err(KeyLeaseError::InvalidRequest { .. })));
     }
 
     fn digest(d: PolicyDecision) -> String {

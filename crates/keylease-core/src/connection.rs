@@ -33,6 +33,16 @@ pub struct ConnectionRecord {
     pub execution_location: String,
     pub credential_item_id: String,
     pub health: ConnectionHealth,
+    #[serde(default)]
+    pub health_reason: Option<String>,
+    #[serde(default)]
+    pub reauthorization_required: bool,
+    #[serde(default)]
+    pub granted_permissions: Vec<String>,
+    #[serde(default)]
+    pub last_checked_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub last_refreshed_at: Option<DateTime<Utc>>,
     pub authorized_resources: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -69,6 +79,31 @@ pub struct ApprovalRecord {
     pub resource: Option<String>,
     #[serde(default)]
     pub created_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub task_id: Option<crate::TaskId>,
+    #[serde(default)]
+    pub risk: Option<crate::RiskTier>,
+    #[serde(default)]
+    pub semantic_summary: Option<ApprovalSemanticSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalSemanticSummary {
+    pub operation: String,
+    pub target: String,
+    pub changed_fields: Vec<String>,
+    pub argument_fingerprints: Vec<ArgumentFingerprint>,
+    pub blast_radius: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ArgumentFingerprint {
+    pub field: String,
+    pub value_type: String,
+    pub length: Option<u64>,
+    pub sha256: String,
 }
 
 #[derive(Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
