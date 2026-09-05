@@ -36,6 +36,10 @@ cargo run -p keylease-cli -- --help
 See `docs/security/threat-model.md` and `docs/adr/` before changing crypto,
 identity, trust-mode or connector boundaries.
 
+The proposed Phase 3 Cloud/Edge/MCP architecture, including the single-VPS
+self-hosted profile and technical stack, is documented in
+[`docs/phase-3/architecture-and-tech-stack.md`](docs/phase-3/architecture-and-tech-stack.md).
+
 For an Intel Mac (`x86_64`) build and release-acceptance walkthrough, see
 [`docs/macos-x86_64-build-test.md`](docs/macos-x86_64-build-test.md). The
 companion `scripts/macos-x86_64-check.sh` runs the automated Rust, Flutter,
