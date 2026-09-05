@@ -1,20 +1,28 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
 use keylease_core::{
-    AccountId, AgentId, ControlEventId, DeviceId, EdgeId, HumanId, KeyLeaseError, MembershipId,
-    OrganizationId, ProjectId, Result, VaultId,
+    AccountId, AgentId, ConnectionHealth, ConnectionId, ConnectorPublisherId, ControlEventId,
+    DeviceId, EdgeId, HumanId, KeyLeaseError, MembershipId, OrganizationId, PolicyProposalId,
+    ProjectId, Result, VaultId,
+};
+use leasegate_connector_sdk::{
+    ConnectorRegistryEntry, ConnectorRegistryStatus, SignedConnectorPackage,
+    validate_publisher_verifying_key, verify_signed_package,
 };
 use leasegate_control::{
     AgentRegistration, ApprovalDecision, ApprovalRequest, AuditBatch, CONTROL_CONTRACT_VERSION,
-    ControlEvent, ControlEventKind, EdgeEventBatch, EdgeHealth, EdgeHeartbeat, EdgeRecord,
-    Membership, MembershipRole, Organization, Project, Revocation, RevocationScope,
-    SignedApprovalReceipt, SignedPolicyBundle, SyncMutationEnvelope, SyncMutationResult,
-    SyncMutationStatus, SyncPullResponse, SyncPushResponse,
+    ConnectionDescriptor, ConnectorPublisher, ControlEvent, ControlEventKind, EdgeEventBatch,
+    EdgeHealth, EdgeHeartbeat, EdgeRecord, Membership, MembershipRole, Organization,
+    PolicyProposal, PolicyProposalDecision, PolicyProposalReview, PolicyProposalReviewRequest,
+    PolicyProposalStatus, Project, Revocation, RevocationScope, SignedApprovalReceipt,
+    SignedPolicyBundle, SyncMutationEnvelope, SyncMutationResult, SyncMutationStatus,
+    SyncPullResponse, SyncPushResponse,
 };
 use leasegate_policy_bundle::{BundleAcceptanceState, verify_sync_mutation_signature};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use subtle::ConstantTimeEq;
 
 #[derive(Debug, Clone)]
 pub struct CloudRepository {
@@ -75,6 +83,28 @@ pub struct ApprovalDecisionBinding<'a> {
     pub approver_id: &'a HumanId,
     pub expected_digest: &'a str,
     pub expected_policy_version: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AuditQueryFilter {
+    pub after: u64,
+    pub limit: u32,
+    pub agent_id: Option<String>,
+    pub connection_id: Option<String>,
+    pub action: Option<String>,
+    pub resource_prefix: Option<String>,
+    pub decision: Option<String>,
+    pub outcome: Option<String>,
+    pub policy_version: Option<u64>,
+    pub from: Option<DateTime<Utc>>,
+    pub until: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AuditQueryPage {
+    pub events: Vec<keylease_core::AuditEvent>,
+    pub cursor: u64,
+    pub has_more: bool,
 }
 
 impl CloudRepository {
@@ -237,6 +267,185 @@ impl CloudRepository {
         })
     }
 
+    pub async fn authenticate_agent(
+        &self,
+        organization_id: &OrganizationId,
+        project_id: &ProjectId,
+        agent_id: &AgentId,
+        credential: &str,
+    ) -> Result<()> {
+        if credential.len() < 32 || credential.len() > 1024 {
+            return Err(KeyLeaseError::Denied {
+                reason: "invalid agent credential".into(),
+            });
+        }
+        let expected = digest(credential.as_bytes());
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, organization_id).await?;
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT credential_digest FROM agents WHERE organization_id=$1 AND project_id=$2 AND agent_id=$3 AND revoked_at IS NULL",
+        )
+        .bind(&organization_id.0)
+        .bind(&project_id.0)
+        .bind(&agent_id.0)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+        if stored
+            .as_ref()
+            .is_none_or(|stored| !bool::from(stored.as_bytes().ct_eq(expected.as_bytes())))
+        {
+            return Err(KeyLeaseError::Denied {
+                reason: "invalid or revoked agent credential".into(),
+            });
+        }
+        Ok(())
+    }
+
+    pub async fn register_connector_publisher(
+        &self,
+        organization_id: &OrganizationId,
+        project_id: &ProjectId,
+        display_name: &str,
+        verifying_key_base64: &str,
+    ) -> Result<ConnectorPublisher> {
+        validate_text(display_name, 200)?;
+        validate_text(verifying_key_base64, 256)?;
+        validate_publisher_verifying_key(verifying_key_base64)?;
+        let publisher = ConnectorPublisher {
+            id: ConnectorPublisherId::new(),
+            organization_id: organization_id.clone(),
+            project_id: project_id.clone(),
+            display_name: display_name.into(),
+            verifying_key_base64: verifying_key_base64.into(),
+            created_at: Utc::now(),
+            revoked_at: None,
+        };
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, organization_id).await?;
+        ensure_project(&mut tx, organization_id, project_id).await?;
+        sqlx::query("INSERT INTO connector_publishers(publisher_id,organization_id,project_id,display_name,verifying_key_base64,created_at) VALUES($1,$2,$3,$4,$5,$6)")
+            .bind(&publisher.id.0).bind(&organization_id.0).bind(&project_id.0)
+            .bind(display_name).bind(verifying_key_base64).bind(publisher.created_at)
+            .execute(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        insert_outbox(
+            &mut tx,
+            "connector.publisher_registered",
+            &publisher.id.0,
+            &publisher,
+        )
+        .await?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+        Ok(publisher)
+    }
+
+    pub async fn publish_connector(
+        &self,
+        organization_id: &OrganizationId,
+        project_id: &ProjectId,
+        publisher_id: &ConnectorPublisherId,
+        package: &SignedConnectorPackage,
+    ) -> Result<ConnectorRegistryEntry> {
+        if package.publisher_id != publisher_id.0 {
+            return Err(KeyLeaseError::Denied {
+                reason: "connector package publisher binding mismatch".into(),
+            });
+        }
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, organization_id).await?;
+        ensure_project(&mut tx, organization_id, project_id).await?;
+        let verifying_key: String = sqlx::query_scalar("SELECT verifying_key_base64 FROM connector_publishers WHERE publisher_id=$1 AND organization_id=$2 AND project_id=$3 AND revoked_at IS NULL")
+            .bind(&publisher_id.0).bind(&organization_id.0).bind(&project_id.0)
+            .fetch_optional(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?
+            .ok_or_else(|| KeyLeaseError::Denied { reason: "connector publisher is unknown or revoked".into() })?;
+        let manifest_digest_sha256 = verify_signed_package(package, &verifying_key)?;
+        let entry = ConnectorRegistryEntry {
+            organization_id: organization_id.clone(),
+            project_id: project_id.clone(),
+            publisher_id: publisher_id.clone(),
+            provider: package.payload.manifest.provider.clone(),
+            connector_version: package.payload.manifest.version.clone(),
+            manifest_digest_sha256,
+            artifact_digest_sha256: package.payload.artifact_digest_sha256.clone(),
+            status: ConnectorRegistryStatus::Published,
+            package: package.clone(),
+            created_at: Utc::now(),
+        };
+        sqlx::query("INSERT INTO connector_versions(organization_id,project_id,publisher_id,provider,connector_version,manifest_digest_sha256,artifact_digest_sha256,status,package_json,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,'published',$8,$9)")
+            .bind(&organization_id.0).bind(&project_id.0).bind(&publisher_id.0)
+            .bind(&entry.provider).bind(&entry.connector_version).bind(&entry.manifest_digest_sha256)
+            .bind(&entry.artifact_digest_sha256)
+            .bind(serde_json::to_value(package).map_err(|_| KeyLeaseError::Storage)?)
+            .bind(entry.created_at).execute(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        insert_outbox(&mut tx, "connector.published", &entry.provider, &entry).await?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+        Ok(entry)
+    }
+
+    pub async fn connector_versions(
+        &self,
+        organization_id: &OrganizationId,
+        project_id: &ProjectId,
+    ) -> Result<Vec<ConnectorRegistryEntry>> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, organization_id).await?;
+        ensure_project(&mut tx, organization_id, project_id).await?;
+        let rows = sqlx::query("SELECT publisher_id,provider,connector_version,manifest_digest_sha256,artifact_digest_sha256,status,package_json,created_at FROM connector_versions WHERE organization_id=$1 AND project_id=$2 ORDER BY provider,created_at DESC")
+            .bind(&organization_id.0).bind(&project_id.0).fetch_all(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+        rows.into_iter()
+            .map(|row| {
+                let status: String = row.try_get("status").map_err(|_| KeyLeaseError::Storage)?;
+                Ok(ConnectorRegistryEntry {
+                    organization_id: organization_id.clone(),
+                    project_id: project_id.clone(),
+                    publisher_id: ConnectorPublisherId(
+                        row.try_get("publisher_id")
+                            .map_err(|_| KeyLeaseError::Storage)?,
+                    ),
+                    provider: row
+                        .try_get("provider")
+                        .map_err(|_| KeyLeaseError::Storage)?,
+                    connector_version: row
+                        .try_get("connector_version")
+                        .map_err(|_| KeyLeaseError::Storage)?,
+                    manifest_digest_sha256: row
+                        .try_get("manifest_digest_sha256")
+                        .map_err(|_| KeyLeaseError::Storage)?,
+                    artifact_digest_sha256: row
+                        .try_get("artifact_digest_sha256")
+                        .map_err(|_| KeyLeaseError::Storage)?,
+                    status: connector_registry_status(&status)?,
+                    package: serde_json::from_value(
+                        row.try_get("package_json")
+                            .map_err(|_| KeyLeaseError::Storage)?,
+                    )
+                    .map_err(|_| KeyLeaseError::Storage)?,
+                    created_at: row
+                        .try_get("created_at")
+                        .map_err(|_| KeyLeaseError::Storage)?,
+                })
+            })
+            .collect()
+    }
+
     pub async fn revoke_agent(
         &self,
         organization_id: &OrganizationId,
@@ -291,6 +500,125 @@ impl CloudRepository {
         insert_outbox(&mut tx, "control.revocation", &agent_id.0, &event).await?;
         tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
         Ok(event)
+    }
+
+    pub async fn upsert_connection_descriptor(
+        &self,
+        descriptor: &ConnectionDescriptor,
+    ) -> Result<()> {
+        if descriptor.schema_version != CONTROL_CONTRACT_VERSION
+            || descriptor.provider.is_empty()
+            || descriptor.connector_version.is_empty()
+            || descriptor.auth_method.is_empty()
+            || descriptor.display_name.is_empty()
+            || descriptor.granted_permissions.len() > 256
+            || descriptor.authorized_resources.len() > 1_000
+        {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "invalid connection descriptor".into(),
+            });
+        }
+        for value in descriptor
+            .granted_permissions
+            .iter()
+            .chain(descriptor.authorized_resources.iter())
+        {
+            validate_text(value, 1_000)?;
+        }
+        let mut permissions = descriptor.granted_permissions.clone();
+        permissions.sort();
+        permissions.dedup();
+        let mut resources = descriptor.authorized_resources.clone();
+        resources.sort();
+        resources.dedup();
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, &descriptor.organization_id).await?;
+        ensure_project(&mut tx, &descriptor.organization_id, &descriptor.project_id).await?;
+        let changed = sqlx::query("INSERT INTO connection_descriptors(connection_id,organization_id,project_id,provider,connector_version,display_name,auth_method,health,health_reason,reauthorization_required,granted_permissions_json,authorized_resources_json,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(connection_id) DO UPDATE SET connector_version=excluded.connector_version,display_name=excluded.display_name,health=excluded.health,health_reason=excluded.health_reason,reauthorization_required=excluded.reauthorization_required,granted_permissions_json=excluded.granted_permissions_json,authorized_resources_json=excluded.authorized_resources_json,updated_at=excluded.updated_at WHERE connection_descriptors.organization_id=excluded.organization_id AND connection_descriptors.project_id=excluded.project_id AND connection_descriptors.provider=excluded.provider AND connection_descriptors.auth_method=excluded.auth_method")
+            .bind(&descriptor.connection_id.0).bind(&descriptor.organization_id.0).bind(&descriptor.project_id.0)
+            .bind(&descriptor.provider).bind(&descriptor.connector_version).bind(&descriptor.display_name)
+            .bind(&descriptor.auth_method).bind(connection_health_name(&descriptor.health)).bind(&descriptor.health_reason)
+            .bind(descriptor.reauthorization_required).bind(serde_json::to_value(permissions).map_err(|_| KeyLeaseError::Storage)?)
+            .bind(serde_json::to_value(resources).map_err(|_| KeyLeaseError::Storage)?)
+            .bind(descriptor.created_at).bind(descriptor.updated_at)
+            .execute(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?.rows_affected();
+        if changed != 1 {
+            return Err(KeyLeaseError::Denied {
+                reason: "connection identity binding cannot be changed".into(),
+            });
+        }
+        let control = insert_control_event(
+            &mut tx,
+            &descriptor.organization_id,
+            Some(&descriptor.project_id),
+            None,
+            ControlEventKind::ConnectionHealth {
+                connection_id: descriptor.connection_id.clone(),
+                healthy: descriptor.health == ConnectionHealth::Connected
+                    && !descriptor.reauthorization_required,
+                reason: descriptor.health_reason.clone(),
+            },
+        )
+        .await?;
+        insert_outbox(
+            &mut tx,
+            "connection.updated",
+            &descriptor.connection_id.0,
+            descriptor,
+        )
+        .await?;
+        insert_outbox(
+            &mut tx,
+            "control.connection_health",
+            &descriptor.connection_id.0,
+            &control,
+        )
+        .await?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)
+    }
+
+    pub async fn project_connections(
+        &self,
+        organization_id: &OrganizationId,
+        project_id: &ProjectId,
+    ) -> Result<Vec<ConnectionDescriptor>> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, organization_id).await?;
+        ensure_project(&mut tx, organization_id, project_id).await?;
+        let rows = sqlx::query("SELECT connection_id,provider,connector_version,display_name,auth_method,health,health_reason,reauthorization_required,granted_permissions_json,authorized_resources_json,created_at,updated_at FROM connection_descriptors WHERE organization_id=$1 AND project_id=$2 ORDER BY display_name")
+            .bind(&organization_id.0).bind(&project_id.0).fetch_all(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+        rows.into_iter()
+            .map(|row| connection_from_row(row, organization_id, project_id))
+            .collect()
+    }
+
+    pub async fn connection_descriptor(
+        &self,
+        organization_id: &OrganizationId,
+        project_id: &ProjectId,
+        connection_id: &ConnectionId,
+    ) -> Result<ConnectionDescriptor> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, organization_id).await?;
+        let row = sqlx::query("SELECT connection_id,provider,connector_version,display_name,auth_method,health,health_reason,reauthorization_required,granted_permissions_json,authorized_resources_json,created_at,updated_at FROM connection_descriptors WHERE organization_id=$1 AND project_id=$2 AND connection_id=$3")
+            .bind(&organization_id.0).bind(&project_id.0).bind(&connection_id.0)
+            .fetch_optional(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?
+            .ok_or_else(|| KeyLeaseError::NotFound { resource: connection_id.0.clone() })?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+        connection_from_row(row, organization_id, project_id)
     }
 
     pub async fn create_vault(
@@ -607,6 +935,26 @@ impl CloudRepository {
         .transpose()
     }
 
+    pub async fn latest_policy_bundle(
+        &self,
+        organization_id: &OrganizationId,
+        project_id: &ProjectId,
+    ) -> Result<Option<SignedPolicyBundle>> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, organization_id).await?;
+        let value: Option<serde_json::Value> = sqlx::query_scalar("SELECT bundle_json FROM policy_bundles WHERE organization_id=$1 AND project_id=$2 AND activated_at IS NOT NULL ORDER BY version DESC LIMIT 1")
+            .bind(&organization_id.0).bind(&project_id.0)
+            .fetch_optional(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+        value
+            .map(|value| serde_json::from_value(value).map_err(|_| KeyLeaseError::Storage))
+            .transpose()
+    }
+
     pub async fn activate_policy(&self, bundle: &SignedPolicyBundle) -> Result<ControlEvent> {
         let mut tx = self
             .pool
@@ -637,6 +985,255 @@ impl CloudRepository {
             "control.policy",
             &bundle.payload.project_id.0,
             &event,
+        )
+        .await?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+        Ok(event)
+    }
+
+    pub async fn create_policy_proposal(&self, proposal: &PolicyProposal) -> Result<()> {
+        proposal.validate_shape(Utc::now())?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, &proposal.organization_id).await?;
+        ensure_project(&mut tx, &proposal.organization_id, &proposal.project_id).await?;
+        let active_agent: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agents WHERE organization_id=$1 AND project_id=$2 AND agent_id=$3 AND revoked_at IS NULL)")
+            .bind(&proposal.organization_id.0).bind(&proposal.project_id.0).bind(&proposal.proposed_by_agent_id.0)
+            .fetch_one(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        let current: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(version),0) FROM policy_bundles WHERE organization_id=$1 AND project_id=$2 AND activated_at IS NOT NULL")
+            .bind(&proposal.organization_id.0).bind(&proposal.project_id.0)
+            .fetch_one(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        if !active_agent || proposal.base_policy_version != current as u64 {
+            return Err(KeyLeaseError::Denied {
+                reason: "proposal agent is inactive or base policy is stale".into(),
+            });
+        }
+        sqlx::query("INSERT INTO policy_proposals(proposal_id,organization_id,project_id,proposed_by_agent_id,base_policy_version,proposal_digest_sha256,status,proposal_json,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,'pending',$7,$8,$9)")
+            .bind(&proposal.proposal_id.0).bind(&proposal.organization_id.0).bind(&proposal.project_id.0)
+            .bind(&proposal.proposed_by_agent_id.0).bind(proposal.base_policy_version as i64)
+            .bind(&proposal.proposal_digest_sha256).bind(serde_json::to_value(proposal).map_err(|_| KeyLeaseError::Storage)?)
+            .bind(proposal.created_at).bind(proposal.expires_at)
+            .execute(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        insert_outbox(
+            &mut tx,
+            "policy.proposed",
+            &proposal.proposal_id.0,
+            proposal,
+        )
+        .await?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)
+    }
+
+    pub async fn policy_proposals(
+        &self,
+        organization_id: &OrganizationId,
+        project_id: &ProjectId,
+        limit: u32,
+    ) -> Result<Vec<PolicyProposal>> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, organization_id).await?;
+        let rows: Vec<serde_json::Value> = sqlx::query_scalar("SELECT proposal_json FROM policy_proposals WHERE organization_id=$1 AND project_id=$2 ORDER BY created_at DESC LIMIT $3")
+            .bind(&organization_id.0).bind(&project_id.0).bind(limit.clamp(1, 500) as i64)
+            .fetch_all(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+        rows.into_iter()
+            .map(|value| serde_json::from_value(value).map_err(|_| KeyLeaseError::Storage))
+            .collect()
+    }
+
+    pub async fn policy_proposal(
+        &self,
+        organization_id: &OrganizationId,
+        project_id: &ProjectId,
+        proposal_id: &PolicyProposalId,
+    ) -> Result<PolicyProposal> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, organization_id).await?;
+        let value: serde_json::Value = sqlx::query_scalar("SELECT proposal_json FROM policy_proposals WHERE organization_id=$1 AND project_id=$2 AND proposal_id=$3")
+            .bind(&organization_id.0).bind(&project_id.0).bind(&proposal_id.0)
+            .fetch_optional(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?
+            .ok_or_else(|| KeyLeaseError::NotFound { resource: proposal_id.0.clone() })?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+        serde_json::from_value(value).map_err(|_| KeyLeaseError::Storage)
+    }
+
+    pub async fn review_policy_proposal(
+        &self,
+        organization_id: &OrganizationId,
+        project_id: &ProjectId,
+        proposal_id: &PolicyProposalId,
+        request: &PolicyProposalReviewRequest,
+    ) -> Result<(PolicyProposal, PolicyProposalReview)> {
+        if request.schema_version != CONTROL_CONTRACT_VERSION
+            || request.note.len() > 2_000
+            || request.note.chars().any(char::is_control)
+        {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "invalid policy proposal review".into(),
+            });
+        }
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, organization_id).await?;
+        let authorized: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM memberships WHERE organization_id=$1 AND human_id=$2 AND revoked_at IS NULL AND role IN ('owner','admin','approver'))")
+            .bind(&organization_id.0).bind(&request.reviewer_id.0)
+            .fetch_one(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        if !authorized {
+            return Err(KeyLeaseError::Denied {
+                reason: "reviewer is not an active policy approver".into(),
+            });
+        }
+        let row = sqlx::query("SELECT proposal_json,status,proposal_digest_sha256,base_policy_version,expires_at FROM policy_proposals WHERE organization_id=$1 AND project_id=$2 AND proposal_id=$3 FOR UPDATE")
+            .bind(&organization_id.0).bind(&project_id.0).bind(&proposal_id.0)
+            .fetch_optional(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?
+            .ok_or_else(|| KeyLeaseError::NotFound { resource: proposal_id.0.clone() })?;
+        let status: String = row.try_get("status").map_err(|_| KeyLeaseError::Storage)?;
+        let digest: String = row
+            .try_get("proposal_digest_sha256")
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let base: i64 = row
+            .try_get("base_policy_version")
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let expires_at: DateTime<Utc> = row
+            .try_get("expires_at")
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let current: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(version),0) FROM policy_bundles WHERE organization_id=$1 AND project_id=$2 AND activated_at IS NOT NULL")
+            .bind(&organization_id.0).bind(&project_id.0)
+            .fetch_one(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        if status != "pending"
+            || expires_at <= Utc::now()
+            || digest != request.expected_proposal_digest_sha256
+            || base as u64 != request.expected_base_policy_version
+            || current as u64 != request.expected_base_policy_version
+        {
+            return Err(KeyLeaseError::Denied {
+                reason: "proposal state, digest or base policy changed".into(),
+            });
+        }
+        let mut proposal: PolicyProposal = serde_json::from_value(
+            row.try_get("proposal_json")
+                .map_err(|_| KeyLeaseError::Storage)?,
+        )
+        .map_err(|_| KeyLeaseError::Storage)?;
+        proposal.status = match request.decision {
+            PolicyProposalDecision::Approve => PolicyProposalStatus::Approved,
+            PolicyProposalDecision::Reject => PolicyProposalStatus::Rejected,
+        };
+        let review = PolicyProposalReview {
+            proposal_id: proposal_id.clone(),
+            reviewer_id: request.reviewer_id.clone(),
+            decision: request.decision.clone(),
+            proposal_digest_sha256: digest,
+            base_policy_version: base as u64,
+            note: request.note.clone(),
+            reviewed_at: Utc::now(),
+        };
+        sqlx::query("UPDATE policy_proposals SET status=$1,proposal_json=$2,review_json=$3,reviewed_at=$4 WHERE proposal_id=$5")
+            .bind(match request.decision { PolicyProposalDecision::Approve => "approved", PolicyProposalDecision::Reject => "rejected" })
+            .bind(serde_json::to_value(&proposal).map_err(|_| KeyLeaseError::Storage)?)
+            .bind(serde_json::to_value(&review).map_err(|_| KeyLeaseError::Storage)?)
+            .bind(review.reviewed_at).bind(&proposal_id.0)
+            .execute(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        insert_outbox(&mut tx, "policy.proposal_reviewed", &proposal_id.0, &review).await?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+        Ok((proposal, review))
+    }
+
+    pub async fn activate_reviewed_proposal(
+        &self,
+        proposal_id: &PolicyProposalId,
+        bundle: &SignedPolicyBundle,
+    ) -> Result<ControlEvent> {
+        let organization_id = &bundle.payload.organization_id;
+        let project_id = &bundle.payload.project_id;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, organization_id).await?;
+        let row = sqlx::query("SELECT proposal_json,status,proposal_digest_sha256,base_policy_version,expires_at FROM policy_proposals WHERE organization_id=$1 AND project_id=$2 AND proposal_id=$3 FOR UPDATE")
+            .bind(&organization_id.0).bind(&project_id.0).bind(&proposal_id.0)
+            .fetch_optional(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?
+            .ok_or_else(|| KeyLeaseError::NotFound { resource: proposal_id.0.clone() })?;
+        let status: String = row.try_get("status").map_err(|_| KeyLeaseError::Storage)?;
+        let mut proposal: PolicyProposal = serde_json::from_value(
+            row.try_get("proposal_json")
+                .map_err(|_| KeyLeaseError::Storage)?,
+        )
+        .map_err(|_| KeyLeaseError::Storage)?;
+        let digest: String = row
+            .try_get("proposal_digest_sha256")
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let base: i64 = row
+            .try_get("base_policy_version")
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let expires_at: DateTime<Utc> = row
+            .try_get("expires_at")
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let latest = sqlx::query("SELECT version,payload_digest FROM policy_bundles WHERE organization_id=$1 AND project_id=$2 AND activated_at IS NOT NULL ORDER BY version DESC LIMIT 1 FOR UPDATE")
+            .bind(&organization_id.0).bind(&project_id.0)
+            .fetch_optional(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        let current_version = latest
+            .as_ref()
+            .map(|latest| latest.try_get::<i64, _>("version"))
+            .transpose()
+            .map_err(|_| KeyLeaseError::Storage)?
+            .unwrap_or(0);
+        let current_digest = latest
+            .as_ref()
+            .map(|latest| latest.try_get::<String, _>("payload_digest"))
+            .transpose()
+            .map_err(|_| KeyLeaseError::Storage)?;
+        if status != "approved"
+            || expires_at <= Utc::now()
+            || digest != proposal.proposal_digest_sha256
+            || current_version != base
+            || bundle.payload.version != base as u64 + 1
+            || bundle.payload.previous_bundle_digest != current_digest
+            || bundle.payload.rules != proposal.rules
+        {
+            return Err(KeyLeaseError::Denied {
+                reason: "approved proposal does not bind the policy bundle".into(),
+            });
+        }
+        sqlx::query("INSERT INTO policy_bundles(bundle_id,organization_id,project_id,version,payload_digest,bundle_json,activated_at,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$7)")
+            .bind(&bundle.payload.bundle_id.0).bind(&organization_id.0).bind(&project_id.0)
+            .bind(bundle.payload.version as i64).bind(&bundle.payload_digest_sha256)
+            .bind(serde_json::to_value(bundle).map_err(|_| KeyLeaseError::Storage)?).bind(Utc::now())
+            .execute(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        let event = insert_control_event(
+            &mut tx,
+            organization_id,
+            Some(project_id),
+            Some(bundle.payload.expires_at),
+            ControlEventKind::PolicyBundle(bundle.clone()),
+        )
+        .await?;
+        proposal.status = PolicyProposalStatus::Activated;
+        sqlx::query("UPDATE policy_proposals SET status='activated',proposal_json=$1,activated_at=$2 WHERE proposal_id=$3")
+            .bind(serde_json::to_value(&proposal).map_err(|_| KeyLeaseError::Storage)?)
+            .bind(Utc::now()).bind(&proposal_id.0).execute(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        insert_outbox(&mut tx, "control.policy", &project_id.0, &event).await?;
+        insert_outbox(
+            &mut tx,
+            "policy.proposal_activated",
+            &proposal_id.0,
+            &proposal,
         )
         .await?;
         tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
@@ -973,6 +1570,11 @@ impl CloudRepository {
             .bind(now).execute(&self.pool).await.map_err(|_| KeyLeaseError::Storage)?.rows_affected())
     }
 
+    pub async fn expire_pending_policy_proposals(&self, now: DateTime<Utc>) -> Result<u64> {
+        Ok(sqlx::query("UPDATE policy_proposals SET status='expired',proposal_json=jsonb_set(proposal_json,'{status}',to_jsonb('expired'::text),true) WHERE status='pending' AND expires_at<=$1")
+            .bind(now).execute(&self.pool).await.map_err(|_| KeyLeaseError::Storage)?.rows_affected())
+    }
+
     /// Claims durable outbox records with `SKIP LOCKED`. Phase 3's baseline
     /// delivery is the control-event feed itself; marking here records that a
     /// worker observed the committed notification for metrics/webhooks.
@@ -1017,14 +1619,121 @@ impl CloudRepository {
         set_tenant(&mut tx, organization_id).await?;
         for (offset, event) in batch.events.iter().enumerate() {
             let sequence = batch.first_sequence.saturating_add(offset as u64);
-            sqlx::query("INSERT INTO audit_event_index(edge_id,edge_sequence,organization_id,project_id,timestamp,request_id,agent_id,action,resource,decision,outcome,event_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(edge_id,edge_sequence) DO NOTHING")
-                .bind(&batch.edge_id.0).bind(sequence as i64).bind(&organization_id.0).bind(&project_id.0).bind(event.timestamp).bind(&event.request_id.0).bind(&event.agent_id.0).bind(&event.action).bind(&event.resource).bind(&event.decision).bind(&event.outcome).bind(serde_json::to_value(event).map_err(|_| KeyLeaseError::Storage)?)
+            sqlx::query("INSERT INTO audit_event_index(edge_id,edge_sequence,organization_id,project_id,timestamp,request_id,agent_id,action,resource,decision,outcome,event_json,connection_id,policy_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(edge_id,edge_sequence) DO NOTHING")
+                .bind(&batch.edge_id.0).bind(sequence as i64).bind(&organization_id.0).bind(&project_id.0).bind(event.timestamp).bind(&event.request_id.0).bind(&event.agent_id.0).bind(&event.action).bind(&event.resource).bind(&event.decision).bind(&event.outcome).bind(serde_json::to_value(event).map_err(|_| KeyLeaseError::Storage)?).bind(event.connection_id.as_ref().map(|id| id.0.as_str())).bind(event.policy_version.map(|version| version as i64))
                 .execute(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
         }
         tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
         Ok(batch
             .first_sequence
             .saturating_add(batch.events.len().saturating_sub(1) as u64))
+    }
+
+    pub async fn query_audit(
+        &self,
+        organization_id: &OrganizationId,
+        project_id: &ProjectId,
+        filter: &AuditQueryFilter,
+    ) -> Result<AuditQueryPage> {
+        for value in [
+            filter.agent_id.as_deref(),
+            filter.connection_id.as_deref(),
+            filter.action.as_deref(),
+            filter.resource_prefix.as_deref(),
+            filter.decision.as_deref(),
+            filter.outcome.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            validate_text(value, 500)?;
+        }
+        if filter
+            .from
+            .zip(filter.until)
+            .is_some_and(|(from, until)| from >= until)
+        {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "audit time range is invalid".into(),
+            });
+        }
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, organization_id).await?;
+        ensure_project(&mut tx, organization_id, project_id).await?;
+        let mut query = sqlx::QueryBuilder::new(
+            "SELECT audit_event_row_id,event_json FROM audit_event_index WHERE organization_id=",
+        );
+        query.push_bind(&organization_id.0);
+        query.push(" AND project_id=").push_bind(&project_id.0);
+        query
+            .push(" AND audit_event_row_id>")
+            .push_bind(filter.after as i64);
+        if let Some(value) = &filter.agent_id {
+            query.push(" AND agent_id=").push_bind(value);
+        }
+        if let Some(value) = &filter.connection_id {
+            query.push(" AND connection_id=").push_bind(value);
+        }
+        if let Some(value) = &filter.action {
+            query.push(" AND action=").push_bind(value);
+        }
+        if let Some(value) = &filter.resource_prefix {
+            query
+                .push(" AND (resource=")
+                .push_bind(value)
+                .push(" OR starts_with(resource,")
+                .push_bind(format!("{value}/"))
+                .push("))");
+        }
+        if let Some(value) = &filter.decision {
+            query.push(" AND decision=").push_bind(value);
+        }
+        if let Some(value) = &filter.outcome {
+            query.push(" AND outcome=").push_bind(value);
+        }
+        if let Some(value) = filter.policy_version {
+            query.push(" AND policy_version=").push_bind(value as i64);
+        }
+        if let Some(value) = filter.from {
+            query.push(" AND timestamp>=").push_bind(value);
+        }
+        if let Some(value) = filter.until {
+            query.push(" AND timestamp<").push_bind(value);
+        }
+        let limit = filter.limit.clamp(1, 500);
+        query
+            .push(" ORDER BY audit_event_row_id ASC LIMIT ")
+            .push_bind((limit + 1) as i64);
+        let rows = query
+            .build()
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+        let has_more = rows.len() > limit as usize;
+        let mut cursor = filter.after;
+        let mut events = Vec::new();
+        for row in rows.into_iter().take(limit as usize) {
+            cursor = row
+                .try_get::<i64, _>("audit_event_row_id")
+                .map_err(|_| KeyLeaseError::Storage)? as u64;
+            events.push(
+                serde_json::from_value(
+                    row.try_get("event_json")
+                        .map_err(|_| KeyLeaseError::Storage)?,
+                )
+                .map_err(|_| KeyLeaseError::Storage)?,
+            );
+        }
+        Ok(AuditQueryPage {
+            events,
+            cursor,
+            has_more,
+        })
     }
 
     async fn edge(&self, edge_id: &EdgeId) -> Result<EdgeRecord> {
@@ -1081,6 +1790,88 @@ fn edge_from_row(row: sqlx::postgres::PgRow) -> Result<EdgeRecord> {
             .try_get("revoked_at")
             .map_err(|_| KeyLeaseError::Storage)?,
     })
+}
+
+fn connection_from_row(
+    row: sqlx::postgres::PgRow,
+    organization_id: &OrganizationId,
+    project_id: &ProjectId,
+) -> Result<ConnectionDescriptor> {
+    let health: String = row.try_get("health").map_err(|_| KeyLeaseError::Storage)?;
+    Ok(ConnectionDescriptor {
+        schema_version: CONTROL_CONTRACT_VERSION,
+        connection_id: ConnectionId(
+            row.try_get("connection_id")
+                .map_err(|_| KeyLeaseError::Storage)?,
+        ),
+        organization_id: organization_id.clone(),
+        project_id: project_id.clone(),
+        provider: row
+            .try_get("provider")
+            .map_err(|_| KeyLeaseError::Storage)?,
+        connector_version: row
+            .try_get("connector_version")
+            .map_err(|_| KeyLeaseError::Storage)?,
+        display_name: row
+            .try_get("display_name")
+            .map_err(|_| KeyLeaseError::Storage)?,
+        auth_method: row
+            .try_get("auth_method")
+            .map_err(|_| KeyLeaseError::Storage)?,
+        health: connection_health(&health)?,
+        health_reason: row
+            .try_get("health_reason")
+            .map_err(|_| KeyLeaseError::Storage)?,
+        reauthorization_required: row
+            .try_get("reauthorization_required")
+            .map_err(|_| KeyLeaseError::Storage)?,
+        granted_permissions: serde_json::from_value(
+            row.try_get("granted_permissions_json")
+                .map_err(|_| KeyLeaseError::Storage)?,
+        )
+        .map_err(|_| KeyLeaseError::Storage)?,
+        authorized_resources: serde_json::from_value(
+            row.try_get("authorized_resources_json")
+                .map_err(|_| KeyLeaseError::Storage)?,
+        )
+        .map_err(|_| KeyLeaseError::Storage)?,
+        created_at: row
+            .try_get("created_at")
+            .map_err(|_| KeyLeaseError::Storage)?,
+        updated_at: row
+            .try_get("updated_at")
+            .map_err(|_| KeyLeaseError::Storage)?,
+    })
+}
+
+fn connection_health_name(health: &ConnectionHealth) -> &'static str {
+    match health {
+        ConnectionHealth::Connected => "connected",
+        ConnectionHealth::Degraded => "degraded",
+        ConnectionHealth::Expired => "expired",
+        ConnectionHealth::Revoked => "revoked",
+        ConnectionHealth::Disconnected => "disconnected",
+    }
+}
+
+fn connection_health(value: &str) -> Result<ConnectionHealth> {
+    match value {
+        "connected" => Ok(ConnectionHealth::Connected),
+        "degraded" => Ok(ConnectionHealth::Degraded),
+        "expired" => Ok(ConnectionHealth::Expired),
+        "revoked" => Ok(ConnectionHealth::Revoked),
+        "disconnected" => Ok(ConnectionHealth::Disconnected),
+        _ => Err(KeyLeaseError::Storage),
+    }
+}
+
+fn connector_registry_status(value: &str) -> Result<ConnectorRegistryStatus> {
+    match value {
+        "published" => Ok(ConnectorRegistryStatus::Published),
+        "deprecated" => Ok(ConnectorRegistryStatus::Deprecated),
+        "revoked" => Ok(ConnectorRegistryStatus::Revoked),
+        _ => Err(KeyLeaseError::Storage),
+    }
 }
 
 async fn set_tenant(
@@ -1176,9 +1967,7 @@ async fn insert_control_event(
         expires_at,
         kind,
     };
-    sqlx::query(
-        "UPDATE control_events SET event_json=$1 WHERE organization_id=$2 AND sequence=$3",
-    )
+    sqlx::query("UPDATE control_events SET event_json=$1 WHERE organization_id=$2 AND sequence=$3")
         .bind(serde_json::to_value(&event).map_err(|_| KeyLeaseError::Storage)?)
         .bind(&organization_id.0)
         .bind(sequence)

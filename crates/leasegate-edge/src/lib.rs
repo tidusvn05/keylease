@@ -9,14 +9,23 @@ use chacha20poly1305::{
 use chrono::{DateTime, Duration, Utc};
 use keylease_core::{
     AgentId, AuditEvent, CONTRACT_VERSION, ConnectionId, EdgeId, KeyLeaseError, OrganizationId,
-    ProjectId, Result, RiskTier,
+    PolicyEffect, ProjectId, Result, RiskTier,
+};
+use leasegate_connector_sdk::action_input_schema;
+use leasegate_connectors::{
+    ConnectorManifest, github_manifest, google_manifest, jira_manifest, linear_manifest,
+    notion_manifest, slack_manifest,
 };
 use leasegate_control::{
     ApprovalRequest, AuditBatch, CONTROL_CONTRACT_VERSION, ControlEvent, ControlEventKind,
     EdgeEventBatch, EdgeHeartbeat, Revocation, RevocationScope, SignedApprovalReceipt,
     SignedPolicyBundle,
 };
-use leasegate_mcp::{CanonicalActionExecutor, GateToolInput, GateToolOutput};
+use leasegate_mcp::{
+    AgentEndpointIdentity, CanonicalActionExecutor, DiscoveredAction, GateToolInput,
+    GateToolOutput, ToolDiscovery,
+};
+use leasegate_policy::RulePolicyEngine;
 use leasegate_policy_bundle::{
     BundleAcceptanceState, verify_approval_receipt, verify_policy_bundle,
 };
@@ -106,6 +115,100 @@ pub struct AuditSpoolStatus {
     pub pending_events: u64,
     pub encrypted_bytes: u64,
     pub maximum_bytes: u64,
+}
+
+/// Generates the MCP catalog from the currently verified Edge policy and the
+/// latest signed connection-health events. Missing state hides tools.
+pub struct EdgeToolDiscovery {
+    store: Arc<EdgeControlStore>,
+    manifests: Vec<ConnectorManifest>,
+}
+
+impl EdgeToolDiscovery {
+    pub fn built_in(store: Arc<EdgeControlStore>) -> Self {
+        Self {
+            store,
+            manifests: vec![
+                google_manifest(),
+                github_manifest(),
+                linear_manifest(),
+                notion_manifest(),
+                slack_manifest(),
+                jira_manifest(),
+            ],
+        }
+    }
+
+    pub fn new(store: Arc<EdgeControlStore>, manifests: Vec<ConnectorManifest>) -> Self {
+        Self { store, manifests }
+    }
+}
+
+impl ToolDiscovery for EdgeToolDiscovery {
+    fn discover(&self, identity: &AgentEndpointIdentity) -> Result<Vec<DiscoveredAction>> {
+        let now = Utc::now();
+        let bundle = self
+            .store
+            .active_policy()?
+            .filter(|bundle| bundle.payload.not_before <= now && bundle.payload.expires_at > now)
+            .ok_or_else(|| KeyLeaseError::Denied {
+                reason: "no valid signed policy is available for MCP discovery".into(),
+            })?;
+        let engine = RulePolicyEngine::new(bundle.payload.rules.clone());
+        let permissions = engine.effective_permissions(&identity.agent_id, now);
+        let mut actions: BTreeMap<String, DiscoveredAction> = BTreeMap::new();
+        for permission in permissions
+            .into_iter()
+            .filter(|permission| permission.effect != PolicyEffect::Deny)
+        {
+            let Some(connection_id) = permission.connection_id else {
+                continue;
+            };
+            let Some((manifest, spec)) = self.manifests.iter().find_map(|manifest| {
+                manifest
+                    .actions
+                    .iter()
+                    .find(|spec| spec.name == permission.action)
+                    .map(|spec| (manifest, spec))
+            }) else {
+                continue;
+            };
+            if self
+                .store
+                .connection_is_healthy(&ConnectionId(connection_id.clone()))?
+                != Some(true)
+                || self.store.capability_is_revoked(
+                    identity,
+                    &ConnectionId(connection_id.clone()),
+                    spec.risk.clone(),
+                    now,
+                )?
+            {
+                continue;
+            }
+            let entry =
+                actions
+                    .entry(permission.action.clone())
+                    .or_insert_with(|| DiscoveredAction {
+                        action: permission.action.clone(),
+                        description: format!(
+                            "{} through LeaseGate; effective resource scope starts at {}",
+                            manifest.display_name, permission.resource_prefix
+                        ),
+                        input_schema: action_input_schema(manifest, &permission.action)
+                            .unwrap_or_default(),
+                        read_only: matches!(spec.risk, RiskTier::R0 | RiskTier::R1),
+                        idempotent: spec.idempotent,
+                        policy_version: bundle.payload.version,
+                        connection_ids: Vec::new(),
+                    });
+            if !entry.connection_ids.contains(&connection_id) {
+                entry.connection_ids.push(connection_id);
+                entry.connection_ids.sort();
+            }
+        }
+        Ok(actions.into_values().collect())
+    }
 }
 
 /// HTTPS control-plane client authenticated with a one-Edge credential. Plain
@@ -553,6 +656,53 @@ impl EdgeControlStore {
     pub fn active_policy(&self) -> Result<Option<SignedPolicyBundle>> {
         let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
         load_sealed(&connection, &self.key, "policy", "active")
+    }
+
+    pub fn connection_is_healthy(&self, connection_id: &ConnectionId) -> Result<Option<bool>> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let value: Option<serde_json::Value> = load_sealed(
+            &connection,
+            &self.key,
+            "connection_health",
+            &connection_id.0,
+        )?;
+        Ok(value.map(|value| {
+            value
+                .get("healthy")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        }))
+    }
+
+    fn capability_is_revoked(
+        &self,
+        identity: &AgentEndpointIdentity,
+        connection_id: &ConnectionId,
+        risk: RiskTier,
+        now: DateTime<Utc>,
+    ) -> Result<bool> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let side_effecting = !matches!(risk, RiskTier::R0 | RiskTier::R1);
+        is_revoked(
+            &connection,
+            &self.key,
+            &self.config,
+            &EdgeExecutionContext {
+                agent_id: identity.agent_id.clone(),
+                workload_id: identity
+                    .workload_id
+                    .as_ref()
+                    .map(|workload| workload.0.clone()),
+                task_id: None,
+                connection_id: connection_id.clone(),
+                approval_id: None,
+                lease_id: None,
+                risk,
+                side_effecting,
+                cloud_connected: true,
+                now,
+            },
+        )
     }
 
     pub fn accept_policy(&self, bundle: &SignedPolicyBundle, now: DateTime<Utc>) -> Result<()> {
@@ -1204,7 +1354,10 @@ CREATE TABLE IF NOT EXISTS audit_spool(
 mod tests {
     use super::*;
     use chrono::Duration;
-    use keylease_core::{ApprovalId, ConnectionId, HumanId, PolicyBundleId, RequestId};
+    use keylease_core::{
+        ApprovalId, ConnectionId, DataBudget, HumanId, PolicyBundleId, PolicyEffect, PolicyRule,
+        RequestId,
+    };
     use leasegate_control::{ApprovalReceiptPayload, OfflineAuthorization, PolicyBundlePayload};
     use leasegate_policy_bundle::ControlSigner;
     use tempfile::tempdir;
@@ -1363,6 +1516,90 @@ mod tests {
                 .consume_approval("approval_test", "exact", 1, now)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn mcp_discovery_requires_active_policy_and_healthy_connection() {
+        let signer = ControlSigner::generate("control-test").unwrap();
+        let now = Utc::now();
+        let store = Arc::new(EdgeControlStore::open(":memory:", [5; 32], config(&signer)).unwrap());
+        let mut bundle = policy(&signer, now);
+        bundle.payload.rules = vec![PolicyRule {
+            id: "github-read".into(),
+            version: 1,
+            effect: PolicyEffect::Allow,
+            agent_id: Some(AgentId("agent_test".into())),
+            connection_id: Some("conn_github".into()),
+            resource_prefix: "github:repository/123".into(),
+            actions: vec!["github.issue.get".into()],
+            argument_equals: Default::default(),
+            not_before: None,
+            expires_at: None,
+            max_lease_ttl_seconds: 60,
+            max_uses: 10,
+            budget: DataBudget {
+                max_response_bytes: Some(4096),
+                ..Default::default()
+            },
+        }];
+        // Re-sign after modifying the payload.
+        let bundle = signer.sign_policy(bundle.payload).unwrap();
+        store.accept_policy(&bundle, now).unwrap();
+        let discovery = EdgeToolDiscovery::built_in(store.clone());
+        let identity = AgentEndpointIdentity {
+            agent_id: AgentId("agent_test".into()),
+            workload_id: None,
+            on_behalf_of: None,
+            client_session_id: "mcp-test".into(),
+        };
+        assert!(discovery.discover(&identity).unwrap().is_empty());
+        store
+            .apply_control_event(
+                &ControlEvent {
+                    schema_version: CONTROL_CONTRACT_VERSION,
+                    id: keylease_core::ControlEventId::new(),
+                    organization_id: OrganizationId("org_test".into()),
+                    project_id: Some(ProjectId("project_test".into())),
+                    sequence: 1,
+                    created_at: now,
+                    expires_at: None,
+                    kind: ControlEventKind::ConnectionHealth {
+                        connection_id: ConnectionId("conn_github".into()),
+                        healthy: true,
+                        reason: None,
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        let tools = discovery.discover(&identity).unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].action, "github.issue.get");
+        assert_eq!(tools[0].connection_ids, vec!["conn_github"]);
+        store
+            .apply_control_event(
+                &ControlEvent {
+                    schema_version: CONTROL_CONTRACT_VERSION,
+                    id: keylease_core::ControlEventId::new(),
+                    organization_id: OrganizationId("org_test".into()),
+                    project_id: Some(ProjectId("project_test".into())),
+                    sequence: 2,
+                    created_at: now,
+                    expires_at: None,
+                    kind: ControlEventKind::Revocation(Revocation {
+                        organization_id: OrganizationId("org_test".into()),
+                        project_id: Some(ProjectId("project_test".into())),
+                        epoch: 1,
+                        scope: RevocationScope::Agent,
+                        target_id: "agent_test".into(),
+                        reason: "operator revoke".into(),
+                        created_at: now,
+                    }),
+                },
+                now,
+            )
+            .unwrap();
+        assert!(discovery.discover(&identity).unwrap().is_empty());
     }
 
     #[test]

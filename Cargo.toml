@@ -9,6 +9,7 @@ members = [
   "crates/keylease-sync",
   "crates/leasegate-policy",
   "crates/leasegate-connectors",
+  "crates/leasegate-connector-sdk",
   "crates/keylease-service",
   "crates/keylease-cli",
   "crates/leasegate-control",

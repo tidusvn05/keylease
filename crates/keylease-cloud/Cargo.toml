@@ -12,6 +12,9 @@ base64.workspace = true
 chrono.workspace = true
 keylease-core = { path = "../keylease-core" }
 leasegate-control = { path = "../leasegate-control" }
+leasegate-connector-sdk = { path = "../leasegate-connector-sdk" }
+leasegate-connectors = { path = "../leasegate-connectors" }
+leasegate-policy = { path = "../leasegate-policy" }
 leasegate-policy-bundle = { path = "../leasegate-policy-bundle" }
 rand.workspace = true
 serde.workspace = true
@@ -24,6 +27,7 @@ tower.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+url.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
 

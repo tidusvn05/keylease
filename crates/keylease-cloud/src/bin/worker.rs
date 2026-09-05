@@ -41,6 +41,9 @@ async fn main() -> Result<()> {
         if let Err(error) = repository.expire_pending_approvals(now).await {
             warn!(error = %error, "approval expiry sweep failed");
         }
+        if let Err(error) = repository.expire_pending_policy_proposals(now).await {
+            warn!(error = %error, "policy proposal expiry sweep failed");
+        }
         if let Err(error) = repository.dispatch_outbox_batch(100).await {
             warn!(error = %error, "outbox dispatch failed");
         }

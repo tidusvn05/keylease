@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use keylease_core::{
     ActionRequest, ActionResponse, ContentAccess, DataBudget, KeyLeaseError, Result, RiskTier,
 };
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -15,17 +16,39 @@ use std::{
 };
 use zeroize::Zeroize;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+pub const CONNECTOR_MANIFEST_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectorManifest {
+    pub schema_version: u32,
     pub provider: String,
+    pub display_name: String,
     pub version: String,
     pub authentication_methods: Vec<String>,
     pub fixed_https_origins: Vec<String>,
+    pub runtime: ConnectorRuntime,
+    pub oauth: Option<OAuthProviderSpec>,
     pub actions: Vec<ActionSpec>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectorRuntime {
+    BuiltIn,
+    OutOfProcess,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OAuthProviderSpec {
+    pub authorization_endpoint: String,
+    pub token_endpoint: String,
+    pub pkce_required: bool,
+    pub supported_scopes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ActionSpec {
     pub name: String,
@@ -38,9 +61,13 @@ pub struct ActionSpec {
     pub content_access: ContentAccess,
     pub default_budget: DataBudget,
     pub idempotent: bool,
+    #[serde(default)]
+    pub audit_safe_response_fields: BTreeSet<String>,
+    #[serde(default)]
+    pub allowed_mime_types: BTreeSet<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum JsonType {
     String,
@@ -144,6 +171,18 @@ pub fn normalized_permissions(provider: &str, scopes: &[String]) -> Vec<String> 
                 permissions.insert("issues:read".into());
             }
             ("linear", "write" | "issues:create" | "comments:create") => {
+                permissions.insert("issues:write".into());
+            }
+            ("slack", "channels:history" | "groups:history") => {
+                permissions.insert("messages:read".into());
+            }
+            ("slack", "chat:write") => {
+                permissions.insert("messages:write".into());
+            }
+            ("jira", "read:jira-work" | "read:issue:jira" | "read:project:jira") => {
+                permissions.insert("issues:read".into());
+            }
+            ("jira", "write:jira-work" | "write:issue:jira") => {
                 permissions.insert("issues:write".into());
             }
             (_, value)
@@ -424,10 +463,14 @@ impl FakeConnector {
 impl Connector for FakeConnector {
     fn manifest(&self) -> ConnectorManifest {
         ConnectorManifest {
+            schema_version: CONNECTOR_MANIFEST_VERSION,
             provider: "fake".into(),
+            display_name: "Fake conformance connector".into(),
             version: "1".into(),
             authentication_methods: vec!["fixture_token".into()],
             fixed_https_origins: vec![],
+            runtime: ConnectorRuntime::BuiltIn,
+            oauth: None,
             actions: vec![
                 ActionSpec {
                     name: "fake.resource.read".into(),
@@ -443,6 +486,8 @@ impl Connector for FakeConnector {
                         ..Default::default()
                     },
                     idempotent: true,
+                    audit_safe_response_fields: BTreeSet::new(),
+                    allowed_mime_types: BTreeSet::new(),
                 },
                 ActionSpec {
                     name: "fake.resource.write".into(),
@@ -454,6 +499,8 @@ impl Connector for FakeConnector {
                     content_access: ContentAccess::None,
                     default_budget: Default::default(),
                     idempotent: false,
+                    audit_safe_response_fields: BTreeSet::new(),
+                    allowed_mime_types: BTreeSet::new(),
                 },
             ],
         }
@@ -576,6 +623,12 @@ impl BuiltinConnector {
     }
     pub fn notion() -> Self {
         Self::new(notion_manifest())
+    }
+    pub fn slack() -> Self {
+        Self::new(slack_manifest())
+    }
+    pub fn jira() -> Self {
+        Self::new(jira_manifest())
     }
     fn new(manifest: ConnectorManifest) -> Self {
         let client = reqwest::Client::builder()
@@ -732,6 +785,59 @@ impl Connector for BuiltinConnector {
             {
                 return Err(KeyLeaseError::Denied {
                     reason: "Notion markdown exceeds the bounded block payload".into(),
+                });
+            }
+        }
+        if self.manifest.provider == "slack"
+            && let Some(text) = canonical
+                .request
+                .arguments
+                .get("text")
+                .and_then(Value::as_str)
+            && (text.is_empty() || text.len() > 40_000)
+        {
+            return Err(KeyLeaseError::Denied {
+                reason: "Slack message text is empty or exceeds the hard limit".into(),
+            });
+        }
+        if self.manifest.provider == "slack"
+            && canonical
+                .request
+                .arguments
+                .get("limit")
+                .and_then(Value::as_u64)
+                .is_some_and(|limit| limit == 0 || limit > 100)
+        {
+            return Err(KeyLeaseError::Denied {
+                reason: "Slack history limit must be between 1 and 100".into(),
+            });
+        }
+        if self.manifest.provider == "jira" {
+            jira_resource_parts(&canonical.request.resource)?;
+            if let Some(value) = canonical
+                .request
+                .arguments
+                .get("summary")
+                .and_then(Value::as_str)
+                && (value.is_empty() || value.len() > 255)
+            {
+                return Err(KeyLeaseError::Denied {
+                    reason: "Jira summary is empty or exceeds the hard limit".into(),
+                });
+            }
+            if let Some(value) = canonical
+                .request
+                .arguments
+                .get("issue_key")
+                .and_then(Value::as_str)
+                && (value.is_empty()
+                    || value.len() > 100
+                    || !value
+                        .chars()
+                        .all(|character| character.is_ascii_alphanumeric() || character == '-'))
+            {
+                return Err(KeyLeaseError::Denied {
+                    reason: "Jira issue key is not canonical".into(),
                 });
             }
         }
@@ -892,6 +998,19 @@ impl Connector for BuiltinConnector {
             serde_json::from_slice(&bytes)
                 .map_err(|_| KeyLeaseError::ConnectorUnavailable { retryable: false })?
         };
+        if self.manifest.provider == "slack"
+            && body.get("ok").and_then(Value::as_bool) != Some(true)
+        {
+            return Err(KeyLeaseError::ConnectorUnavailable { retryable: false });
+        }
+        if action.request.action == "jira.issue.get" {
+            let (_, project_id) = jira_resource_parts(&action.request.resource)?;
+            if body.pointer("/fields/project/id").and_then(Value::as_str) != Some(project_id) {
+                return Err(KeyLeaseError::Denied {
+                    reason: "Jira issue is outside the enrolled project".into(),
+                });
+            }
+        }
         let (item_count, cell_count) = response_counts(&action.request.action, &body);
         let revision = body
             .get("revisionId")
@@ -931,6 +1050,12 @@ impl Connector for BuiltinConnector {
                 Some(json!({"query":"query { viewer { id } }"})),
             ),
             "notion" => ("GET", "https://api.notion.com/v1/users/me", None),
+            "slack" => ("POST", "https://slack.com/api/auth.test", None),
+            "jira" => (
+                "GET",
+                "https://api.atlassian.com/oauth/token/accessible-resources",
+                None,
+            ),
             _ => {
                 return Err(KeyLeaseError::Denied {
                     reason: "unknown provider".into(),
@@ -990,6 +1115,8 @@ impl Connector for BuiltinConnector {
             "github" => "https://github.com/login/oauth/access_token",
             "linear" => "https://api.linear.app/oauth/token",
             "notion" => "https://api.notion.com/v1/oauth/token",
+            "slack" => "https://slack.com/api/oauth.v2.access",
+            "jira" => "https://auth.atlassian.com/oauth/token",
             _ => {
                 return Err(KeyLeaseError::Denied {
                     reason: "unknown provider".into(),
@@ -1011,6 +1138,19 @@ impl Connector for BuiltinConnector {
                 .basic_auth(&client_id, Some(secret))
                 .header("notion-version", "2026-03-11")
                 .json(&json!({"grant_type":"refresh_token","refresh_token":refresh_token}));
+        } else if self.manifest.provider == "jira" {
+            let secret = oauth
+                .client_secret
+                .clone()
+                .ok_or_else(|| KeyLeaseError::Denied {
+                    reason: "Jira refresh requires the OAuth client secret".into(),
+                })?;
+            request = request.json(&json!({
+                "grant_type":"refresh_token",
+                "refresh_token":refresh_token,
+                "client_id":client_id,
+                "client_secret":secret
+            }));
         } else {
             let mut form = vec![
                 ("grant_type", "refresh_token".to_owned()),
@@ -1121,6 +1261,18 @@ impl Connector for BuiltinConnector {
             "linear" => {
                 return Err(KeyLeaseError::Denied {
                     reason: "Linear does not publish an upstream token revocation endpoint; connection remains locally revoked".into(),
+                });
+            }
+            "slack" => self
+                .client
+                .post("https://slack.com/api/auth.revoke")
+                .bearer_auth(&token)
+                .header("accept", "application/json")
+                .send()
+                .await,
+            "jira" => {
+                return Err(KeyLeaseError::Denied {
+                    reason: "Atlassian grant revoke is user-managed; the connection remains locally revoked".into(),
                 });
             }
             _ => {
@@ -1485,6 +1637,63 @@ fn build_http_request(provider: &str, action: &CanonicalAction) -> Result<HttpRe
                 ),
             )
         }
+        ("slack", "slack.channel.history") => (
+            "POST",
+            "https://slack.com/api/conversations.history".into(),
+            Some(json!({
+                "channel":id,
+                "limit":arguments.get("limit").and_then(Value::as_u64).unwrap_or(100),
+                "cursor":arguments.get("cursor")
+            })),
+        ),
+        ("slack", "slack.message.post") => (
+            "POST",
+            "https://slack.com/api/chat.postMessage".into(),
+            Some(json!({
+                "channel":id,
+                "text":string_argument(arguments,"text")?,
+                "thread_ts":arguments.get("thread_ts")
+            })),
+        ),
+        ("jira", "jira.project.get") => {
+            let (cloud_id, project_id) = jira_resource_parts(&action.request.resource)?;
+            (
+                "GET",
+                format!(
+                    "https://api.atlassian.com/ex/jira/{}/rest/api/3/project/{}",
+                    encoded(cloud_id),
+                    encoded(project_id)
+                ),
+                None,
+            )
+        }
+        ("jira", "jira.issue.get") => {
+            let (cloud_id, _) = jira_resource_parts(&action.request.resource)?;
+            (
+                "GET",
+                format!(
+                    "https://api.atlassian.com/ex/jira/{}/rest/api/3/issue/{}?fields=summary,status,project,issuetype",
+                    encoded(cloud_id),
+                    encoded(string_argument(arguments, "issue_key")?)
+                ),
+                None,
+            )
+        }
+        ("jira", "jira.issue.create") => {
+            let (cloud_id, project_id) = jira_resource_parts(&action.request.resource)?;
+            (
+                "POST",
+                format!(
+                    "https://api.atlassian.com/ex/jira/{}/rest/api/3/issue",
+                    encoded(cloud_id)
+                ),
+                Some(json!({"fields":{
+                    "project":{"id":project_id},
+                    "summary":string_argument(arguments,"summary")?,
+                    "issuetype":{"id":string_argument(arguments,"issue_type_id")?}
+                }})),
+            )
+        }
         _ => {
             return Err(KeyLeaseError::Denied {
                 reason: "action has no built-in HTTP mapping".into(),
@@ -1505,6 +1714,32 @@ fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str> {
         .ok_or_else(|| KeyLeaseError::InvalidRequest {
             reason: format!("missing string argument: {name}"),
         })
+}
+
+fn jira_resource_parts(resource: &str) -> Result<(&str, &str)> {
+    let id =
+        resource
+            .strip_prefix("jira:project/")
+            .ok_or_else(|| KeyLeaseError::InvalidRequest {
+                reason: "Jira resource must identify an enrolled project".into(),
+            })?;
+    let (cloud_id, project_id) =
+        id.rsplit_once('.')
+            .ok_or_else(|| KeyLeaseError::InvalidRequest {
+                reason: "Jira resource must contain cloud and project identifiers".into(),
+            })?;
+    if cloud_id.is_empty()
+        || project_id.is_empty()
+        || !cloud_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        || !project_id.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "invalid Jira cloud or numeric project identifier".into(),
+        });
+    }
+    Ok((cloud_id, project_id))
 }
 fn validate_digest_argument(arguments: &Value, name: &str) -> Result<()> {
     let value = string_argument(arguments, name)?;
@@ -1685,7 +1920,9 @@ fn linear_payload(action: &str, arguments: &Value, team_id: &str) -> Result<Valu
 
 pub fn google_manifest() -> ConnectorManifest {
     ConnectorManifest {
+        schema_version: CONNECTOR_MANIFEST_VERSION,
         provider: "google_workspace".into(),
+        display_name: "Google Workspace".into(),
         version: "1".into(),
         authentication_methods: vec!["oauth_pkce".into()],
         fixed_https_origins: vec![
@@ -1693,6 +1930,13 @@ pub fn google_manifest() -> ConnectorManifest {
             "https://docs.googleapis.com".into(),
             "https://sheets.googleapis.com".into(),
         ],
+        runtime: ConnectorRuntime::BuiltIn,
+        oauth: Some(OAuthProviderSpec {
+            authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".into(),
+            token_endpoint: "https://oauth2.googleapis.com/token".into(),
+            pkce_required: true,
+            supported_scopes: vec!["https://www.googleapis.com/auth/drive.file".into()],
+        }),
         actions: vec![
             spec(
                 "google_drive.file.list_authorized",
@@ -1835,10 +2079,14 @@ pub fn google_manifest() -> ConnectorManifest {
 }
 pub fn github_manifest() -> ConnectorManifest {
     ConnectorManifest {
+        schema_version: CONNECTOR_MANIFEST_VERSION,
         provider: "github".into(),
+        display_name: "GitHub".into(),
         version: "1-beta".into(),
         authentication_methods: vec!["github_app".into()],
         fixed_https_origins: vec!["https://api.github.com".into()],
+        runtime: ConnectorRuntime::BuiltIn,
+        oauth: None,
         actions: vec![
             spec(
                 "github.repository.get_metadata",
@@ -1944,10 +2192,19 @@ pub fn github_manifest() -> ConnectorManifest {
 }
 pub fn linear_manifest() -> ConnectorManifest {
     ConnectorManifest {
+        schema_version: CONNECTOR_MANIFEST_VERSION,
         provider: "linear".into(),
+        display_name: "Linear".into(),
         version: "1-beta".into(),
         authentication_methods: vec!["oauth_pkce_actor_app".into()],
         fixed_https_origins: vec!["https://api.linear.app".into()],
+        runtime: ConnectorRuntime::BuiltIn,
+        oauth: Some(OAuthProviderSpec {
+            authorization_endpoint: "https://linear.app/oauth/authorize".into(),
+            token_endpoint: "https://api.linear.app/oauth/token".into(),
+            pkce_required: true,
+            supported_scopes: vec!["read".into(), "write".into()],
+        }),
         actions: vec![
             spec(
                 "linear.issue.list",
@@ -1990,10 +2247,22 @@ pub fn linear_manifest() -> ConnectorManifest {
 }
 pub fn notion_manifest() -> ConnectorManifest {
     ConnectorManifest {
+        schema_version: CONNECTOR_MANIFEST_VERSION,
         provider: "notion".into(),
+        display_name: "Notion".into(),
         version: "1-beta".into(),
-        authentication_methods: vec!["internal_token".into()],
+        authentication_methods: vec!["oauth_public".into(), "internal_token".into()],
         fixed_https_origins: vec!["https://api.notion.com".into()],
+        runtime: ConnectorRuntime::BuiltIn,
+        oauth: Some(OAuthProviderSpec {
+            authorization_endpoint: "https://api.notion.com/v1/oauth/authorize".into(),
+            token_endpoint: "https://api.notion.com/v1/oauth/token".into(),
+            // Notion's public-connection flow currently authenticates the
+            // token exchange with the client secret; PKCE is not documented
+            // for this API flow.
+            pkce_required: false,
+            supported_scopes: Vec::new(),
+        }),
         actions: vec![
             spec(
                 "notion.page.search_authorized",
@@ -2051,6 +2320,102 @@ pub fn notion_manifest() -> ConnectorManifest {
     }
 }
 
+pub fn slack_manifest() -> ConnectorManifest {
+    ConnectorManifest {
+        schema_version: CONNECTOR_MANIFEST_VERSION,
+        provider: "slack".into(),
+        display_name: "Slack".into(),
+        version: "1-beta".into(),
+        authentication_methods: vec!["oauth_v2".into()],
+        fixed_https_origins: vec!["https://slack.com".into()],
+        runtime: ConnectorRuntime::BuiltIn,
+        oauth: Some(OAuthProviderSpec {
+            authorization_endpoint: "https://slack.com/oauth/v2/authorize".into(),
+            token_endpoint: "https://slack.com/api/oauth.v2.access".into(),
+            pkce_required: false,
+            supported_scopes: vec![
+                "channels:history".into(),
+                "groups:history".into(),
+                "chat:write".into(),
+            ],
+        }),
+        actions: vec![
+            spec(
+                "slack.channel.history",
+                "slack:channel",
+                RiskTier::R1,
+                &[("limit", JsonType::Number), ("cursor", JsonType::String)],
+                &[],
+                ContentAccess::BoundedContent,
+                true,
+            ),
+            spec(
+                "slack.message.post",
+                "slack:channel",
+                RiskTier::R3,
+                &[("text", JsonType::String), ("thread_ts", JsonType::String)],
+                &["text"],
+                ContentAccess::Metadata,
+                false,
+            ),
+        ],
+    }
+}
+
+pub fn jira_manifest() -> ConnectorManifest {
+    ConnectorManifest {
+        schema_version: CONNECTOR_MANIFEST_VERSION,
+        provider: "jira".into(),
+        display_name: "Jira Cloud".into(),
+        version: "1-beta".into(),
+        authentication_methods: vec!["oauth_3lo".into()],
+        fixed_https_origins: vec!["https://api.atlassian.com".into()],
+        runtime: ConnectorRuntime::BuiltIn,
+        oauth: Some(OAuthProviderSpec {
+            authorization_endpoint: "https://auth.atlassian.com/authorize".into(),
+            token_endpoint: "https://auth.atlassian.com/oauth/token".into(),
+            pkce_required: false,
+            supported_scopes: vec![
+                "read:jira-work".into(),
+                "write:jira-work".into(),
+                "offline_access".into(),
+            ],
+        }),
+        actions: vec![
+            spec(
+                "jira.project.get",
+                "jira:project",
+                RiskTier::R1,
+                &[],
+                &[],
+                ContentAccess::Metadata,
+                true,
+            ),
+            spec(
+                "jira.issue.get",
+                "jira:project",
+                RiskTier::R1,
+                &[("issue_key", JsonType::String)],
+                &["issue_key"],
+                ContentAccess::BoundedContent,
+                true,
+            ),
+            spec(
+                "jira.issue.create",
+                "jira:project",
+                RiskTier::R2,
+                &[
+                    ("summary", JsonType::String),
+                    ("issue_type_id", JsonType::String),
+                ],
+                &["summary", "issue_type_id"],
+                ContentAccess::Metadata,
+                false,
+            ),
+        ],
+    }
+}
+
 fn spec(
     name: &str,
     prefix: &str,
@@ -2077,6 +2442,8 @@ fn spec(
             ..Default::default()
         },
         idempotent,
+        audit_safe_response_fields: BTreeSet::new(),
+        allowed_mime_types: BTreeSet::new(),
     }
 }
 
@@ -2097,6 +2464,10 @@ fn permissions_for_action(action: &str) -> Vec<String> {
         "notion.page.create" | "notion.page.append_markdown" | "notion.page.update_markdown" => {
             &["content:write"]
         }
+        "slack.channel.history" => &["messages:read"],
+        "slack.message.post" => &["messages:write"],
+        "jira.project.get" | "jira.issue.get" => &["issues:read"],
+        "jira.issue.create" => &["issues:write"],
         _ => &[],
     };
     permissions
@@ -2194,6 +2565,33 @@ mod tests {
                 assert!(!action.name.contains("formula"));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn phase4_slack_and_jira_are_typed_and_exact_resource_scoped() {
+        let slack = BuiltinConnector::slack();
+        let slack_action = request("slack.message.post", json!({"text":"hello from LeaseGate"}));
+        let mut slack_action = slack_action;
+        slack_action.resource = "slack:channel/C123".into();
+        assert!(slack.canonicalize(&slack_action).await.is_ok());
+        slack_action.arguments = json!({"text":"hello","channel":"C999"});
+        assert!(slack.canonicalize(&slack_action).await.is_err());
+
+        let jira = BuiltinConnector::jira();
+        let mut jira_action = request(
+            "jira.issue.create",
+            json!({"summary":"Bounded issue","issue_type_id":"10001"}),
+        );
+        jira_action.resource = "jira:project/cloud-id-123.10000".into();
+        let canonical = jira.canonicalize(&jira_action).await.unwrap();
+        let http = build_http_request("jira", &canonical).unwrap();
+        assert!(
+            http.path
+                .starts_with("https://api.atlassian.com/ex/jira/cloud-id-123/")
+        );
+        assert_eq!(http.body.unwrap()["fields"]["project"]["id"], "10000");
+        jira_action.resource = "jira:project/cloud-id-123.not-numeric".into();
+        assert!(jira.canonicalize(&jira_action).await.is_err());
     }
     #[test]
     fn provider_scopes_normalize_without_granting_unknown_authority() {

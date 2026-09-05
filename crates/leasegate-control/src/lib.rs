@@ -2,9 +2,10 @@
 
 use chrono::{DateTime, Utc};
 use keylease_core::{
-    AccountId, AgentId, ApprovalId, ApprovalSemanticSummary, AuditEvent, ConnectionId,
-    ControlEventId, DeviceId, EdgeId, HumanId, MembershipId, OrganizationId, PolicyBundleId,
-    PolicyRule, ProjectId, RiskTier, SyncMutationId, VaultId,
+    AccountId, AgentId, ApprovalId, ApprovalSemanticSummary, AuditEvent, ConnectionHealth,
+    ConnectionId, ConnectorPublisherId, ControlEventId, DeviceId, EdgeId, HumanId, MembershipId,
+    OrganizationId, PolicyBundleId, PolicyProposalId, PolicyRule, ProjectId, RiskTier,
+    SyncMutationId, VaultId,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -387,6 +388,154 @@ pub struct EdgeHeartbeat {
     pub observed_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConnectionDescriptor {
+    pub schema_version: u32,
+    pub connection_id: ConnectionId,
+    pub organization_id: OrganizationId,
+    pub project_id: ProjectId,
+    pub provider: String,
+    pub connector_version: String,
+    pub display_name: String,
+    pub auth_method: String,
+    pub health: ConnectionHealth,
+    pub health_reason: Option<String>,
+    pub reauthorization_required: bool,
+    /// Stable LeaseGate permissions, never raw OAuth tokens or grants.
+    pub granted_permissions: Vec<String>,
+    pub authorized_resources: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyProposalStatus {
+    Pending,
+    Approved,
+    Rejected,
+    Activated,
+    Expired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyProposal {
+    pub schema_version: u32,
+    pub proposal_id: PolicyProposalId,
+    pub organization_id: OrganizationId,
+    pub project_id: ProjectId,
+    pub proposed_by_agent_id: AgentId,
+    pub base_policy_version: u64,
+    pub title: String,
+    pub reason: String,
+    pub rules: Vec<PolicyRule>,
+    pub proposal_digest_sha256: String,
+    pub status: PolicyProposalStatus,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+impl PolicyProposal {
+    pub fn calculate_digest(&self) -> String {
+        let value = serde_json::json!({
+            "schema_version": self.schema_version,
+            "proposal_id": self.proposal_id,
+            "organization_id": self.organization_id,
+            "project_id": self.project_id,
+            "proposed_by_agent_id": self.proposed_by_agent_id,
+            "base_policy_version": self.base_policy_version,
+            "title": self.title,
+            "reason": self.reason,
+            "rules": self.rules,
+            "created_at": self.created_at,
+            "expires_at": self.expires_at,
+        });
+        hex(&Sha256::digest(
+            serde_json::to_vec(&value).expect("serializing proposal JSON cannot fail"),
+        ))
+    }
+
+    pub fn validate_shape(&self, now: DateTime<Utc>) -> keylease_core::Result<()> {
+        if self.schema_version != CONTROL_CONTRACT_VERSION {
+            return Err(keylease_core::KeyLeaseError::UnsupportedVersion {
+                version: self.schema_version,
+            });
+        }
+        if self.title.trim().is_empty()
+            || self.title.len() > 200
+            || self.reason.trim().is_empty()
+            || self.reason.len() > 2_000
+            || self.rules.is_empty()
+            || self.rules.len() > 500
+            || self.expires_at <= now
+            || self.expires_at > now + chrono::Duration::days(7)
+            || self.proposal_digest_sha256 != self.calculate_digest()
+            || self.status != PolicyProposalStatus::Pending
+        {
+            return Err(keylease_core::KeyLeaseError::InvalidRequest {
+                reason: "invalid policy proposal shape or digest".into(),
+            });
+        }
+        if self.rules.iter().any(|rule| {
+            rule.id.is_empty()
+                || rule.actions.is_empty()
+                || rule.resource_prefix.is_empty()
+                || rule.max_lease_ttl_seconds == 0
+                || rule.max_uses == 0
+                || rule.agent_id.as_ref() != Some(&self.proposed_by_agent_id)
+        }) {
+            return Err(keylease_core::KeyLeaseError::Denied {
+                reason: "agent proposals require explicit self-bound, non-empty rules".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyProposalDecision {
+    Approve,
+    Reject,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyProposalReviewRequest {
+    pub schema_version: u32,
+    pub reviewer_id: HumanId,
+    pub decision: PolicyProposalDecision,
+    pub expected_proposal_digest_sha256: String,
+    pub expected_base_policy_version: u64,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyProposalReview {
+    pub proposal_id: PolicyProposalId,
+    pub reviewer_id: HumanId,
+    pub decision: PolicyProposalDecision,
+    pub proposal_digest_sha256: String,
+    pub base_policy_version: u64,
+    pub note: String,
+    pub reviewed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConnectorPublisher {
+    pub id: ConnectorPublisherId,
+    pub organization_id: OrganizationId,
+    pub project_id: ProjectId,
+    pub display_name: String,
+    pub verifying_key_base64: String,
+    pub created_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AuditBatch {
@@ -429,5 +578,44 @@ mod tests {
         mutation.ciphertext = ciphertext.into();
         mutation.result_revision = 3;
         assert!(mutation.validate_shape().is_err());
+    }
+
+    #[test]
+    fn policy_proposal_is_digest_bound_and_agent_scoped() {
+        let now = Utc::now();
+        let agent = AgentId("agent_proposer".into());
+        let mut proposal = PolicyProposal {
+            schema_version: CONTROL_CONTRACT_VERSION,
+            proposal_id: PolicyProposalId::new(),
+            organization_id: OrganizationId("org_test".into()),
+            project_id: ProjectId("project_test".into()),
+            proposed_by_agent_id: agent.clone(),
+            base_policy_version: 3,
+            title: "Read one repository".into(),
+            reason: "Complete task 42".into(),
+            rules: vec![PolicyRule {
+                id: "proposal-rule".into(),
+                version: 4,
+                effect: keylease_core::PolicyEffect::Allow,
+                agent_id: Some(agent),
+                connection_id: Some("conn_github".into()),
+                resource_prefix: "github:repository/123".into(),
+                actions: vec!["github.issue.get".into()],
+                argument_equals: Default::default(),
+                not_before: None,
+                expires_at: Some(now + chrono::Duration::hours(1)),
+                max_lease_ttl_seconds: 60,
+                max_uses: 10,
+                budget: Default::default(),
+            }],
+            proposal_digest_sha256: String::new(),
+            status: PolicyProposalStatus::Pending,
+            created_at: now,
+            expires_at: now + chrono::Duration::hours(1),
+        };
+        proposal.proposal_digest_sha256 = proposal.calculate_digest();
+        proposal.validate_shape(now).unwrap();
+        proposal.rules[0].actions.push("github.issue.create".into());
+        assert!(proposal.validate_shape(now).is_err());
     }
 }

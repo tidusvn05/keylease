@@ -5,6 +5,8 @@ use keylease_core::{
     ActionRequest, AgentId, DataBudget, KeyLeaseError, PolicyDecision, PolicyEffect, PolicyEngine,
     PolicyRule, Result, RiskTier,
 };
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyTemplateKind {
@@ -89,6 +91,16 @@ pub fn materialize_provider_template(input: PolicyTemplateInput) -> Result<Polic
                     "google_sheets.spreadsheet.create",
                 ],
             ),
+            "slack" => (
+                "slack:channel/",
+                &["slack.channel.history"],
+                &["slack.message.post"],
+            ),
+            "jira" => (
+                "jira:project/",
+                &["jira.project.get", "jira.issue.get"],
+                &["jira.issue.create"],
+            ),
             _ => {
                 return Err(KeyLeaseError::InvalidRequest {
                     reason: "unsupported provider policy template".into(),
@@ -150,6 +162,54 @@ pub struct RulePolicyEngine {
     rules: Vec<PolicyRule>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleTraceOutcome {
+    Matched,
+    DidNotMatch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RuleEvaluationTrace {
+    pub rule_id: String,
+    pub rule_version: u64,
+    pub effect: PolicyEffect,
+    pub outcome: RuleTraceOutcome,
+    /// Stable reason codes only. Expected and actual argument values are never
+    /// copied into a simulation trace.
+    pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PolicySimulation {
+    pub action: String,
+    pub resource: String,
+    pub connection_id: String,
+    pub argument_keys: Vec<String>,
+    pub decision: PolicyDecision,
+    pub trace: Vec<RuleEvaluationTrace>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct EffectivePermission {
+    pub rule_id: String,
+    pub policy_version: u64,
+    pub effect: PolicyEffect,
+    pub connection_id: Option<String>,
+    pub resource_prefix: String,
+    pub action: String,
+    pub argument_constraint_paths: Vec<String>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub max_lease_ttl_seconds: u64,
+    pub max_uses: u64,
+    pub budget: DataBudget,
+    pub broad_scope_warning: bool,
+}
+
 impl RulePolicyEngine {
     pub fn new(mut rules: Vec<PolicyRule>) -> Self {
         rules.sort_by(|a, b| a.id.cmp(&b.id));
@@ -157,6 +217,89 @@ impl RulePolicyEngine {
     }
     pub fn rules(&self) -> &[PolicyRule] {
         &self.rules
+    }
+
+    /// Evaluates without issuing a lease, reserving a budget or invoking a
+    /// connector. The returned trace contains no argument values.
+    pub fn simulate(
+        &self,
+        request: &ActionRequest,
+        risk: RiskTier,
+        now: DateTime<Utc>,
+    ) -> Result<PolicySimulation> {
+        request.validate_version()?;
+        let mut argument_keys = request
+            .arguments
+            .as_object()
+            .map(|object| object.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        argument_keys.sort();
+        let trace = self
+            .rules
+            .iter()
+            .map(|rule| trace_rule(rule, request, now))
+            .collect();
+        let mut warnings = Vec::new();
+        if request.task_id.is_none() {
+            warnings.push("request_has_no_task_binding".into());
+        }
+        Ok(PolicySimulation {
+            action: request.action.clone(),
+            resource: request.resource.clone(),
+            connection_id: request.connection_id.0.clone(),
+            argument_keys,
+            decision: self.evaluate(request, risk, now),
+            trace,
+            warnings,
+        })
+    }
+
+    pub fn effective_permissions(
+        &self,
+        agent_id: &AgentId,
+        now: DateTime<Utc>,
+    ) -> Vec<EffectivePermission> {
+        let mut permissions = self
+            .rules
+            .iter()
+            .filter(|rule| {
+                rule.agent_id.as_ref().is_none_or(|id| id == agent_id)
+                    && rule.not_before.is_none_or(|start| start <= now)
+                    && rule.expires_at.is_none_or(|end| end > now)
+            })
+            .flat_map(|rule| {
+                let broad_scope_warning = is_broad_resource_scope(&rule.resource_prefix);
+                rule.actions.iter().map(move |action| EffectivePermission {
+                    rule_id: rule.id.clone(),
+                    policy_version: rule.version,
+                    effect: rule.effect.clone(),
+                    connection_id: rule.connection_id.clone(),
+                    resource_prefix: rule.resource_prefix.clone(),
+                    action: action.clone(),
+                    argument_constraint_paths: rule.argument_equals.keys().cloned().collect(),
+                    expires_at: rule.expires_at,
+                    max_lease_ttl_seconds: rule.max_lease_ttl_seconds,
+                    max_uses: rule.max_uses,
+                    budget: rule.budget.clone(),
+                    broad_scope_warning,
+                })
+            })
+            .collect::<Vec<_>>();
+        permissions.sort_by(|left, right| {
+            (
+                left.connection_id.as_deref(),
+                left.resource_prefix.as_str(),
+                left.action.as_str(),
+                left.rule_id.as_str(),
+            )
+                .cmp(&(
+                    right.connection_id.as_deref(),
+                    right.resource_prefix.as_str(),
+                    right.action.as_str(),
+                    right.rule_id.as_str(),
+                ))
+        });
+        permissions
     }
 }
 
@@ -249,6 +392,67 @@ fn matches_rule(rule: &PolicyRule, request: &ActionRequest, now: DateTime<Utc>) 
             .pointer(pointer)
             .is_some_and(|actual| actual == expected)
     })
+}
+
+fn trace_rule(
+    rule: &PolicyRule,
+    request: &ActionRequest,
+    now: DateTime<Utc>,
+) -> RuleEvaluationTrace {
+    let mut reasons = Vec::new();
+    if rule
+        .agent_id
+        .as_ref()
+        .is_some_and(|id| id != &request.subject.agent_id)
+    {
+        reasons.push("agent_mismatch".into());
+    }
+    if rule
+        .connection_id
+        .as_ref()
+        .is_some_and(|id| id != &request.connection_id.0)
+    {
+        reasons.push("connection_mismatch".into());
+    }
+    if !resource_matches(&rule.resource_prefix, &request.resource) {
+        reasons.push("resource_mismatch".into());
+    }
+    if !rule.actions.iter().any(|action| action == &request.action) {
+        reasons.push("action_mismatch".into());
+    }
+    if rule.not_before.is_some_and(|start| now < start) {
+        reasons.push("not_yet_valid".into());
+    }
+    if rule.expires_at.is_some_and(|end| now >= end) {
+        reasons.push("expired".into());
+    }
+    for (pointer, expected) in &rule.argument_equals {
+        if request
+            .arguments
+            .pointer(pointer)
+            .is_none_or(|actual| actual != expected)
+        {
+            reasons.push(format!("argument_constraint_mismatch:{pointer}"));
+        }
+    }
+    RuleEvaluationTrace {
+        rule_id: rule.id.clone(),
+        rule_version: rule.version,
+        effect: rule.effect.clone(),
+        outcome: if reasons.is_empty() {
+            RuleTraceOutcome::Matched
+        } else {
+            RuleTraceOutcome::DidNotMatch
+        },
+        reasons,
+    }
+}
+
+fn is_broad_resource_scope(resource: &str) -> bool {
+    resource.ends_with(':')
+        || !resource.contains('/')
+        || resource.ends_with("/*")
+        || resource == "*"
 }
 
 fn resource_matches(prefix: &str, resource: &str) -> bool {
@@ -344,6 +548,27 @@ mod tests {
             expires_at: Utc::now() + chrono::Duration::hours(1),
         });
         assert!(matches!(result, Err(KeyLeaseError::InvalidRequest { .. })));
+    }
+
+    #[test]
+    fn simulation_trace_is_deterministic_and_never_copies_argument_values() {
+        let mut constrained = rule(PolicyEffect::Allow);
+        constrained
+            .argument_equals
+            .insert("/title".into(), serde_json::json!("expected-secret"));
+        let request = base_request();
+        let simulation = RulePolicyEngine::new(vec![constrained])
+            .simulate(&request, RiskTier::R2, Utc::now())
+            .unwrap();
+        assert!(matches!(simulation.decision, PolicyDecision::Deny { .. }));
+        assert_eq!(simulation.argument_keys, vec!["title"]);
+        assert_eq!(
+            simulation.trace[0].reasons,
+            vec!["argument_constraint_mismatch:/title"]
+        );
+        let encoded = serde_json::to_string(&simulation).unwrap();
+        assert!(!encoded.contains("expected-secret"));
+        assert!(!encoded.contains("one"));
     }
 
     fn digest(d: PolicyDecision) -> String {

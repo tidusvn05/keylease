@@ -4,10 +4,12 @@ use chrono::{Duration, Utc};
 use keylease_core::{AgentId, EdgeId, OrganizationId, ProjectId, WorkloadId};
 use keylease_service::KeyLeaseService;
 use keylease_store::NativeStore;
-use leasegate_edge::{CloudControlClient, EdgeConfig, EdgeControlStore, EdgeEnforcedExecutor};
+use leasegate_edge::{
+    CloudControlClient, EdgeConfig, EdgeControlStore, EdgeEnforcedExecutor, EdgeToolDiscovery,
+};
 use leasegate_mcp::{
     AgentEndpointIdentity, CanonicalActionExecutor, EndpointSecurity, LocalServiceExecutor,
-    agent_router,
+    agent_router_with_discovery,
 };
 use std::{
     collections::BTreeMap,
@@ -143,7 +145,7 @@ async fn main() -> Result<()> {
         Arc::new(LocalServiceExecutor::new(keylease.clone()));
     let enforced: Arc<dyn CanonicalActionExecutor> = Arc::new(EdgeEnforcedExecutor::new(
         local,
-        edge_store,
+        edge_store.clone(),
         cloud,
         cloud_connected,
         organization_id,
@@ -165,7 +167,8 @@ async fn main() -> Result<()> {
         .collect();
     let security = EndpointSecurity::new(agent_credential.trim().to_owned(), hosts, origins)
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let router = agent_router(
+    let discovery = Arc::new(EdgeToolDiscovery::built_in(edge_store));
+    let router = agent_router_with_discovery(
         "/mcp",
         AgentEndpointIdentity {
             agent_id,
@@ -174,6 +177,7 @@ async fn main() -> Result<()> {
             client_session_id: format!("edge-{}", std::process::id()),
         },
         enforced,
+        discovery,
         security,
     );
     let listener = tokio::net::TcpListener::bind(listen)

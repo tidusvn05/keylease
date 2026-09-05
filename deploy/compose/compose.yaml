@@ -78,6 +78,7 @@ services:
         KEYLEASE_ORGANIZATION_ID: ${KEYLEASE_ORGANIZATION_ID:-}
         KEYLEASE_PROJECT_ID: ${KEYLEASE_PROJECT_ID:-}
         KEYLEASE_APPROVER_ID: ${KEYLEASE_APPROVER_ID:-}
+        KEYLEASE_AGENT_ID: ${LEASEGATE_AGENT_ID:-}
     restart: unless-stopped
     depends_on: [cloud]
     environment:

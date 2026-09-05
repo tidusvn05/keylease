@@ -1,8 +1,8 @@
 # KeyLease
 
 KeyLease is a local-first encrypted vault and LeaseGate policy gateway for agents.
-This repository contains the Phase 0 contracts and the locally testable portion
-of the Phase 1 MVP from
+This repository contains the Phase 0 contracts through the locally testable
+Phase 4 beta from
 [`agent-friendly-keepass-app-proposal.md`](agent-friendly-keepass-app-proposal.md).
 Platform and live-provider release evidence is tracked separately and is not
 claimed complete from this Linux workspace.
@@ -20,10 +20,14 @@ without going through `KeyLeaseService`.
 - `keylease-1pux`: bounded plaintext 1PUX ZIP importer and migration reports.
 - `keylease-kdbx`: KDBX 4 import/export adapter and migration reports.
 - `leasegate-policy`: deterministic deny-by-default policy and approvals.
-- `leasegate-connectors`: connector trait, fake conformance connector and providers.
+- `leasegate-connectors`: connector trait, fake conformance connector and typed
+  Google, GitHub, Linear, Notion, Slack and Jira providers.
+- `leasegate-connector-sdk`: manifest validation, JSON Schema generation,
+  conformance checks and signed immutable connector packaging CLI/library.
 - `keylease-service`: the only mutation/policy/connector orchestration layer.
 - `keylease-cli`: headless CLI and local Unix-socket daemon.
-- `keylease-cloud`: PostgreSQL-backed Phase 3 control API and worker.
+- `keylease-cloud`: PostgreSQL-backed Phase 3/4 control API, connector registry,
+  policy proposals, audit explorer and worker.
 - `leasegate-control` / `leasegate-policy-bundle`: versioned Cloud/Edge wire
   contracts and Ed25519/JCS signatures.
 - `leasegate-edge`: Linux Edge control cache, offline enforcement and encrypted
@@ -51,6 +55,11 @@ Implemented Phase 2/3 scope and explicit beta limitations are tracked in
 [`docs/phase-2-3-implementation.md`](docs/phase-2-3-implementation.md). To run
 the complete beta profile on one VPS, follow
 [`docs/self-hosted-vps.md`](docs/self-hosted-vps.md).
+
+The Phase 4 Connector Platform and Policy UX design is in
+[`docs/phase-4/architecture-and-tech-stack.md`](docs/phase-4/architecture-and-tech-stack.md),
+with implemented scope and verification evidence in
+[`docs/phase-4/implementation-status.md`](docs/phase-4/implementation-status.md).
 
 For an Intel Mac (`x86_64`) build and release-acceptance walkthrough, see
 [`docs/macos-x86_64-build-test.md`](docs/macos-x86_64-build-test.md). The

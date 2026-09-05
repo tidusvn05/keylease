@@ -1,4 +1,4 @@
-use crate::{ApprovalDecisionBinding, CloudRepository};
+use crate::{ApprovalDecisionBinding, AuditQueryFilter, CloudRepository};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, Query, State},
@@ -8,18 +8,29 @@ use axum::{
 };
 use chrono::{Duration, Utc};
 use keylease_core::{
-    AccountId, AgentId, DeviceId, EdgeId, KeyLeaseError, OrganizationId, ProjectId, Result, VaultId,
+    AccountId, ActionRequest, AgentId, ConnectionHealth, ConnectionId, ConnectorPublisherId,
+    DeviceId, EdgeId, KeyLeaseError, OrganizationId, PolicyBundleId, PolicyDecision,
+    PolicyProposalId, PolicyRule, ProjectId, Result, VaultId,
+};
+use leasegate_connector_sdk::{SignedConnectorPackage, conformance_report, validate_manifest};
+use leasegate_connectors::{
+    ConnectorManifest, github_manifest, google_manifest, jira_manifest, linear_manifest,
+    normalized_permissions, notion_manifest, slack_manifest, validate_and_canonicalize,
 };
 use leasegate_control::{
     ApprovalDecision, ApprovalDecisionRequest, ApprovalReceiptPayload, ApprovalRequest, AuditBatch,
-    CONTROL_CONTRACT_VERSION, EdgeHeartbeat, Revocation, SyncPushRequest,
+    CONTROL_CONTRACT_VERSION, ConnectionDescriptor, EdgeHeartbeat, OfflineAuthorization,
+    PolicyBundlePayload, PolicyProposal, PolicyProposalReviewRequest, PolicyProposalStatus,
+    Revocation, SyncPushRequest,
 };
+use leasegate_policy::RulePolicyEngine;
 use leasegate_policy_bundle::{ControlSigner, verify_policy_bundle};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
+use url::Url;
 
 #[derive(Clone)]
 pub struct CloudApiConfig {
@@ -114,6 +125,47 @@ pub fn router(state: CloudApiState) -> Router {
             get(sync_pull),
         )
         .route("/v1/policies/activate", post(activate_policy))
+        .route("/v1/connectors/validate", post(validate_connector))
+        .route(
+            "/v1/organizations/{organization}/projects/{project}/connector-publishers",
+            post(register_connector_publisher),
+        )
+        .route(
+            "/v1/organizations/{organization}/projects/{project}/connectors",
+            get(list_connectors).post(publish_connector),
+        )
+        .route(
+            "/v1/organizations/{organization}/projects/{project}/connections",
+            get(list_connections).post(upsert_connection),
+        )
+        .route(
+            "/v1/organizations/{organization}/projects/{project}/connections/onboarding",
+            post(begin_connection_onboarding),
+        )
+        .route(
+            "/v1/organizations/{organization}/projects/{project}/policy/simulate",
+            post(simulate_policy),
+        )
+        .route(
+            "/v1/organizations/{organization}/projects/{project}/agents/{agent}/permissions",
+            get(effective_permissions),
+        )
+        .route(
+            "/v1/organizations/{organization}/projects/{project}/agents/{agent}/policy/proposals",
+            post(create_policy_proposal),
+        )
+        .route(
+            "/v1/organizations/{organization}/projects/{project}/policy/proposals",
+            get(list_policy_proposals),
+        )
+        .route(
+            "/v1/organizations/{organization}/projects/{project}/policy/proposals/{proposal}/review",
+            post(review_policy_proposal),
+        )
+        .route(
+            "/v1/organizations/{organization}/projects/{project}/policy/proposals/{proposal}/activate",
+            post(activate_policy_proposal),
+        )
         .route("/v1/approvals", post(create_approval))
         .route("/v1/edges/{edge}/approvals", post(create_edge_approval))
         .route(
@@ -134,7 +186,7 @@ pub fn router(state: CloudApiState) -> Router {
         )
         .route(
             "/v1/organizations/{organization}/projects/{project}/audit",
-            post(ingest_audit),
+            get(query_audit).post(ingest_audit),
         )
         .layer(DefaultBodyLimit::max(maximum))
         .with_state(state)
@@ -426,6 +478,621 @@ async fn activate_policy(
     Ok(Json(json!({"bundle":bundle,"control_event":event})))
 }
 
+async fn validate_connector(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Json(manifest): Json<ConnectorManifest>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    Ok(Json(
+        serde_json::to_value(conformance_report(&manifest))
+            .map_err(|_| ApiError(KeyLeaseError::Storage))?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RegisterConnectorPublisherRequest {
+    display_name: String,
+    verifying_key_base64: String,
+}
+
+async fn register_connector_publisher(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project)): Path<(String, String)>,
+    Json(body): Json<RegisterConnectorPublisherRequest>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    let publisher = state
+        .repository
+        .register_connector_publisher(
+            &OrganizationId(organization),
+            &ProjectId(project),
+            &body.display_name,
+            &body.verifying_key_base64,
+        )
+        .await?;
+    Ok(Json(json!({"publisher":publisher})))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PublishConnectorRequest {
+    publisher_id: ConnectorPublisherId,
+    package: SignedConnectorPackage,
+}
+
+async fn publish_connector(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project)): Path<(String, String)>,
+    Json(body): Json<PublishConnectorRequest>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    let entry = state
+        .repository
+        .publish_connector(
+            &OrganizationId(organization),
+            &ProjectId(project),
+            &body.publisher_id,
+            &body.package,
+        )
+        .await?;
+    Ok(Json(json!({"connector":entry})))
+}
+
+async fn list_connectors(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    let custom = state
+        .repository
+        .connector_versions(&OrganizationId(organization), &ProjectId(project))
+        .await?;
+    let built_in = built_in_manifests();
+    Ok(Json(json!({"built_in":built_in,"registered":custom})))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateConnectionRequest {
+    schema_version: u32,
+    connection_id: ConnectionId,
+    provider: String,
+    connector_version: String,
+    display_name: String,
+    auth_method: String,
+    health: ConnectionHealth,
+    health_reason: Option<String>,
+    reauthorization_required: bool,
+    #[serde(default)]
+    reported_scopes: Vec<String>,
+    #[serde(default)]
+    authorized_resources: Vec<String>,
+}
+
+async fn upsert_connection(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project)): Path<(String, String)>,
+    Json(body): Json<UpdateConnectionRequest>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    if body.schema_version != CONTROL_CONTRACT_VERSION {
+        return Err(ApiError(KeyLeaseError::UnsupportedVersion {
+            version: body.schema_version,
+        }));
+    }
+    let manifest = find_manifest(
+        &state,
+        &organization,
+        &project,
+        &body.provider,
+        &body.connector_version,
+    )
+    .await?;
+    if !manifest.authentication_methods.contains(&body.auth_method) {
+        return Err(ApiError(KeyLeaseError::Denied {
+            reason: "connection authentication method is not in the connector manifest".into(),
+        }));
+    }
+    let now = Utc::now();
+    let descriptor = ConnectionDescriptor {
+        schema_version: CONTROL_CONTRACT_VERSION,
+        connection_id: body.connection_id,
+        organization_id: OrganizationId(organization),
+        project_id: ProjectId(project),
+        provider: body.provider,
+        connector_version: body.connector_version,
+        display_name: body.display_name,
+        auth_method: body.auth_method,
+        health: body.health,
+        health_reason: body.health_reason,
+        reauthorization_required: body.reauthorization_required,
+        granted_permissions: normalized_permissions(&manifest.provider, &body.reported_scopes),
+        authorized_resources: body.authorized_resources,
+        created_at: now,
+        updated_at: now,
+    };
+    state
+        .repository
+        .upsert_connection_descriptor(&descriptor)
+        .await?;
+    Ok(Json(json!({"connection":descriptor})))
+}
+
+async fn list_connections(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    let connections = state
+        .repository
+        .project_connections(&OrganizationId(organization), &ProjectId(project))
+        .await?;
+    Ok(Json(json!({"connections":connections})))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConnectionOnboardingRequest {
+    schema_version: u32,
+    provider: String,
+    connector_version: String,
+    display_name: String,
+    client_id: String,
+    redirect_uri: String,
+    state: String,
+    code_challenge: Option<String>,
+    #[serde(default)]
+    requested_scopes: Vec<String>,
+}
+
+async fn begin_connection_onboarding(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project)): Path<(String, String)>,
+    Json(body): Json<ConnectionOnboardingRequest>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    if body.schema_version != CONTROL_CONTRACT_VERSION
+        || body.client_id.is_empty()
+        || body.client_id.len() > 500
+        || body.state.len() < 32
+        || body.state.len() > 512
+        || body.state.chars().any(char::is_control)
+    {
+        return Err(ApiError(KeyLeaseError::InvalidRequest {
+            reason: "invalid connection onboarding request".into(),
+        }));
+    }
+    let redirect = Url::parse(&body.redirect_uri).map_err(|_| {
+        ApiError(KeyLeaseError::InvalidRequest {
+            reason: "invalid OAuth redirect URI".into(),
+        })
+    })?;
+    if redirect.scheme() != "https"
+        || redirect.host_str().is_none()
+        || redirect.fragment().is_some()
+        || !redirect.username().is_empty()
+        || redirect.password().is_some()
+    {
+        return Err(ApiError(KeyLeaseError::Denied {
+            reason: "OAuth redirect URI must be an HTTPS origin-bound URL".into(),
+        }));
+    }
+    let manifest = find_manifest(
+        &state,
+        &organization,
+        &project,
+        &body.provider,
+        &body.connector_version,
+    )
+    .await?;
+    let oauth = manifest.oauth.as_ref().ok_or_else(|| {
+        ApiError(KeyLeaseError::Denied {
+            reason: "connector does not declare public OAuth onboarding".into(),
+        })
+    })?;
+    if oauth.pkce_required
+        && body.code_challenge.as_ref().is_none_or(|value| {
+            value.len() < 43
+                || value.len() > 128
+                || !value
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '~' | '.'))
+        })
+    {
+        return Err(ApiError(KeyLeaseError::Denied {
+            reason: "connector requires a valid S256 PKCE challenge".into(),
+        }));
+    }
+    if !body
+        .requested_scopes
+        .iter()
+        .all(|scope| oauth.supported_scopes.contains(scope))
+    {
+        return Err(ApiError(KeyLeaseError::Denied {
+            reason: "requested OAuth scope is not declared by the connector".into(),
+        }));
+    }
+    let mut authorization_url = Url::parse(&oauth.authorization_endpoint).map_err(|_| {
+        ApiError(KeyLeaseError::InvalidRequest {
+            reason: "invalid connector OAuth endpoint".into(),
+        })
+    })?;
+    {
+        let mut query = authorization_url.query_pairs_mut();
+        query.append_pair("client_id", &body.client_id);
+        query.append_pair("redirect_uri", &body.redirect_uri);
+        query.append_pair("response_type", "code");
+        query.append_pair("state", &body.state);
+        if manifest.provider == "notion" {
+            query.append_pair("owner", "user");
+        }
+        if !body.requested_scopes.is_empty() {
+            let separator = if manifest.provider == "slack" {
+                ","
+            } else {
+                " "
+            };
+            query.append_pair("scope", &body.requested_scopes.join(separator));
+        }
+        if manifest.provider == "jira" {
+            query.append_pair("audience", "api.atlassian.com");
+            query.append_pair("prompt", "consent");
+        }
+        if let Some(challenge) = &body.code_challenge {
+            query.append_pair("code_challenge", challenge);
+            query.append_pair("code_challenge_method", "S256");
+        }
+    }
+    let now = Utc::now();
+    let connection = ConnectionDescriptor {
+        schema_version: CONTROL_CONTRACT_VERSION,
+        connection_id: ConnectionId::new(),
+        organization_id: OrganizationId(organization),
+        project_id: ProjectId(project),
+        provider: manifest.provider.clone(),
+        connector_version: manifest.version.clone(),
+        display_name: body.display_name,
+        auth_method: manifest
+            .authentication_methods
+            .first()
+            .cloned()
+            .ok_or_else(|| {
+                ApiError(KeyLeaseError::InvalidRequest {
+                    reason: "connector has no authentication method".into(),
+                })
+            })?,
+        health: ConnectionHealth::Disconnected,
+        health_reason: Some("oauth_authorization_pending".into()),
+        reauthorization_required: true,
+        granted_permissions: Vec::new(),
+        authorized_resources: Vec::new(),
+        created_at: now,
+        updated_at: now,
+    };
+    state
+        .repository
+        .upsert_connection_descriptor(&connection)
+        .await?;
+    Ok(Json(json!({
+        "connection":connection,
+        "authorization_url":authorization_url,
+        "token_exchange_location":"edge",
+        "token_endpoint":oauth.token_endpoint,
+        "pkce_required":oauth.pkce_required
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SimulatePolicyRequest {
+    schema_version: u32,
+    request: ActionRequest,
+}
+
+async fn simulate_policy(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project)): Path<(String, String)>,
+    Json(body): Json<SimulatePolicyRequest>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    if body.schema_version != CONTROL_CONTRACT_VERSION {
+        return Err(ApiError(KeyLeaseError::UnsupportedVersion {
+            version: body.schema_version,
+        }));
+    }
+    let organization_id = OrganizationId(organization);
+    let project_id = ProjectId(project);
+    let connection = state
+        .repository
+        .connection_descriptor(&organization_id, &project_id, &body.request.connection_id)
+        .await?;
+    let manifest = find_manifest(
+        &state,
+        &organization_id.0,
+        &project_id.0,
+        &connection.provider,
+        &connection.connector_version,
+    )
+    .await?;
+    let canonical = validate_and_canonicalize(&manifest, &body.request)?;
+    let bundle = state
+        .repository
+        .latest_policy_bundle(&organization_id, &project_id)
+        .await?;
+    let rules = bundle
+        .as_ref()
+        .map_or_else(Vec::new, |bundle| bundle.payload.rules.clone());
+    let action = manifest
+        .actions
+        .iter()
+        .find(|action| action.name == canonical.request.action)
+        .ok_or_else(|| {
+            ApiError(KeyLeaseError::Denied {
+                reason: "action is absent from connector manifest".into(),
+            })
+        })?;
+    let engine = RulePolicyEngine::new(rules);
+    let mut simulation = engine.simulate(&canonical.request, action.risk.clone(), Utc::now())?;
+    let resource_allowed = connection.authorized_resources.iter().any(|resource| {
+        resource == &canonical.request.resource
+            || canonical
+                .request
+                .resource
+                .strip_prefix(resource)
+                .is_some_and(|tail| tail.starts_with('/') || tail.starts_with(':'))
+    });
+    let permissions_allowed = action
+        .required_permissions
+        .iter()
+        .all(|permission| connection.granted_permissions.contains(permission));
+    if connection.health != ConnectionHealth::Connected || connection.reauthorization_required {
+        simulation.decision = PolicyDecision::Deny {
+            reason: "connection is not healthy and authorized".into(),
+            matched_rule: None,
+        };
+        simulation
+            .warnings
+            .push("connection_requires_user_action".into());
+    } else if !resource_allowed {
+        simulation.decision = PolicyDecision::Deny {
+            reason: "resource is not enrolled on the connection".into(),
+            matched_rule: None,
+        };
+        simulation
+            .warnings
+            .push("connection_resource_mismatch".into());
+    } else if !permissions_allowed {
+        simulation.decision = PolicyDecision::Deny {
+            reason: "provider permission is insufficient".into(),
+            matched_rule: None,
+        };
+        simulation
+            .warnings
+            .push("incremental_reauthorization_required".into());
+    }
+    Ok(Json(
+        json!({"simulation":simulation,"side_effects_executed":false}),
+    ))
+}
+
+async fn effective_permissions(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project, agent)): Path<(String, String, String)>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    let bundle = state
+        .repository
+        .latest_policy_bundle(
+            &OrganizationId(organization.clone()),
+            &ProjectId(project.clone()),
+        )
+        .await?;
+    let engine = RulePolicyEngine::new(
+        bundle
+            .as_ref()
+            .map_or_else(Vec::new, |bundle| bundle.payload.rules.clone()),
+    );
+    let permissions = engine.effective_permissions(&AgentId(agent), Utc::now());
+    let connections = state
+        .repository
+        .project_connections(&OrganizationId(organization), &ProjectId(project))
+        .await?;
+    Ok(Json(json!({
+        "policy_version":bundle.map(|bundle| bundle.payload.version),
+        "permissions":permissions,
+        "connections":connections
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreatePolicyProposalRequest {
+    schema_version: u32,
+    base_policy_version: u64,
+    title: String,
+    reason: String,
+    rules: Vec<PolicyRule>,
+    #[serde(default = "default_proposal_ttl")]
+    ttl_seconds: i64,
+}
+
+fn default_proposal_ttl() -> i64 {
+    86_400
+}
+
+async fn create_policy_proposal(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project, agent)): Path<(String, String, String)>,
+    Json(body): Json<CreatePolicyProposalRequest>,
+) -> ApiResult<Json<Value>> {
+    if body.schema_version != CONTROL_CONTRACT_VERSION
+        || !(60..=604_800).contains(&body.ttl_seconds)
+    {
+        return Err(ApiError(KeyLeaseError::InvalidRequest {
+            reason: "invalid policy proposal version or TTL".into(),
+        }));
+    }
+    let organization_id = OrganizationId(organization);
+    let project_id = ProjectId(project);
+    let agent_id = AgentId(agent);
+    state
+        .repository
+        .authenticate_agent(&organization_id, &project_id, &agent_id, bearer(&headers)?)
+        .await?;
+    let now = Utc::now();
+    let mut proposal = PolicyProposal {
+        schema_version: CONTROL_CONTRACT_VERSION,
+        proposal_id: PolicyProposalId::new(),
+        organization_id,
+        project_id,
+        proposed_by_agent_id: agent_id,
+        base_policy_version: body.base_policy_version,
+        title: body.title,
+        reason: body.reason,
+        rules: body.rules,
+        proposal_digest_sha256: String::new(),
+        status: PolicyProposalStatus::Pending,
+        created_at: now,
+        expires_at: now + Duration::seconds(body.ttl_seconds),
+    };
+    proposal.proposal_digest_sha256 = proposal.calculate_digest();
+    state.repository.create_policy_proposal(&proposal).await?;
+    Ok(Json(json!({"proposal":proposal})))
+}
+
+async fn list_policy_proposals(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project)): Path<(String, String)>,
+    Query(query): Query<CursorQuery>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    let proposals = state
+        .repository
+        .policy_proposals(
+            &OrganizationId(organization),
+            &ProjectId(project),
+            query.limit,
+        )
+        .await?;
+    Ok(Json(json!({"proposals":proposals})))
+}
+
+async fn review_policy_proposal(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project, proposal)): Path<(String, String, String)>,
+    Json(body): Json<PolicyProposalReviewRequest>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    let (proposal, review) = state
+        .repository
+        .review_policy_proposal(
+            &OrganizationId(organization),
+            &ProjectId(project),
+            &PolicyProposalId(proposal),
+            &body,
+        )
+        .await?;
+    Ok(Json(json!({"proposal":proposal,"review":review})))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ActivateProposalRequest {
+    schema_version: u32,
+    expected_proposal_digest_sha256: String,
+    #[serde(default = "default_policy_validity")]
+    validity_seconds: i64,
+    #[serde(default)]
+    offline: OfflineAuthorization,
+    #[serde(default = "default_minimum_edge_version")]
+    minimum_edge_version: String,
+}
+
+fn default_policy_validity() -> i64 {
+    86_400
+}
+fn default_minimum_edge_version() -> String {
+    env!("CARGO_PKG_VERSION").into()
+}
+
+async fn activate_policy_proposal(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project, proposal)): Path<(String, String, String)>,
+    Json(body): Json<ActivateProposalRequest>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    if body.schema_version != CONTROL_CONTRACT_VERSION
+        || !(300..=604_800).contains(&body.validity_seconds)
+    {
+        return Err(ApiError(KeyLeaseError::InvalidRequest {
+            reason: "invalid proposal activation request".into(),
+        }));
+    }
+    let organization_id = OrganizationId(organization);
+    let project_id = ProjectId(project);
+    let proposal_id = PolicyProposalId(proposal);
+    let proposal = state
+        .repository
+        .policy_proposal(&organization_id, &project_id, &proposal_id)
+        .await?;
+    if proposal.status != PolicyProposalStatus::Approved
+        || proposal.proposal_digest_sha256 != body.expected_proposal_digest_sha256
+    {
+        return Err(ApiError(KeyLeaseError::Denied {
+            reason: "proposal is not approved or digest changed".into(),
+        }));
+    }
+    let previous = state
+        .repository
+        .latest_policy_state(&organization_id, &project_id)
+        .await?;
+    let now = Utc::now();
+    let bundle = state.signer.sign_policy(PolicyBundlePayload {
+        schema_version: CONTROL_CONTRACT_VERSION,
+        bundle_id: PolicyBundleId::new(),
+        organization_id: organization_id.clone(),
+        project_id: project_id.clone(),
+        version: proposal.base_policy_version + 1,
+        previous_bundle_digest: previous
+            .as_ref()
+            .map(|state| state.payload_digest_sha256.clone()),
+        issued_at: now,
+        not_before: now,
+        expires_at: now + Duration::seconds(body.validity_seconds),
+        revocation_epoch: previous.as_ref().map_or(0, |state| state.revocation_epoch),
+        minimum_edge_version: body.minimum_edge_version,
+        offline: body.offline,
+        rules: proposal.rules.clone(),
+    })?;
+    verify_policy_bundle(
+        &bundle,
+        &state.signer.verifying_key_base64(),
+        now,
+        previous.as_ref(),
+    )?;
+    let event = state
+        .repository
+        .activate_reviewed_proposal(&proposal_id, &bundle)
+        .await?;
+    Ok(Json(
+        json!({"bundle":bundle,"control_event":event,"proposal_id":proposal_id}),
+    ))
+}
+
 async fn create_approval(
     State(state): State<CloudApiState>,
     headers: HeaderMap,
@@ -624,6 +1291,107 @@ async fn ingest_audit(
         .ingest_audit(&OrganizationId(organization), &ProjectId(project), &body)
         .await?;
     Ok(Json(json!({"acknowledged_through":next})))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuditQuery {
+    #[serde(default)]
+    after: u64,
+    #[serde(default = "default_limit")]
+    limit: u32,
+    agent_id: Option<String>,
+    connection_id: Option<String>,
+    action: Option<String>,
+    resource_prefix: Option<String>,
+    decision: Option<String>,
+    outcome: Option<String>,
+    policy_version: Option<u64>,
+    from: Option<chrono::DateTime<Utc>>,
+    until: Option<chrono::DateTime<Utc>>,
+}
+
+async fn query_audit(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project)): Path<(String, String)>,
+    Query(query): Query<AuditQuery>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    let page = state
+        .repository
+        .query_audit(
+            &OrganizationId(organization),
+            &ProjectId(project),
+            &AuditQueryFilter {
+                after: query.after,
+                limit: query.limit,
+                agent_id: query.agent_id,
+                connection_id: query.connection_id,
+                action: query.action,
+                resource_prefix: query.resource_prefix,
+                decision: query.decision,
+                outcome: query.outcome,
+                policy_version: query.policy_version,
+                from: query.from,
+                until: query.until,
+            },
+        )
+        .await?;
+    Ok(Json(
+        serde_json::to_value(page).map_err(|_| ApiError(KeyLeaseError::Storage))?,
+    ))
+}
+
+fn built_in_manifests() -> Vec<ConnectorManifest> {
+    vec![
+        google_manifest(),
+        github_manifest(),
+        linear_manifest(),
+        notion_manifest(),
+        slack_manifest(),
+        jira_manifest(),
+    ]
+}
+
+async fn find_manifest(
+    state: &CloudApiState,
+    organization: &str,
+    project: &str,
+    provider: &str,
+    version: &str,
+) -> ApiResult<ConnectorManifest> {
+    if let Some(manifest) = built_in_manifests()
+        .into_iter()
+        .find(|manifest| manifest.provider == provider && manifest.version == version)
+    {
+        validate_manifest(&manifest)?;
+        return Ok(manifest);
+    }
+    let entries = state
+        .repository
+        .connector_versions(
+            &OrganizationId(organization.into()),
+            &ProjectId(project.into()),
+        )
+        .await?;
+    let entry = entries
+        .into_iter()
+        .find(|entry| {
+            entry.provider == provider
+                && entry.connector_version == version
+                && matches!(
+                    entry.status,
+                    leasegate_connector_sdk::ConnectorRegistryStatus::Published
+                )
+        })
+        .ok_or_else(|| {
+            ApiError(KeyLeaseError::NotFound {
+                resource: format!("connector:{provider}:{version}"),
+            })
+        })?;
+    validate_manifest(&entry.package.payload.manifest)?;
+    Ok(entry.package.payload.manifest)
 }
 
 fn authorize(state: &CloudApiState, headers: &HeaderMap) -> ApiResult<()> {

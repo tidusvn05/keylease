@@ -55,6 +55,8 @@ opaque_id!(EdgeId, "edge_");
 opaque_id!(ControlEventId, "event_");
 opaque_id!(SyncMutationId, "mutation_");
 opaque_id!(PolicyBundleId, "policy_bundle_");
+opaque_id!(PolicyProposalId, "policy_proposal_");
+opaque_id!(ConnectorPublisherId, "connector_publisher_");
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
