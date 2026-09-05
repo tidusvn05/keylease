@@ -14,6 +14,7 @@ keylease-core = { path = "../keylease-core" }
 leasegate-control = { path = "../leasegate-control" }
 leasegate-connector-sdk = { path = "../leasegate-connector-sdk" }
 leasegate-connectors = { path = "../leasegate-connectors" }
+leasegate-credentials = { path = "../leasegate-credentials" }
 leasegate-policy = { path = "../leasegate-policy" }
 leasegate-policy-bundle = { path = "../leasegate-policy-bundle" }
 rand.workspace = true

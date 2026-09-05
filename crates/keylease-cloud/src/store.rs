@@ -2,8 +2,8 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
 use keylease_core::{
     AccountId, AgentId, ConnectionHealth, ConnectionId, ConnectorPublisherId, ControlEventId,
-    DeviceId, EdgeId, HumanId, KeyLeaseError, MembershipId, OrganizationId, PolicyProposalId,
-    ProjectId, Result, VaultId,
+    CredentialLeaseId, DeviceId, EdgeId, HumanId, KeyLeaseError, MembershipId, OrganizationId,
+    PolicyProposalId, ProjectId, Result, RotationId, VaultId,
 };
 use leasegate_connector_sdk::{
     ConnectorRegistryEntry, ConnectorRegistryStatus, SignedConnectorPackage,
@@ -17,6 +17,10 @@ use leasegate_control::{
     PolicyProposalStatus, Project, Revocation, RevocationScope, SignedApprovalReceipt,
     SignedPolicyBundle, SyncMutationEnvelope, SyncMutationResult, SyncMutationStatus,
     SyncPullResponse, SyncPushResponse,
+};
+use leasegate_credentials::{
+    ConnectionPosture, ConnectionPostureStatus, CredentialKind, CredentialLeaseRecord,
+    CredentialLeaseState, RotationRecord, RotationState,
 };
 use leasegate_policy_bundle::{BundleAcceptanceState, verify_sync_mutation_signature};
 use rand::RngCore;
@@ -105,6 +109,13 @@ pub struct AuditQueryPage {
     pub events: Vec<keylease_core::AuditEvent>,
     pub cursor: u64,
     pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CredentialLeaseFilter {
+    pub agent_id: Option<String>,
+    pub state: Option<CredentialLeaseState>,
+    pub limit: u32,
 }
 
 impl CloudRepository {
@@ -619,6 +630,479 @@ impl CloudRepository {
             .ok_or_else(|| KeyLeaseError::NotFound { resource: connection_id.0.clone() })?;
         tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
         connection_from_row(row, organization_id, project_id)
+    }
+
+    /// Stores redacted lease metadata reported by the owning Edge. Credential
+    /// material and provider revocation handles are never accepted here.
+    pub async fn report_credential_lease(
+        &self,
+        edge_id: &EdgeId,
+        record: &CredentialLeaseRecord,
+    ) -> Result<()> {
+        if record.schema_version != leasegate_credentials::CREDENTIAL_CONTRACT_VERSION
+            || record.policy_version == 0
+            || record.expires_at <= record.issued_at
+            || record.request_digest_sha256.len() != 64
+        {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "invalid credential lease metadata".into(),
+            });
+        }
+        validate_text(&record.backend_id, 200)?;
+        validate_text(&record.target, 512)?;
+        let edge = self.edge(edge_id).await?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, &edge.organization_id).await?;
+        let agent_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agents WHERE organization_id=$1 AND project_id=$2 AND agent_id=$3 AND revoked_at IS NULL)")
+            .bind(&edge.organization_id.0).bind(&edge.project_id.0).bind(&record.agent_id.0)
+            .fetch_one(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        let connection_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM connection_descriptors WHERE organization_id=$1 AND project_id=$2 AND connection_id=$3)")
+            .bind(&edge.organization_id.0).bind(&edge.project_id.0).bind(&record.connection_id.0)
+            .fetch_one(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        if !agent_exists || !connection_exists {
+            return Err(KeyLeaseError::Denied {
+                reason: "credential lease identity is outside the Edge project".into(),
+            });
+        }
+        let existing: Option<serde_json::Value> = sqlx::query_scalar(
+            "SELECT record_json FROM credential_lease_index WHERE lease_id=$1 FOR UPDATE",
+        )
+        .bind(&record.lease_id.0)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| KeyLeaseError::Storage)?;
+        if let Some(value) = existing {
+            let previous: CredentialLeaseRecord =
+                serde_json::from_value(value).map_err(|_| KeyLeaseError::Storage)?;
+            if !same_credential_binding(&previous, record)
+                || !valid_credential_transition(&previous.state, &record.state)
+            {
+                return Err(KeyLeaseError::Denied {
+                    reason: "credential lease binding or state transition changed".into(),
+                });
+            }
+        }
+        let record_json = serde_json::to_value(record).map_err(|_| KeyLeaseError::Storage)?;
+        sqlx::query("INSERT INTO credential_lease_index(lease_id,organization_id,project_id,edge_id,agent_id,connection_id,backend_id,credential_kind,target,state,policy_version,request_digest_sha256,sender_constraint_json,issued_at,expires_at,revoked_at,renewable,failure_code,record_json,observed_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) ON CONFLICT(lease_id) DO UPDATE SET state=excluded.state,revoked_at=excluded.revoked_at,failure_code=excluded.failure_code,record_json=excluded.record_json,observed_at=excluded.observed_at")
+            .bind(&record.lease_id.0).bind(&edge.organization_id.0).bind(&edge.project_id.0).bind(&edge_id.0)
+            .bind(&record.agent_id.0).bind(&record.connection_id.0).bind(&record.backend_id)
+            .bind(credential_kind_name(&record.kind)).bind(&record.target).bind(credential_state_name(&record.state))
+            .bind(record.policy_version as i64).bind(&record.request_digest_sha256)
+            .bind(serde_json::to_value(&record.sender_constraint).map_err(|_| KeyLeaseError::Storage)?)
+            .bind(record.issued_at).bind(record.expires_at).bind(record.revoked_at).bind(record.renewable)
+            .bind(&record.failure_code).bind(record_json).bind(Utc::now())
+            .execute(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)
+    }
+
+    pub async fn credential_leases(
+        &self,
+        organization_id: &OrganizationId,
+        project_id: &ProjectId,
+        filter: &CredentialLeaseFilter,
+    ) -> Result<Vec<CredentialLeaseRecord>> {
+        if let Some(agent_id) = &filter.agent_id {
+            validate_text(agent_id, 200)?;
+        }
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, organization_id).await?;
+        ensure_project(&mut tx, organization_id, project_id).await?;
+        let mut query = sqlx::QueryBuilder::new(
+            "SELECT record_json FROM credential_lease_index WHERE organization_id=",
+        );
+        query.push_bind(&organization_id.0);
+        query.push(" AND project_id=").push_bind(&project_id.0);
+        if let Some(agent_id) = &filter.agent_id {
+            query.push(" AND agent_id=").push_bind(agent_id);
+        }
+        if let Some(state) = &filter.state {
+            query
+                .push(" AND state=")
+                .push_bind(credential_state_name(state));
+        }
+        query
+            .push(" ORDER BY issued_at DESC LIMIT ")
+            .push_bind(filter.limit.clamp(1, 500) as i64);
+        let rows = query
+            .build_query_scalar::<serde_json::Value>()
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+        rows.into_iter()
+            .map(|value| serde_json::from_value(value).map_err(|_| KeyLeaseError::Storage))
+            .collect()
+    }
+
+    pub async fn revoke_credential_lease(
+        &self,
+        organization_id: &OrganizationId,
+        project_id: &ProjectId,
+        lease_id: &CredentialLeaseId,
+        reason: &str,
+    ) -> Result<ControlEvent> {
+        validate_text(reason, 500)?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, organization_id).await?;
+        ensure_project(&mut tx, organization_id, project_id).await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+            .bind(format!("revocation:{}", organization_id.0))
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let value: serde_json::Value = sqlx::query_scalar("SELECT record_json FROM credential_lease_index WHERE organization_id=$1 AND project_id=$2 AND lease_id=$3 FOR UPDATE")
+            .bind(&organization_id.0).bind(&project_id.0).bind(&lease_id.0)
+            .fetch_optional(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?
+            .ok_or_else(|| KeyLeaseError::NotFound { resource: lease_id.0.clone() })?;
+        let mut record: CredentialLeaseRecord =
+            serde_json::from_value(value).map_err(|_| KeyLeaseError::Storage)?;
+        if !matches!(
+            record.state,
+            CredentialLeaseState::Active | CredentialLeaseState::Pending
+        ) {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "credential lease is already terminal or revoking".into(),
+            });
+        }
+        record.state = CredentialLeaseState::Revoking;
+        sqlx::query("UPDATE credential_lease_index SET state='revoking',record_json=$1,observed_at=$2 WHERE lease_id=$3")
+            .bind(serde_json::to_value(&record).map_err(|_| KeyLeaseError::Storage)?)
+            .bind(Utc::now()).bind(&lease_id.0).execute(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        let current: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(epoch),0) FROM revocations WHERE organization_id=$1",
+        )
+        .bind(&organization_id.0)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| KeyLeaseError::Storage)?;
+        let revocation = Revocation {
+            organization_id: organization_id.clone(),
+            project_id: Some(project_id.clone()),
+            epoch: current as u64 + 1,
+            scope: RevocationScope::Lease,
+            target_id: lease_id.0.clone(),
+            reason: reason.into(),
+            created_at: Utc::now(),
+        };
+        sqlx::query("INSERT INTO revocations(organization_id,epoch,project_id,scope,target_id,revocation_json,created_at) VALUES($1,$2,$3,'lease',$4,$5,$6)")
+            .bind(&organization_id.0).bind(revocation.epoch as i64).bind(&project_id.0).bind(&lease_id.0)
+            .bind(serde_json::to_value(&revocation).map_err(|_| KeyLeaseError::Storage)?).bind(revocation.created_at)
+            .execute(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        let event = insert_control_event(
+            &mut tx,
+            organization_id,
+            Some(project_id),
+            None,
+            ControlEventKind::Revocation(revocation),
+        )
+        .await?;
+        insert_outbox(&mut tx, "credential.revoked", &lease_id.0, &event).await?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+        Ok(event)
+    }
+
+    pub async fn report_connection_posture(
+        &self,
+        edge_id: &EdgeId,
+        posture: &ConnectionPosture,
+    ) -> Result<()> {
+        if posture.schema_version != leasegate_credentials::CREDENTIAL_CONTRACT_VERSION
+            || posture.reason_codes.len() > 32
+            || posture
+                .reason_codes
+                .iter()
+                .any(|code| validate_text(code, 100).is_err())
+        {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "invalid connection posture".into(),
+            });
+        }
+        let edge = self.edge(edge_id).await?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, &edge.organization_id).await?;
+        let connection_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM connection_descriptors WHERE organization_id=$1 AND project_id=$2 AND connection_id=$3)")
+            .bind(&edge.organization_id.0).bind(&edge.project_id.0).bind(&posture.connection_id.0)
+            .fetch_one(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        if !connection_exists {
+            return Err(KeyLeaseError::Denied {
+                reason: "posture connection is outside the Edge project".into(),
+            });
+        }
+        sqlx::query("INSERT INTO connection_posture(connection_id,organization_id,project_id,status,checked_at,secret_expires_at,rotation_due_at,last_rotated_at,reason_codes_json,posture_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(connection_id) DO UPDATE SET status=excluded.status,checked_at=excluded.checked_at,secret_expires_at=excluded.secret_expires_at,rotation_due_at=excluded.rotation_due_at,last_rotated_at=excluded.last_rotated_at,reason_codes_json=excluded.reason_codes_json,posture_json=excluded.posture_json")
+            .bind(&posture.connection_id.0).bind(&edge.organization_id.0).bind(&edge.project_id.0)
+            .bind(posture_status_name(&posture.status)).bind(posture.checked_at).bind(posture.secret_expires_at)
+            .bind(posture.rotation_due_at).bind(posture.last_rotated_at)
+            .bind(serde_json::to_value(&posture.reason_codes).map_err(|_| KeyLeaseError::Storage)?)
+            .bind(serde_json::to_value(posture).map_err(|_| KeyLeaseError::Storage)?)
+            .execute(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)
+    }
+
+    pub async fn connection_postures(
+        &self,
+        organization_id: &OrganizationId,
+        project_id: &ProjectId,
+    ) -> Result<Vec<ConnectionPosture>> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, organization_id).await?;
+        ensure_project(&mut tx, organization_id, project_id).await?;
+        let values: Vec<serde_json::Value> = sqlx::query_scalar("SELECT posture_json FROM connection_posture WHERE organization_id=$1 AND project_id=$2 ORDER BY checked_at DESC")
+            .bind(&organization_id.0).bind(&project_id.0).fetch_all(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+        values
+            .into_iter()
+            .map(|value| serde_json::from_value(value).map_err(|_| KeyLeaseError::Storage))
+            .collect()
+    }
+
+    pub async fn create_rotation(
+        &self,
+        organization_id: &OrganizationId,
+        project_id: &ProjectId,
+        record: &RotationRecord,
+    ) -> Result<()> {
+        if record.schema_version != leasegate_credentials::CREDENTIAL_CONTRACT_VERSION
+            || record.state != RotationState::Pending
+            || record.reason.is_empty()
+            || record.reason.len() > 500
+        {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "invalid rotation request".into(),
+            });
+        }
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, organization_id).await?;
+        ensure_project(&mut tx, organization_id, project_id).await?;
+        let current: DateTime<Utc> = sqlx::query_scalar("SELECT updated_at FROM connection_descriptors WHERE organization_id=$1 AND project_id=$2 AND connection_id=$3")
+            .bind(&organization_id.0).bind(&project_id.0).bind(&record.connection_id.0)
+            .fetch_optional(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?
+            .ok_or_else(|| KeyLeaseError::NotFound { resource: record.connection_id.0.clone() })?;
+        if current != record.expected_connection_updated_at {
+            return Err(KeyLeaseError::RevisionConflict {
+                expected: record.expected_connection_updated_at.timestamp_millis() as u64,
+                actual: current.timestamp_millis() as u64,
+                retryable: true,
+            });
+        }
+        sqlx::query("INSERT INTO credential_rotation_requests(rotation_id,organization_id,project_id,connection_id,state,requested_by,reason,expected_connection_updated_at,record_json,created_at,updated_at,completed_at,failure_code) VALUES($1,$2,$3,$4,'pending',$5,$6,$7,$8,$9,$10,$11,$12)")
+            .bind(&record.rotation_id.0).bind(&organization_id.0).bind(&project_id.0).bind(&record.connection_id.0)
+            .bind(&record.requested_by).bind(&record.reason).bind(record.expected_connection_updated_at)
+            .bind(serde_json::to_value(record).map_err(|_| KeyLeaseError::Storage)?)
+            .bind(record.created_at).bind(record.updated_at).bind(record.completed_at).bind(&record.failure_code)
+            .execute(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)
+    }
+
+    pub async fn transition_rotation(
+        &self,
+        organization_id: &OrganizationId,
+        project_id: &ProjectId,
+        rotation_id: &RotationId,
+        expected: RotationState,
+        next: RotationState,
+        failure_code: Option<String>,
+    ) -> Result<RotationRecord> {
+        if !valid_rotation_transition(&expected, &next)
+            || failure_code
+                .as_ref()
+                .is_some_and(|code| validate_text(code, 100).is_err())
+        {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "invalid rotation transition".into(),
+            });
+        }
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, organization_id).await?;
+        let value: serde_json::Value = sqlx::query_scalar("SELECT record_json FROM credential_rotation_requests WHERE organization_id=$1 AND project_id=$2 AND rotation_id=$3 FOR UPDATE")
+            .bind(&organization_id.0).bind(&project_id.0).bind(&rotation_id.0)
+            .fetch_optional(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?
+            .ok_or_else(|| KeyLeaseError::NotFound { resource: rotation_id.0.clone() })?;
+        let mut record: RotationRecord =
+            serde_json::from_value(value).map_err(|_| KeyLeaseError::Storage)?;
+        if record.state != expected {
+            return Err(KeyLeaseError::Denied {
+                reason: "rotation state changed".into(),
+            });
+        }
+        let now = Utc::now();
+        record.state = next.clone();
+        record.updated_at = now;
+        record.failure_code = failure_code;
+        if matches!(
+            next,
+            RotationState::Activated | RotationState::Failed | RotationState::RolledBack
+        ) {
+            record.completed_at = Some(now);
+        }
+        sqlx::query("UPDATE credential_rotation_requests SET state=$1,record_json=$2,updated_at=$3,completed_at=$4,failure_code=$5 WHERE rotation_id=$6")
+            .bind(rotation_state_name(&record.state)).bind(serde_json::to_value(&record).map_err(|_| KeyLeaseError::Storage)?)
+            .bind(record.updated_at).bind(record.completed_at).bind(&record.failure_code).bind(&rotation_id.0)
+            .execute(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+        Ok(record)
+    }
+
+    pub async fn rotations(
+        &self,
+        organization_id: &OrganizationId,
+        project_id: &ProjectId,
+    ) -> Result<Vec<RotationRecord>> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, organization_id).await?;
+        ensure_project(&mut tx, organization_id, project_id).await?;
+        let values: Vec<serde_json::Value> = sqlx::query_scalar("SELECT record_json FROM credential_rotation_requests WHERE organization_id=$1 AND project_id=$2 ORDER BY created_at DESC LIMIT 500")
+            .bind(&organization_id.0).bind(&project_id.0).fetch_all(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+        values
+            .into_iter()
+            .map(|value| serde_json::from_value(value).map_err(|_| KeyLeaseError::Storage))
+            .collect()
+    }
+
+    pub async fn expire_credential_lease_index(&self, now: DateTime<Utc>) -> Result<u64> {
+        let rows = sqlx::query("SELECT lease_id,record_json FROM credential_lease_index WHERE state='active' AND expires_at<=$1 LIMIT 1000")
+            .bind(now).fetch_all(&self.pool).await.map_err(|_| KeyLeaseError::Storage)?;
+        let mut changed = 0_u64;
+        for row in rows {
+            let lease_id: String = row
+                .try_get("lease_id")
+                .map_err(|_| KeyLeaseError::Storage)?;
+            let mut record: CredentialLeaseRecord = serde_json::from_value(
+                row.try_get("record_json")
+                    .map_err(|_| KeyLeaseError::Storage)?,
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+            record.state = CredentialLeaseState::Expired;
+            record.revoked_at = Some(now);
+            changed = changed.saturating_add(sqlx::query("UPDATE credential_lease_index SET state='expired',revoked_at=$1,record_json=$2,observed_at=$1 WHERE lease_id=$3 AND state='active'")
+                .bind(now).bind(serde_json::to_value(record).map_err(|_| KeyLeaseError::Storage)?).bind(lease_id)
+                .execute(&self.pool).await.map_err(|_| KeyLeaseError::Storage)?.rows_affected());
+        }
+        Ok(changed)
+    }
+
+    /// Projects expiry/rotation timestamps into stable posture states and the
+    /// existing transactional outbox. No secret or provider response is used.
+    pub async fn sweep_connection_posture(
+        &self,
+        now: DateTime<Utc>,
+        stale_before: DateTime<Utc>,
+        expiring_before: DateTime<Utc>,
+    ) -> Result<u64> {
+        let rows = sqlx::query("SELECT organization_id,project_id,connection_id,posture_json FROM connection_posture LIMIT 5000")
+            .fetch_all(&self.pool).await.map_err(|_| KeyLeaseError::Storage)?;
+        let mut changed = 0_u64;
+        for row in rows {
+            let organization_id = OrganizationId(
+                row.try_get("organization_id")
+                    .map_err(|_| KeyLeaseError::Storage)?,
+            );
+            let project_id = ProjectId(
+                row.try_get("project_id")
+                    .map_err(|_| KeyLeaseError::Storage)?,
+            );
+            let connection_id: String = row
+                .try_get("connection_id")
+                .map_err(|_| KeyLeaseError::Storage)?;
+            let mut posture: ConnectionPosture = serde_json::from_value(
+                row.try_get("posture_json")
+                    .map_err(|_| KeyLeaseError::Storage)?,
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+            if matches!(
+                posture.status,
+                ConnectionPostureStatus::Revoked | ConnectionPostureStatus::Misconfigured
+            ) {
+                continue;
+            }
+            let (next, reason) = if posture.checked_at <= stale_before {
+                (ConnectionPostureStatus::Stale, "gateway_posture_stale")
+            } else if posture
+                .secret_expires_at
+                .is_some_and(|expiry| expiry <= now)
+            {
+                (
+                    ConnectionPostureStatus::Misconfigured,
+                    "connection_secret_expired",
+                )
+            } else if posture.rotation_due_at.is_some_and(|due| due <= now) {
+                (
+                    ConnectionPostureStatus::RotationDue,
+                    "rotation_window_reached",
+                )
+            } else if posture
+                .secret_expires_at
+                .is_some_and(|expiry| expiry <= expiring_before)
+            {
+                (
+                    ConnectionPostureStatus::Expiring,
+                    "connection_secret_expiring",
+                )
+            } else {
+                (ConnectionPostureStatus::Healthy, "posture_checks_passed")
+            };
+            if posture.status == next {
+                continue;
+            }
+            posture.status = next;
+            if !posture.reason_codes.iter().any(|code| code == reason) {
+                posture.reason_codes.push(reason.into());
+            }
+            let mut tx = self
+                .pool
+                .begin()
+                .await
+                .map_err(|_| KeyLeaseError::Storage)?;
+            set_tenant(&mut tx, &organization_id).await?;
+            sqlx::query("UPDATE connection_posture SET status=$1,reason_codes_json=$2,posture_json=$3 WHERE organization_id=$4 AND project_id=$5 AND connection_id=$6")
+                .bind(posture_status_name(&posture.status))
+                .bind(serde_json::to_value(&posture.reason_codes).map_err(|_| KeyLeaseError::Storage)?)
+                .bind(serde_json::to_value(&posture).map_err(|_| KeyLeaseError::Storage)?)
+                .bind(&organization_id.0).bind(&project_id.0).bind(&connection_id)
+                .execute(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+            insert_outbox(
+                &mut tx,
+                "connection.posture.changed",
+                &connection_id,
+                &posture,
+            )
+            .await?;
+            tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+            changed = changed.saturating_add(1);
+        }
+        Ok(changed)
     }
 
     pub async fn create_vault(
@@ -1852,6 +2336,106 @@ fn connection_health_name(health: &ConnectionHealth) -> &'static str {
         ConnectionHealth::Revoked => "revoked",
         ConnectionHealth::Disconnected => "disconnected",
     }
+}
+
+fn credential_kind_name(kind: &CredentialKind) -> &'static str {
+    match kind {
+        CredentialKind::AwsSts => "aws_sts",
+        CredentialKind::SshCertificate => "ssh_certificate",
+        CredentialKind::PostgresqlRole => "postgresql_role",
+        CredentialKind::OAuthTokenExchange => "oauth_token_exchange",
+    }
+}
+
+fn credential_state_name(state: &CredentialLeaseState) -> &'static str {
+    match state {
+        CredentialLeaseState::Pending => "pending",
+        CredentialLeaseState::Active => "active",
+        CredentialLeaseState::Revoking => "revoking",
+        CredentialLeaseState::Revoked => "revoked",
+        CredentialLeaseState::Expired => "expired",
+        CredentialLeaseState::Failed => "failed",
+    }
+}
+
+fn posture_status_name(status: &ConnectionPostureStatus) -> &'static str {
+    match status {
+        ConnectionPostureStatus::Healthy => "healthy",
+        ConnectionPostureStatus::Expiring => "expiring",
+        ConnectionPostureStatus::RotationDue => "rotation_due",
+        ConnectionPostureStatus::Stale => "stale",
+        ConnectionPostureStatus::Misconfigured => "misconfigured",
+        ConnectionPostureStatus::Revoked => "revoked",
+    }
+}
+
+fn rotation_state_name(state: &RotationState) -> &'static str {
+    match state {
+        RotationState::Pending => "pending",
+        RotationState::Rotating => "rotating",
+        RotationState::Verifying => "verifying",
+        RotationState::Activated => "activated",
+        RotationState::Failed => "failed",
+        RotationState::RolledBack => "rolled_back",
+    }
+}
+
+fn same_credential_binding(previous: &CredentialLeaseRecord, next: &CredentialLeaseRecord) -> bool {
+    let base = previous.lease_id == next.lease_id
+        && previous.agent_id == next.agent_id
+        && previous.workload_id == next.workload_id
+        && previous.task_id == next.task_id
+        && previous.connection_id == next.connection_id
+        && previous.backend_id == next.backend_id
+        && previous.kind == next.kind
+        && previous.target == next.target
+        && previous.policy_version == next.policy_version
+        && previous.request_digest_sha256 == next.request_digest_sha256
+        && previous.issued_at == next.issued_at;
+    base && (previous.state == CredentialLeaseState::Pending
+        || (previous.expires_at == next.expires_at
+            && previous.sender_constraint == next.sender_constraint
+            && previous.renewable == next.renewable))
+}
+
+fn valid_credential_transition(
+    previous: &CredentialLeaseState,
+    next: &CredentialLeaseState,
+) -> bool {
+    previous == next
+        || matches!(
+            (previous, next),
+            (CredentialLeaseState::Pending, CredentialLeaseState::Active)
+                | (CredentialLeaseState::Pending, CredentialLeaseState::Failed)
+                | (
+                    CredentialLeaseState::Pending,
+                    CredentialLeaseState::Revoking
+                )
+                | (CredentialLeaseState::Active, CredentialLeaseState::Revoking)
+                | (CredentialLeaseState::Active, CredentialLeaseState::Revoked)
+                | (CredentialLeaseState::Active, CredentialLeaseState::Expired)
+                | (
+                    CredentialLeaseState::Revoking,
+                    CredentialLeaseState::Revoked
+                )
+                | (
+                    CredentialLeaseState::Revoking,
+                    CredentialLeaseState::Expired
+                )
+        )
+}
+
+fn valid_rotation_transition(previous: &RotationState, next: &RotationState) -> bool {
+    matches!(
+        (previous, next),
+        (RotationState::Pending, RotationState::Rotating)
+            | (RotationState::Pending, RotationState::Failed)
+            | (RotationState::Rotating, RotationState::Verifying)
+            | (RotationState::Rotating, RotationState::Failed)
+            | (RotationState::Verifying, RotationState::Activated)
+            | (RotationState::Verifying, RotationState::Failed)
+            | (RotationState::Failed, RotationState::RolledBack)
+    )
 }
 
 fn connection_health(value: &str) -> Result<ConnectionHealth> {

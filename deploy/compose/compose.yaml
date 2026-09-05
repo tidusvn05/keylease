@@ -30,10 +30,13 @@ services:
       - ./secrets:/run/leasegate-secrets:ro
     networks: [control]
 
-  cloud:
+  control-plane:
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.cloud
+      args:
+        LEASEGATE_RUNTIME_UID: ${LEASEGATE_RUNTIME_UID:-1000}
+        LEASEGATE_RUNTIME_GID: ${LEASEGATE_RUNTIME_GID:-1000}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -54,6 +57,9 @@ services:
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.cloud
+      args:
+        LEASEGATE_RUNTIME_UID: ${LEASEGATE_RUNTIME_UID:-1000}
+        LEASEGATE_RUNTIME_GID: ${LEASEGATE_RUNTIME_GID:-1000}
     entrypoint: ["keylease-cloud-worker"]
     restart: unless-stopped
     depends_on:
@@ -69,7 +75,7 @@ services:
     read_only: true
     tmpfs: [/tmp]
 
-  gateway:
+  web:
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.approval
@@ -80,7 +86,7 @@ services:
         KEYLEASE_APPROVER_ID: ${KEYLEASE_APPROVER_ID:-}
         KEYLEASE_AGENT_ID: ${LEASEGATE_AGENT_ID:-}
     restart: unless-stopped
-    depends_on: [cloud]
+    depends_on: [control-plane]
     environment:
       LEASEGATE_DOMAIN: ${LEASEGATE_DOMAIN}
     ports:
@@ -91,14 +97,18 @@ services:
       - caddy-config:/config
     networks: [control]
 
-  edge:
-    profiles: [edge]
+  gateway:
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.edge
+      args:
+        LEASEGATE_RUNTIME_UID: ${LEASEGATE_RUNTIME_UID:-1000}
+        LEASEGATE_RUNTIME_GID: ${LEASEGATE_RUNTIME_GID:-1000}
     restart: unless-stopped
-    depends_on: [gateway]
+    depends_on: [web]
     environment:
+      LEASEGATE_DEPLOYMENT_MODE: ${LEASEGATE_DEPLOYMENT_MODE:-self_hosted}
+      LEASEGATE_EXECUTION_MODE: ${LEASEGATE_EXECUTION_MODE:-local_gateway}
       LEASEGATE_EDGE_ID: ${LEASEGATE_EDGE_ID}
       LEASEGATE_ORGANIZATION_ID: ${KEYLEASE_ORGANIZATION_ID}
       LEASEGATE_PROJECT_ID: ${KEYLEASE_PROJECT_ID}
@@ -108,6 +118,7 @@ services:
       LEASEGATE_EDGE_STORAGE_KEY_FILE: /run/leasegate-secrets/edge_storage_key
       LEASEGATE_EDGE_CREDENTIAL_FILE: /run/leasegate-secrets/edge_credential
       LEASEGATE_AGENT_CREDENTIAL_FILE: /run/leasegate-secrets/agent_credential
+      LEASEGATE_CREDENTIAL_BACKENDS_FILE: /run/leasegate-secrets/credential_backends.json
       LEASEGATE_VAULT_PASSWORD_FILE: /run/leasegate-secrets/vault_password
       LEASEGATE_CONTROL_VERIFYING_KEY: ${LEASEGATE_CONTROL_VERIFYING_KEY}
       LEASEGATE_CLOUD_URL: https://${LEASEGATE_DOMAIN}/api

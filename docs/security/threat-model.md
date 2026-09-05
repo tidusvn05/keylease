@@ -6,13 +6,15 @@ not an external security review.
 ## Assets and trust boundaries
 
 The protected assets are master passwords, account/vault/item keys, item
-plaintext, connection credentials, approval intent and lease-use counters.
+plaintext, connection credentials, dynamic credential material and local
+revocation handles, approval intent and lease-use counters.
 Opaque IDs, encrypted payloads and redacted operational metadata may be stored
 in SQLite. The local service process is the sole trusted plaintext boundary.
 CLI, Flutter, agents, connector responses, imported files and all provider
 content are untrusted. In Edge mode, cloud is outside the decryption boundary.
-Managed gateway mode is explicitly out of scope and must never be selected as a
-fallback when Edge is unavailable.
+LeaseGate-hosted managed gateway mode is explicitly out of scope and is
+rejected; the supported execution mode is `self_hosted/local_gateway` and must
+never fall back when the local Gateway is unavailable.
 
 ## Threats and mandatory controls
 
@@ -21,6 +23,7 @@ fallback when Edge is unavailable.
 | Prompt injection in provider content | Content is marked untrusted; policy is deterministic and connector data cannot change grants | An authorized agent may still misuse data within its granted task |
 | Confused deputy | Identity/delegation, connection, canonical resource, action and material arguments are bound into every decision and approval | Same-UID malware requires process/user isolation outside KeyLease |
 | Lease-token theft | Tokens are random, stored only as SHA-256 hashes, short-lived, max-use and revocable; default debug output is redacted | MVP bearer tokens can be replayed before revocation |
+| Dynamic-credential theft | Policy/backend TTL ceilings, one-response delivery, no-store HTTP, encrypted local handles, upstream expiry; SSH certificate is bound to the caller public key | AWS STS and OAuth bearer material can be replayed until upstream expiry; DPoP/mTLS remain disabled |
 | Malicious/buggy connector | Typed schemas, canonicalization before authorization, outbound host allowlists, time/size limits and shared conformance tests | Provider compromise is not prevented |
 | SSRF/DNS rebinding | Built-ins use fixed HTTPS origins; custom URLs are rejected; redirects are disabled | Resolver/runtime hardening remains platform-dependent |
 | Replay/retry | Idempotency key plus vault-keyed canonical request digest; approval consumption and lease issue are atomic; transactional lease reservation; provider idempotency where available | A provider without idempotency can have an ambiguous result after a process crash |
@@ -51,7 +54,9 @@ fallback when Edge is unavailable.
 
 ## Explicit non-goals
 
-The MVP does not defend against a fully compromised unlocked host, supply-chain
+The beta does not defend against a fully compromised unlocked host, supply-chain
 compromise, malicious kernel, physical memory extraction, or a user granting an
-over-broad policy. Hardware-backed unlock, cloud recovery, sender-constrained
-tokens and sandboxed third-party connectors are later-phase controls.
+over-broad policy. Hardware-backed unlock, cloud recovery, DPoP/mTLS
+sender-constrained OAuth tokens and sandboxed third-party connectors remain
+later-phase controls. SSH certificate public-key possession is the first
+supported sender-constrained dynamic credential.

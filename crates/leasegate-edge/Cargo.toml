@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
 axum.workspace = true
 base64.workspace = true
 chrono.workspace = true
@@ -17,6 +18,7 @@ keylease-store = { path = "../keylease-store" }
 leasegate-control = { path = "../leasegate-control" }
 leasegate-connector-sdk = { path = "../leasegate-connector-sdk" }
 leasegate-connectors = { path = "../leasegate-connectors" }
+leasegate-credentials = { path = "../leasegate-credentials" }
 leasegate-mcp = { path = "../leasegate-mcp" }
 leasegate-policy = { path = "../leasegate-policy" }
 leasegate-policy-bundle = { path = "../leasegate-policy-bundle" }

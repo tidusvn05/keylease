@@ -5,7 +5,8 @@ use keylease_core::{AgentId, EdgeId, OrganizationId, ProjectId, WorkloadId};
 use keylease_service::KeyLeaseService;
 use keylease_store::NativeStore;
 use leasegate_edge::{
-    CloudControlClient, EdgeConfig, EdgeControlStore, EdgeEnforcedExecutor, EdgeToolDiscovery,
+    CloudControlClient, EdgeConfig, EdgeControlStore, EdgeCredentialAuthorizer,
+    EdgeEnforcedExecutor, EdgeToolDiscovery, credential_api_router, credential_gateway_from_config,
 };
 use leasegate_mcp::{
     AgentEndpointIdentity, CanonicalActionExecutor, EndpointSecurity, LocalServiceExecutor,
@@ -32,6 +33,12 @@ async fn main() -> Result<()> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .json()
         .init();
+
+    if required_env("LEASEGATE_DEPLOYMENT_MODE")? != "self_hosted"
+        || required_env("LEASEGATE_EXECUTION_MODE")? != "local_gateway"
+    {
+        bail!("this binary only supports self_hosted/local_gateway execution")
+    }
 
     let edge_id = EdgeId(required_env("LEASEGATE_EDGE_ID")?);
     let organization_id = OrganizationId(required_env("LEASEGATE_ORGANIZATION_ID")?);
@@ -111,10 +118,25 @@ async fn main() -> Result<()> {
         }
     }
 
+    let credential_authorizer = Arc::new(EdgeCredentialAuthorizer::new(
+        edge_store.clone(),
+        cloud.clone(),
+        cloud_connected.clone(),
+    ));
+    let credential_gateway = credential_gateway_from_config(
+        Path::new(&required_env("LEASEGATE_CREDENTIAL_BACKENDS_FILE")?),
+        edge_store.clone(),
+        credential_authorizer,
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
     let loop_store = edge_store.clone();
     let loop_service = keylease.clone();
     let loop_cloud = cloud.clone();
     let loop_connected = cloud_connected.clone();
+    let loop_credentials = credential_gateway.clone();
+    let loop_agent_id = agent_id.clone();
     tokio::spawn(async move {
         loop {
             match loop_cloud
@@ -131,6 +153,34 @@ async fn main() -> Result<()> {
                     if let Err(error) = loop_cloud.flush_audit(&loop_store, 500).await {
                         warn!(error = %error, "audit upload failed");
                     }
+                    match loop_credentials.reap(Utc::now()).await {
+                        Ok(records) => {
+                            for record in records {
+                                if let Err(error) =
+                                    loop_cloud.report_credential_lease(&record).await
+                                {
+                                    warn!(error = %error, lease_id = %record.lease_id, "credential terminal metadata report deferred");
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            warn!(error = %error, "dynamic credential expiry/revocation sweep failed");
+                        }
+                    }
+                    match loop_credentials.list_for_agent(&loop_agent_id) {
+                        Ok(records) => {
+                            for record in records {
+                                if let Err(error) =
+                                    loop_cloud.report_credential_lease(&record).await
+                                {
+                                    warn!(error = %error, lease_id = %record.lease_id, "credential metadata retry deferred");
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            warn!(error = %error, "credential metadata retry scan failed");
+                        }
+                    }
                 }
                 Err(error) => {
                     loop_connected.store(false, Ordering::Release);
@@ -146,8 +196,8 @@ async fn main() -> Result<()> {
     let enforced: Arc<dyn CanonicalActionExecutor> = Arc::new(EdgeEnforcedExecutor::new(
         local,
         edge_store.clone(),
-        cloud,
-        cloud_connected,
+        cloud.clone(),
+        cloud_connected.clone(),
         organization_id,
         project_id,
     ));
@@ -167,23 +217,31 @@ async fn main() -> Result<()> {
         .collect();
     let security = EndpointSecurity::new(agent_credential.trim().to_owned(), hosts, origins)
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let discovery = Arc::new(EdgeToolDiscovery::built_in(edge_store));
+    let discovery = Arc::new(EdgeToolDiscovery::built_in(edge_store.clone()));
+    let identity = AgentEndpointIdentity {
+        agent_id,
+        workload_id: env::var("LEASEGATE_WORKLOAD_ID").ok().map(WorkloadId),
+        on_behalf_of: env::var("LEASEGATE_ON_BEHALF_OF").ok(),
+        client_session_id: format!("gateway-{}", std::process::id()),
+    };
     let router = agent_router_with_discovery(
         "/mcp",
-        AgentEndpointIdentity {
-            agent_id,
-            workload_id: env::var("LEASEGATE_WORKLOAD_ID").ok().map(WorkloadId),
-            on_behalf_of: env::var("LEASEGATE_ON_BEHALF_OF").ok(),
-            client_session_id: format!("edge-{}", std::process::id()),
-        },
+        identity.clone(),
         enforced,
         discovery,
+        security.clone(),
+    )
+    .merge(credential_api_router(
+        credential_gateway,
+        identity,
+        edge_store,
+        cloud,
         security,
-    );
+    ));
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .context("bind Edge MCP listener")?;
-    info!(%listen, "LeaseGate Edge MCP listening");
+    info!(%listen, "LeaseGate self-hosted local Gateway listening");
     axum::serve(listener, router)
         .await
         .context("serve Edge MCP")

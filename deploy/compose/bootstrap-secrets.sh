@@ -33,6 +33,9 @@ if [ ! -e "$secret_dir/database_url" ]; then
   postgres_password=$(tr -d '\n' < "$secret_dir/postgres_password")
   printf 'postgres://leasegate:%s@postgres:5432/leasegate\n' "$postgres_password" > "$secret_dir/database_url"
 fi
+if [ ! -e "$secret_dir/credential_backends.json" ]; then
+  cp "$script_dir/credential-backends.example.json" "$secret_dir/credential_backends.json"
+fi
 
 chmod 600 "$secret_dir"/*
 printf 'Secrets created in %s. Back them up encrypted and never commit them.\n' "$secret_dir"

@@ -1,4 +1,4 @@
-use crate::{ApprovalDecisionBinding, AuditQueryFilter, CloudRepository};
+use crate::{ApprovalDecisionBinding, AuditQueryFilter, CloudRepository, CredentialLeaseFilter};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, Query, State},
@@ -6,11 +6,11 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use keylease_core::{
     AccountId, ActionRequest, AgentId, ConnectionHealth, ConnectionId, ConnectorPublisherId,
-    DeviceId, EdgeId, KeyLeaseError, OrganizationId, PolicyBundleId, PolicyDecision,
-    PolicyProposalId, PolicyRule, ProjectId, Result, VaultId,
+    CredentialLeaseId, DeviceId, EdgeId, KeyLeaseError, OrganizationId, PolicyBundleId,
+    PolicyDecision, PolicyProposalId, PolicyRule, ProjectId, Result, RotationId, VaultId,
 };
 use leasegate_connector_sdk::{SignedConnectorPackage, conformance_report, validate_manifest};
 use leasegate_connectors::{
@@ -22,6 +22,10 @@ use leasegate_control::{
     CONTROL_CONTRACT_VERSION, ConnectionDescriptor, EdgeHeartbeat, OfflineAuthorization,
     PolicyBundlePayload, PolicyProposal, PolicyProposalReviewRequest, PolicyProposalStatus,
     Revocation, SyncPushRequest,
+};
+use leasegate_credentials::{
+    CREDENTIAL_CONTRACT_VERSION, ConnectionPosture, CredentialLeaseRecord, CredentialLeaseState,
+    RotationRecord, RotationState,
 };
 use leasegate_policy::RulePolicyEngine;
 use leasegate_policy_bundle::{ControlSigner, verify_policy_bundle};
@@ -181,12 +185,40 @@ pub fn router(state: CloudApiState) -> Router {
         .route("/v1/edges/{edge}/events/ack", post(ack_edge_events))
         .route("/v1/edges/{edge}/heartbeat", post(heartbeat))
         .route(
+            "/v1/edges/{edge}/credential-leases",
+            post(report_credential_lease),
+        )
+        .route(
+            "/v1/edges/{edge}/connection-posture",
+            post(report_connection_posture),
+        )
+        .route(
             "/v1/organizations/{organization}/projects/{project}/edges",
             get(list_edges),
         )
         .route(
             "/v1/organizations/{organization}/projects/{project}/audit",
             get(query_audit).post(ingest_audit),
+        )
+        .route(
+            "/v1/organizations/{organization}/projects/{project}/credential-leases",
+            get(list_credential_leases),
+        )
+        .route(
+            "/v1/organizations/{organization}/projects/{project}/credential-leases/{lease}/revoke",
+            post(revoke_credential_lease),
+        )
+        .route(
+            "/v1/organizations/{organization}/projects/{project}/connection-posture",
+            get(list_connection_posture),
+        )
+        .route(
+            "/v1/organizations/{organization}/projects/{project}/credential-rotations",
+            get(list_rotations).post(create_rotation),
+        )
+        .route(
+            "/v1/organizations/{organization}/projects/{project}/credential-rotations/{rotation}/transition",
+            post(transition_rotation),
         )
         .layer(DefaultBodyLimit::max(maximum))
         .with_state(state)
@@ -1264,6 +1296,202 @@ async fn heartbeat(
     }
     state.repository.record_heartbeat(&body).await?;
     Ok(Json(json!({"recorded":true})))
+}
+
+async fn report_credential_lease(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path(edge): Path<String>,
+    Json(body): Json<CredentialLeaseRecord>,
+) -> ApiResult<Json<Value>> {
+    let edge_id = EdgeId(edge);
+    authorize_edge(&state, &headers, &edge_id).await?;
+    state
+        .repository
+        .report_credential_lease(&edge_id, &body)
+        .await?;
+    Ok(Json(json!({"recorded":true})))
+}
+
+async fn report_connection_posture(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path(edge): Path<String>,
+    Json(body): Json<ConnectionPosture>,
+) -> ApiResult<Json<Value>> {
+    let edge_id = EdgeId(edge);
+    authorize_edge(&state, &headers, &edge_id).await?;
+    state
+        .repository
+        .report_connection_posture(&edge_id, &body)
+        .await?;
+    Ok(Json(json!({"recorded":true})))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CredentialLeaseQuery {
+    agent_id: Option<String>,
+    state: Option<CredentialLeaseState>,
+    #[serde(default = "default_limit")]
+    limit: u32,
+}
+
+async fn list_credential_leases(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project)): Path<(String, String)>,
+    Query(query): Query<CredentialLeaseQuery>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    let leases = state
+        .repository
+        .credential_leases(
+            &OrganizationId(organization),
+            &ProjectId(project),
+            &CredentialLeaseFilter {
+                agent_id: query.agent_id,
+                state: query.state,
+                limit: query.limit,
+            },
+        )
+        .await?;
+    Ok(Json(json!({"leases":leases})))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CredentialRevokeRequest {
+    schema_version: u32,
+    reason: String,
+}
+
+async fn revoke_credential_lease(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project, lease)): Path<(String, String, String)>,
+    Json(body): Json<CredentialRevokeRequest>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    if body.schema_version != CREDENTIAL_CONTRACT_VERSION {
+        return Err(ApiError(KeyLeaseError::UnsupportedVersion {
+            version: body.schema_version,
+        }));
+    }
+    let event = state
+        .repository
+        .revoke_credential_lease(
+            &OrganizationId(organization),
+            &ProjectId(project),
+            &CredentialLeaseId(lease),
+            &body.reason,
+        )
+        .await?;
+    Ok(Json(json!({"revoking":true,"control_event":event})))
+}
+
+async fn list_connection_posture(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    let postures = state
+        .repository
+        .connection_postures(&OrganizationId(organization), &ProjectId(project))
+        .await?;
+    Ok(Json(json!({"postures":postures})))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateRotationRequest {
+    schema_version: u32,
+    connection_id: ConnectionId,
+    requested_by: String,
+    reason: String,
+    expected_connection_updated_at: DateTime<Utc>,
+}
+
+async fn create_rotation(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project)): Path<(String, String)>,
+    Json(body): Json<CreateRotationRequest>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    if body.schema_version != CREDENTIAL_CONTRACT_VERSION {
+        return Err(ApiError(KeyLeaseError::UnsupportedVersion {
+            version: body.schema_version,
+        }));
+    }
+    let now = Utc::now();
+    let record = RotationRecord {
+        schema_version: CREDENTIAL_CONTRACT_VERSION,
+        rotation_id: RotationId::new(),
+        connection_id: body.connection_id,
+        state: RotationState::Pending,
+        requested_by: body.requested_by,
+        reason: body.reason,
+        expected_connection_updated_at: body.expected_connection_updated_at,
+        created_at: now,
+        updated_at: now,
+        completed_at: None,
+        failure_code: None,
+    };
+    state
+        .repository
+        .create_rotation(&OrganizationId(organization), &ProjectId(project), &record)
+        .await?;
+    Ok(Json(json!({"rotation":record})))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TransitionRotationRequest {
+    schema_version: u32,
+    expected_state: RotationState,
+    next_state: RotationState,
+    failure_code: Option<String>,
+}
+
+async fn transition_rotation(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project, rotation)): Path<(String, String, String)>,
+    Json(body): Json<TransitionRotationRequest>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    if body.schema_version != CREDENTIAL_CONTRACT_VERSION {
+        return Err(ApiError(KeyLeaseError::UnsupportedVersion {
+            version: body.schema_version,
+        }));
+    }
+    let record = state
+        .repository
+        .transition_rotation(
+            &OrganizationId(organization),
+            &ProjectId(project),
+            &RotationId(rotation),
+            body.expected_state,
+            body.next_state,
+            body.failure_code,
+        )
+        .await?;
+    Ok(Json(json!({"rotation":record})))
+}
+
+async fn list_rotations(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    let rotations = state
+        .repository
+        .rotations(&OrganizationId(organization), &ProjectId(project))
+        .await?;
+    Ok(Json(json!({"rotations":rotations})))
 }
 
 async fn list_edges(

@@ -130,7 +130,9 @@ impl EndpointSecurity {
         })
     }
 
-    fn authorize_headers(&self, headers: &HeaderMap) -> bool {
+    /// Reusable by other agent-local Gateway endpoints. Identity remains fixed
+    /// in server state; a bearer token can never select a different agent.
+    pub fn authorize_headers(&self, headers: &HeaderMap) -> bool {
         let Some(host) = headers
             .get(header::HOST)
             .and_then(|value| value.to_str().ok())

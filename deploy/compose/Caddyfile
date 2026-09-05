@@ -2,7 +2,7 @@
     encode zstd gzip
 
     handle_path /api/* {
-        reverse_proxy cloud:8080
+        reverse_proxy control-plane:8080
     }
 
     handle {

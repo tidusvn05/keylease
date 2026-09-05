@@ -1413,7 +1413,7 @@ dependencies = [
  "hybrid-array",
  "indexmap",
  "js-sys",
- "quick-xml",
+ "quick-xml 0.41.0",
  "rust-argon2",
  "salsa20",
  "secrecy",
@@ -1474,6 +1474,7 @@ dependencies = [
  "leasegate-connector-sdk",
  "leasegate-connectors",
  "leasegate-control",
+ "leasegate-credentials",
  "leasegate-policy",
  "leasegate-policy-bundle",
  "rand 0.9.5",
@@ -1650,10 +1651,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "leasegate-credentials"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "http-body-util",
+ "keylease-core",
+ "quick-xml 0.38.4",
+ "rand 0.9.5",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "leasegate-edge"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "chacha20poly1305",
@@ -1664,6 +1690,7 @@ dependencies = [
  "leasegate-connector-sdk",
  "leasegate-connectors",
  "leasegate-control",
+ "leasegate-credentials",
  "leasegate-mcp",
  "leasegate-policy",
  "leasegate-policy-bundle",
@@ -1973,6 +2000,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.38.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
+dependencies = [
+ "memchr",
+ "serde",
 ]
 
 [[package]]

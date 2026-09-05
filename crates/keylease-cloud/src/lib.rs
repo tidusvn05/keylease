@@ -6,7 +6,7 @@ mod store;
 pub use api::{CloudApiConfig, CloudApiState, router};
 pub use store::{
     ApprovalDecisionBinding, AuditQueryFilter, AuditQueryPage, CloudRepository,
-    EdgeEnrollmentSecret,
+    CredentialLeaseFilter, EdgeEnrollmentSecret,
 };
 
 pub const SERVICE_NAME: &str = "keylease-cloud";

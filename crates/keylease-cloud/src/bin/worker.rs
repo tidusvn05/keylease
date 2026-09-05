@@ -44,6 +44,15 @@ async fn main() -> Result<()> {
         if let Err(error) = repository.expire_pending_policy_proposals(now).await {
             warn!(error = %error, "policy proposal expiry sweep failed");
         }
+        if let Err(error) = repository.expire_credential_lease_index(now).await {
+            warn!(error = %error, "credential lease index expiry sweep failed");
+        }
+        if let Err(error) = repository
+            .sweep_connection_posture(now, now - Duration::minutes(5), now + Duration::days(7))
+            .await
+        {
+            warn!(error = %error, "connection posture/expiry alert sweep failed");
+        }
         if let Err(error) = repository.dispatch_outbox_batch(100).await {
             warn!(error = %error, "outbox dispatch failed");
         }

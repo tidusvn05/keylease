@@ -21,6 +21,7 @@ use leasegate_control::{
     EdgeEventBatch, EdgeHeartbeat, Revocation, RevocationScope, SignedApprovalReceipt,
     SignedPolicyBundle,
 };
+use leasegate_credentials::{ConnectionPosture, CredentialLeaseRecord};
 use leasegate_mcp::{
     AgentEndpointIdentity, CanonicalActionExecutor, DiscoveredAction, GateToolInput,
     GateToolOutput, ToolDiscovery,
@@ -43,6 +44,11 @@ use std::{
 };
 use url::Url;
 use zeroize::{Zeroize, ZeroizeOnDrop};
+
+mod credentials;
+pub use credentials::{
+    EdgeCredentialAuthorizer, credential_api_router, credential_gateway_from_config,
+};
 
 pub const SERVICE_NAME: &str = "leasegate-edge";
 pub const EDGE_SCHEMA_VERSION: u32 = 1;
@@ -386,6 +392,43 @@ impl CloudControlClient {
             .post(self.endpoint(&format!("v1/edges/{}/heartbeat", self.edge_id.0))?)
             .bearer_auth(self.credential.as_str())
             .json(heartbeat)
+            .send()
+            .await
+            .map_err(|_| KeyLeaseError::ConnectorUnavailable { retryable: true })?;
+        if !response.status().is_success() {
+            return Err(KeyLeaseError::ConnectorUnavailable { retryable: true });
+        }
+        Ok(())
+    }
+
+    /// Reports redacted lease metadata. The local Gateway never serializes the
+    /// issued credential or encrypted provider revocation handle to Cloud.
+    pub async fn report_credential_lease(&self, record: &CredentialLeaseRecord) -> Result<()> {
+        if record.agent_id.0.is_empty() {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "credential lease report is missing its fixed agent identity".into(),
+            });
+        }
+        let response = self
+            .http
+            .post(self.endpoint(&format!("v1/edges/{}/credential-leases", self.edge_id.0))?)
+            .bearer_auth(self.credential.as_str())
+            .json(record)
+            .send()
+            .await
+            .map_err(|_| KeyLeaseError::ConnectorUnavailable { retryable: true })?;
+        if !response.status().is_success() {
+            return Err(KeyLeaseError::ConnectorUnavailable { retryable: true });
+        }
+        Ok(())
+    }
+
+    pub async fn report_connection_posture(&self, posture: &ConnectionPosture) -> Result<()> {
+        let response = self
+            .http
+            .post(self.endpoint(&format!("v1/edges/{}/connection-posture", self.edge_id.0))?)
+            .bearer_auth(self.credential.as_str())
+            .json(posture)
             .send()
             .await
             .map_err(|_| KeyLeaseError::ConnectorUnavailable { retryable: true })?;
@@ -1348,6 +1391,19 @@ CREATE TABLE IF NOT EXISTS audit_spool(
     chain_digest TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS credential_leases(
+    lease_id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    record_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(agent_id,idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS credential_leases_agent_idx
+    ON credential_leases(agent_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS credential_leases_reaper_idx
+    ON credential_leases(updated_at);
 "#;
 
 #[cfg(test)]

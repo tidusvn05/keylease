@@ -62,6 +62,9 @@ class _ControlHomeState extends State<ControlHome> {
   List<Map<String, dynamic>> permissions = const [];
   List<Map<String, dynamic>> proposals = const [];
   List<Map<String, dynamic>> auditEvents = const [];
+  List<Map<String, dynamic>> credentialLeases = const [];
+  List<Map<String, dynamic>> connectionPostures = const [];
+  List<Map<String, dynamic>> rotations = const [];
   Map<String, dynamic>? simulation;
   int? policyVersion;
   bool busy = false;
@@ -132,6 +135,9 @@ class _ControlHomeState extends State<ControlHome> {
         getJson(
           '$projectPrefix/audit?limit=100${auditAction.text.trim().isEmpty ? '' : '&action=${Uri.encodeQueryComponent(auditAction.text.trim())}'}',
         ),
+        getJson('$projectPrefix/credential-leases?limit=100'),
+        getJson('$projectPrefix/connection-posture'),
+        getJson('$projectPrefix/credential-rotations'),
       ];
       if (agent.text.isNotEmpty) {
         requests.add(getJson(
@@ -145,9 +151,12 @@ class _ControlHomeState extends State<ControlHome> {
         connections = _maps(results[2]['connections']);
         proposals = _maps(results[3]['proposals']);
         auditEvents = _maps(results[4]['events']);
-        if (results.length > 5) {
-          permissions = _maps(results[5]['permissions']);
-          policyVersion = results[5]['policy_version'] as int?;
+        credentialLeases = _maps(results[5]['leases']);
+        connectionPostures = _maps(results[6]['postures']);
+        rotations = _maps(results[7]['rotations']);
+        if (results.length > 8) {
+          permissions = _maps(results[8]['permissions']);
+          policyVersion = results[8]['policy_version'] as int?;
         }
         connected = true;
       });
@@ -285,6 +294,52 @@ class _ControlHomeState extends State<ControlHome> {
     }, 'Unable to begin Notion onboarding.');
   }
 
+  Future<void> revokeCredentialLease(Map<String, dynamic> lease) async {
+    await _operation(() async {
+      final leaseId = Uri.encodeComponent('${lease['lease_id']}');
+      await postJson('$projectPrefix/credential-leases/$leaseId/revoke', {
+        'schema_version': 1,
+        'reason': 'Operator revoked from LeaseGate Control',
+      });
+      await refresh();
+    }, 'Credential revocation failed or the lease is already terminal.');
+  }
+
+  Future<void> createRotation(Map<String, dynamic> connection) async {
+    await _operation(() async {
+      await postJson('$projectPrefix/credential-rotations', {
+        'schema_version': 1,
+        'connection_id': connection['connection_id'],
+        'requested_by': approver.text,
+        'reason': 'Operator requested credential rotation',
+        'expected_connection_updated_at': connection['updated_at'],
+      });
+      await refresh();
+    }, 'Rotation could not be created; refresh the connection revision first.');
+  }
+
+  Future<void> advanceRotation(Map<String, dynamic> rotation) async {
+    final current = '${rotation['state']}';
+    final next = switch (current) {
+      'pending' => 'rotating',
+      'rotating' => 'verifying',
+      'verifying' => 'activated',
+      'failed' => 'rolled_back',
+      _ => null,
+    };
+    if (next == null) return;
+    await _operation(() async {
+      final id = Uri.encodeComponent('${rotation['rotation_id']}');
+      await postJson('$projectPrefix/credential-rotations/$id/transition', {
+        'schema_version': 1,
+        'expected_state': current,
+        'next_state': next,
+        'failure_code': null,
+      });
+      await refresh();
+    }, 'Rotation state changed concurrently or the transition is invalid.');
+  }
+
   Future<void> _operation(
     Future<void> Function() operation,
     String failure,
@@ -327,7 +382,7 @@ class _ControlHomeState extends State<ControlHome> {
 
   @override
   Widget build(BuildContext context) => DefaultTabController(
-        length: 6,
+        length: 7,
         child: Scaffold(
           appBar: AppBar(
             title: const Text('LeaseGate Control'),
@@ -345,6 +400,7 @@ class _ControlHomeState extends State<ControlHome> {
                 Tab(icon: Icon(Icons.science_outlined), text: 'Simulator'),
                 Tab(icon: Icon(Icons.rule_folder_outlined), text: 'Proposals'),
                 Tab(icon: Icon(Icons.cable_outlined), text: 'Connections'),
+                Tab(icon: Icon(Icons.key_outlined), text: 'Credentials'),
                 Tab(icon: Icon(Icons.fact_check_outlined), text: 'Audit'),
                 Tab(icon: Icon(Icons.monitor_heart_outlined), text: 'Operations'),
               ],
@@ -372,6 +428,7 @@ class _ControlHomeState extends State<ControlHome> {
                       _simulatorView(),
                       _proposalView(),
                       _connectionsView(),
+                      _credentialsView(),
                       _auditView(),
                       _operationsView(),
                     ],
@@ -650,9 +707,91 @@ class _ControlHomeState extends State<ControlHome> {
                 isThreeLine: true,
                 trailing: connection['reauthorization_required'] == true
                     ? const Chip(label: Text('Action required'))
-                    : null,
+                    : OutlinedButton(
+                        onPressed: busy ? null : () => createRotation(connection),
+                        child: const Text('Rotate'),
+                      ),
               ),
             )),
+      ]);
+
+  Widget _credentialsView() => _page([
+        _heading(
+          'Dynamic credentials',
+          'self_hosted · local_gateway — credential material never enters the Control Plane.',
+        ),
+        Text('Active and recent leases',
+            style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        if (credentialLeases.isEmpty)
+          const Card(child: ListTile(title: Text('No credential lease metadata'))),
+        ...credentialLeases.map((lease) {
+          final active = lease['state'] == 'active';
+          final sender = lease['sender_constraint'] is Map
+              ? Map<String, dynamic>.from(lease['sender_constraint'] as Map)
+              : <String, dynamic>{};
+          return Card(
+            child: ListTile(
+              leading: Icon(active ? Icons.key : Icons.key_off_outlined),
+              title: Text('${lease['kind']} · ${lease['target']}'),
+              subtitle: Text(
+                '${lease['state']} · ${lease['agent_id']}\n'
+                'Expires ${lease['expires_at']} · binding ${sender['kind'] ?? 'none'}',
+              ),
+              isThreeLine: true,
+              trailing: active
+                  ? FilledButton.tonal(
+                      onPressed: busy ? null : () => revokeCredentialLease(lease),
+                      child: const Text('Revoke'),
+                    )
+                  : null,
+            ),
+          );
+        }),
+        const SizedBox(height: 20),
+        Text('Connection posture',
+            style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        if (connectionPostures.isEmpty)
+          const Card(child: ListTile(title: Text('No posture report from Gateway'))),
+        ...connectionPostures.map((posture) => Card(
+              child: ListTile(
+                leading: Icon(posture['status'] == 'healthy'
+                    ? Icons.verified_user_outlined
+                    : Icons.warning_amber_outlined),
+                title: Text('${posture['connection_id']} · ${posture['status']}'),
+                subtitle: Text(
+                  'Checked ${posture['checked_at']}\n${_strings(posture['reason_codes']).join(', ')}',
+                ),
+                isThreeLine: true,
+              ),
+            )),
+        const SizedBox(height: 20),
+        Text('Rotation workflow',
+            style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        if (rotations.isEmpty)
+          const Card(child: ListTile(title: Text('No credential rotations'))),
+        ...rotations.map((rotation) {
+          final state = '${rotation['state']}';
+          final actionable =
+              ['pending', 'rotating', 'verifying', 'failed'].contains(state);
+          return Card(
+            child: ListTile(
+              leading: const Icon(Icons.autorenew),
+              title: Text('${rotation['connection_id']} · $state'),
+              subtitle:
+                  Text('${rotation['reason']}\nUpdated ${rotation['updated_at']}'),
+              isThreeLine: true,
+              trailing: actionable
+                  ? FilledButton.tonal(
+                      onPressed: busy ? null : () => advanceRotation(rotation),
+                      child: const Text('Advance'),
+                    )
+                  : null,
+            ),
+          );
+        }),
       ]);
 
   Widget _auditView() => _page([

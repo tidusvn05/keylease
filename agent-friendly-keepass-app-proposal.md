@@ -1776,17 +1776,23 @@ Ship:
 
 Exit criteria: một MCP client phổ biến connect trong vài phút; cùng policy cho kết quả giống CLI; endpoint revoke không làm mất OAuth connection gốc; connector conformance suite chặn schema/canonicalization bypass.
 
-#### Phase 5 — Dynamic credentials và Managed Gateway
+#### Phase 5 — Dynamic credentials và self-hosted local Gateway
+
+> Quyết định phạm vi 2026-09-06: Phase 5 chỉ ship
+> `self_hosted/local_gateway` all-in-one trên VPS của người dùng. “Cloud” là
+> Control Plane chạy cùng VPS, không phải hạ tầng do LeaseGate vận hành.
+> LeaseGate-hosted Managed Gateway được loại khỏi runtime và phải bị reject nếu
+> cấu hình nhầm.
 
 Ship:
 
 - OAuth 2.0 Token Exchange khi provider hỗ trợ.
 - AWS/cloud short-lived credentials, SSH certificates và database leases.
-- Optional LeaseGate Cloud managed execution với isolated key use và explicit trust label.
+- Local Gateway thực thi trên VPS của người dùng; credential/key không đi vào Control Plane.
 - Sender-constrained lease bằng DPoP/mTLS nơi phù hợp.
 - Secret rotation workflow, expiry alerts và connection posture.
 
-Exit criteria: agent workflows trọng tâm không dùng long-lived downstream credentials; managed và edge trust modes không thể bị nhầm trong API/UI; token theft tests chứng minh sender constraint tại các flow hỗ trợ.
+Exit criteria: agent workflows trọng tâm không dùng long-lived downstream credentials; API/UI/config chỉ chấp nhận rõ `self_hosted/local_gateway`; credential không đi vào Control Plane; token theft tests chứng minh sender constraint tại các flow hỗ trợ.
 
 #### Phase 6 — Enterprise và mobile
 

@@ -47,6 +47,8 @@ opaque_id!(DeviceId, "device_");
 opaque_id!(ClientSessionId, "client_session_");
 opaque_id!(ConnectionId, "conn_");
 opaque_id!(LeaseId, "lease_");
+opaque_id!(CredentialLeaseId, "credential_lease_");
+opaque_id!(RotationId, "rotation_");
 opaque_id!(ApprovalId, "approval_");
 opaque_id!(RequestId, "req_");
 opaque_id!(ActionId, "action_");

@@ -26,6 +26,87 @@ pub struct PolicyTemplateInput {
     pub expires_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone)]
+pub struct CredentialPolicyTemplateInput {
+    pub rule_id: String,
+    pub version: u64,
+    pub agent_id: AgentId,
+    pub connection_id: String,
+    pub backend_id: String,
+    /// One of `aws`, `ssh`, `postgresql`, or `oauth`.
+    pub credential_kind: String,
+    pub target: String,
+    pub max_ttl_seconds: u64,
+    pub require_approval: bool,
+    pub expires_at: DateTime<Utc>,
+}
+
+/// Creates an exact dynamic-credential rule for the self-hosted local Gateway.
+/// Backend, connection and target are all present in the signed artifact.
+pub fn materialize_credential_template(input: CredentialPolicyTemplateInput) -> Result<PolicyRule> {
+    for value in [&input.rule_id, &input.connection_id, &input.backend_id] {
+        if value.is_empty()
+            || value.len() > 512
+            || value.chars().any(|character| character.is_control())
+            || value.contains('/')
+        {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "credential policy template identifiers are invalid".into(),
+            });
+        }
+    }
+    if input.target.is_empty()
+        || input.target.len() > 512
+        || input.target.chars().any(|character| character.is_control())
+    {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "credential policy target is invalid".into(),
+        });
+    }
+    if input.max_ttl_seconds == 0 || input.max_ttl_seconds > 3_600 {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "credential policy TTL must be within 1..=3600 seconds".into(),
+        });
+    }
+    let action = match input.credential_kind.as_str() {
+        "aws" => "credential.aws.issue",
+        "ssh" => "credential.ssh.issue",
+        "postgresql" => "credential.postgresql.issue",
+        "oauth" => "credential.oauth.exchange",
+        _ => {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "unsupported credential policy kind".into(),
+            });
+        }
+    };
+    Ok(PolicyRule {
+        id: input.rule_id,
+        version: input.version,
+        effect: if input.require_approval {
+            PolicyEffect::RequireApproval
+        } else {
+            PolicyEffect::Allow
+        },
+        agent_id: Some(input.agent_id),
+        connection_id: Some(input.connection_id),
+        resource_prefix: format!(
+            "credential:{}/{}/{}",
+            input.credential_kind, input.backend_id, input.target
+        ),
+        actions: vec![action.into()],
+        argument_equals: Default::default(),
+        not_before: None,
+        expires_at: Some(input.expires_at),
+        max_lease_ttl_seconds: input.max_ttl_seconds,
+        max_uses: 1,
+        budget: DataBudget {
+            max_concurrent: Some(1),
+            max_task_requests: Some(10),
+            ..Default::default()
+        },
+    })
+}
+
 /// Materializes a deterministic provider template into an explicit rule.
 /// Templates are onboarding helpers; the returned rule is the authorization
 /// artifact that is stored, reviewed and evaluated.
@@ -548,6 +629,31 @@ mod tests {
             expires_at: Utc::now() + chrono::Duration::hours(1),
         });
         assert!(matches!(result, Err(KeyLeaseError::InvalidRequest { .. })));
+    }
+
+    #[test]
+    fn credential_template_binds_backend_connection_target_and_ttl() {
+        let rule = materialize_credential_template(CredentialPolicyTemplateInput {
+            rule_id: "aws-release".into(),
+            version: 5,
+            agent_id: AgentId("agent_release".into()),
+            connection_id: "conn_aws".into(),
+            backend_id: "aws-prod".into(),
+            credential_kind: "aws".into(),
+            target: "arn:aws:iam::123456789012:role/release".into(),
+            max_ttl_seconds: 900,
+            require_approval: true,
+            expires_at: Utc::now() + chrono::Duration::hours(1),
+        })
+        .unwrap();
+        assert_eq!(rule.connection_id.as_deref(), Some("conn_aws"));
+        assert_eq!(rule.actions, vec!["credential.aws.issue"]);
+        assert_eq!(
+            rule.resource_prefix,
+            "credential:aws/aws-prod/arn:aws:iam::123456789012:role/release"
+        );
+        assert_eq!(rule.max_lease_ttl_seconds, 900);
+        assert_eq!(rule.effect, PolicyEffect::RequireApproval);
     }
 
     #[test]
