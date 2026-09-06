@@ -16,7 +16,7 @@ case "$(uname -m)" in
   x86_64|aarch64) ;;
   *) fail 'supported VPS architectures are x86_64 and aarch64' ;;
 esac
-for command_name in docker git gzip openssl curl age timeout; do
+for command_name in docker git gzip openssl curl age jq timeout; do
   command -v "$command_name" >/dev/null 2>&1 || fail "missing dependency: $command_name"
 done
 docker compose version >/dev/null 2>&1 || fail 'Docker Compose v2 is required'
@@ -32,6 +32,8 @@ case "$mode" in
     if [ ! -e "$compose_dir/.env" ]; then
       install -m 600 "$compose_dir/.env.example" "$compose_dir/.env"
     fi
+    mkdir -p "$compose_dir/.state"
+    chmod 700 "$compose_dir/.state"
     "$compose_dir/bootstrap-secrets.sh"
     printf 'Prepared %s/.env and mode-0600 secrets. Fill domain and enrollment IDs, then run single-vps-check.sh preflight.\n' "$compose_dir"
     ;;

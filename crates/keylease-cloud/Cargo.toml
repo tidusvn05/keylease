@@ -39,6 +39,7 @@ zeroize.workspace = true
 
 [dev-dependencies]
 http-body-util = "0.1"
+tempfile.workspace = true
 
 [[bin]]
 name = "keylease-cloud"

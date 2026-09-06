@@ -5,6 +5,8 @@ After=docker.service
 
 [Service]
 Type=oneshot
+User=@LEASEGATE_USER@
+Group=@LEASEGATE_GROUP@
 EnvironmentFile=/etc/leasegate/operations.env
 WorkingDirectory=@LEASEGATE_ROOT@
 ExecStart=@LEASEGATE_ROOT@/deploy/operations/monitor.sh

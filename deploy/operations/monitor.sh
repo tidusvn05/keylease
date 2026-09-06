@@ -8,6 +8,7 @@ env_file=${LEASEGATE_ENV_FILE:-"$compose_dir/.env"}
 backup_dir=${LEASEGATE_BACKUP_DIR:-"$compose_dir/backups"}
 state_dir=${LEASEGATE_OPS_STATE_DIR:-"$compose_dir/.state"}
 metrics_file=${LEASEGATE_METRICS_FILE:-"$state_dir/leasegate.prom"}
+status_file=${LEASEGATE_STATUS_FILE:-"$state_dir/operations-status.json"}
 disk_warning_percent=${LEASEGATE_DISK_WARNING_PERCENT:-75}
 disk_critical_percent=${LEASEGATE_DISK_CRITICAL_PERCENT:-90}
 maximum_backup_age_seconds=${LEASEGATE_MAX_BACKUP_AGE_SECONDS:-90000}
@@ -21,6 +22,7 @@ done
   exit 1
 }
 [ -f "$env_file" ] || { printf 'Missing environment file.\n' >&2; exit 1; }
+command -v jq >/dev/null 2>&1 || { printf 'jq is required for the redacted status snapshot.\n' >&2; exit 1; }
 mkdir -p "$state_dir"
 chmod 700 "$state_dir"
 
@@ -142,6 +144,37 @@ temporary_metrics=$(mktemp "$metrics_dir/.leasegate.prom.XXXXXX")
 } > "$temporary_metrics"
 chmod 644 "$temporary_metrics"
 mv "$temporary_metrics" "$metrics_file"
+
+release_id=$(awk -F= '$1 == "LEASEGATE_RELEASE_ID" {print substr($0, index($0, "=") + 1)}' "$state_dir/current-release.env" 2>/dev/null || true)
+case "$release_id" in ''|*[!A-Za-z0-9._-]*) release_id=unknown ;; esac
+generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+status_dir=$(dirname -- "$status_file")
+mkdir -p "$status_dir"
+temporary_status=$(mktemp "$status_dir/.operations-status.XXXXXX")
+jq -n \
+  --arg generated_at "$generated_at" \
+  --arg release_id "$release_id" \
+  --arg issues "$issues" \
+  --argjson healthy "$healthy" \
+  --argjson running "$running_count" \
+  --argjson control_ready "$control_ready" \
+  --argjson gateway_ready "$gateway_ready" \
+  --argjson disk_used_percent "$disk_used_percent" \
+  --argjson backup_age_seconds "$backup_age" \
+  --argjson certificate_expiry_seconds "$certificate_expiry_seconds" \
+  --argjson soak_consecutive_seconds "$soak_seconds" \
+  --argjson soak_failures "$soak_failures" \
+  '{schema_version:1,available:true,profile:"single_vps",generated_at:$generated_at,
+    release_id:$release_id,healthy:($healthy == 1),
+    issues:(if $issues == "" then [] else ($issues | split(",")) end),
+    services:{expected:6,running:$running,control_plane_ready:($control_ready == 1),gateway_ready:($gateway_ready == 1)},
+    disk:{used_percent:$disk_used_percent},
+    backup:{age_seconds:$backup_age_seconds},
+    tls:{expiry_seconds:$certificate_expiry_seconds},
+    soak:{consecutive_seconds:$soak_consecutive_seconds,failures:$soak_failures}}' \
+  > "$temporary_status"
+chmod 644 "$temporary_status"
+mv "$temporary_status" "$status_file"
 
 if [ -n "$issues" ] && [ -n "${LEASEGATE_ALERT_WEBHOOK_FILE:-}" ]; then
   webhook_file=$LEASEGATE_ALERT_WEBHOOK_FILE

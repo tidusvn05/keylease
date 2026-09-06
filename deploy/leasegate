@@ -1,0 +1,64 @@
+#!/usr/bin/env sh
+set -eu
+
+script_dir=$(dirname -- "$0")
+root_dir=$(cd "$script_dir/.." && pwd)
+compose_dir="$root_dir/deploy/compose"
+operations_dir="$root_dir/deploy/operations"
+env_file=${LEASEGATE_ENV_FILE:-"$compose_dir/.env"}
+command_name=${1:-help}
+[ "$#" -eq 0 ] || shift
+
+# Load only the two non-secret operations values understood by this wrapper;
+# never source the Compose environment as shell code.
+if [ -f "$env_file" ]; then
+  if [ -z "${LEASEGATE_AGE_RECIPIENT:-}" ]; then
+    LEASEGATE_AGE_RECIPIENT=$(awk -F= '$1 == "LEASEGATE_AGE_RECIPIENT" {print substr($0, index($0, "=") + 1)}' "$env_file")
+    export LEASEGATE_AGE_RECIPIENT
+  fi
+  if [ -z "${LEASEGATE_BACKUP_DIR:-}" ]; then
+    LEASEGATE_BACKUP_DIR=$(awk -F= '$1 == "LEASEGATE_BACKUP_DIR" {print substr($0, index($0, "=") + 1)}' "$env_file")
+    [ -z "$LEASEGATE_BACKUP_DIR" ] || export LEASEGATE_BACKUP_DIR
+  fi
+fi
+
+usage() {
+  cat <<'EOF'
+LeaseGate single-VPS lifecycle CLI
+
+Usage: deploy/leasegate COMMAND [ARGUMENTS]
+
+Commands:
+  install               Provision and bootstrap a new all-in-one VPS
+  status                Run read-only preflight and runtime checks
+  monitor               Publish the redacted host-health snapshot
+  backup [DIRECTORY]    Create an encrypted backup
+  verify-backup ARGS... Verify an encrypted backup set
+  upgrade RELEASE_DIR   Guarded upgrade to an immutable release
+  rollback              Guarded rollback to previous application images
+  diagnostics [DIR]     Create a redacted diagnostic archive
+  acceptance [FILE]     Write a machine-readable Phase 9 acceptance report
+  rotate-admin-token    Rotate the bootstrap administrator credential
+  help                  Show this help
+
+Run `deploy/leasegate install --help` for installer options.
+EOF
+}
+
+case "$command_name" in
+  install) exec "$operations_dir/install.sh" "$@" ;;
+  status)
+    "$compose_dir/single-vps-check.sh" preflight
+    exec "$compose_dir/single-vps-check.sh" runtime
+    ;;
+  monitor) exec "$operations_dir/monitor.sh" "$@" ;;
+  backup) exec "$compose_dir/backup.sh" "$@" ;;
+  verify-backup) exec "$compose_dir/verify-backup.sh" "$@" ;;
+  upgrade) exec "$operations_dir/upgrade.sh" "$@" ;;
+  rollback) exec "$operations_dir/rollback.sh" "$@" ;;
+  diagnostics) exec "$operations_dir/diagnostics.sh" "$@" ;;
+  acceptance) exec "$operations_dir/acceptance.sh" "$@" ;;
+  rotate-admin-token) exec "$operations_dir/rotate-admin-token.sh" "$@" ;;
+  help|-h|--help) usage ;;
+  *) printf 'Unknown command: %s\n\n' "$command_name" >&2; usage >&2; exit 2 ;;
+esac

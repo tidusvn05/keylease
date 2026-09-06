@@ -4,6 +4,20 @@ This profile runs on one Linux VPS with Docker Engine, Compose v2, a DNS name
 pointing to the VPS, and inbound TCP 80/443. It is suitable for a personal or
 beta installation; it is not highly available.
 
+For a new installation, Phase 9 provides the guarded end-to-end path:
+
+```sh
+deploy/leasegate install \
+  --domain leasegate.example.com \
+  --age-recipient 'age1...' \
+  --yes
+```
+
+Run it as the dedicated non-root repository owner. It creates a deny-all first
+policy, enrolls the local Gateway, makes an initial encrypted backup and uses
+`sudo` only for systemd. The manual steps below remain useful for recovery and
+for understanding each boundary.
+
 ## 1. Prepare the host
 
 Use a dedicated non-root operator, enable the host firewall, expose only
@@ -331,3 +345,33 @@ The monitor writes node-exporter-compatible text metrics and can send a bounded
 status-code-only payload to an optional HTTPS webhook. `diagnostics.sh` never
 includes Compose secrets, `.env`, database dumps or vault files and replaces
 any potentially sensitive log line with a redaction marker.
+
+## 10. Phase 9 lifecycle and dashboard
+
+Use the stable lifecycle entry point for ordinary operation:
+
+```sh
+deploy/leasegate status
+deploy/leasegate backup
+deploy/leasegate diagnostics
+deploy/leasegate acceptance
+```
+
+The monitor now publishes `deploy/compose/.state/operations-status.json` with
+only fixed health codes, counters, age values and a release ID. Control Plane
+reads this file through a read-only mount and exposes it at the authenticated
+`/api/v1/system/status` endpoint. It does not have access to the Docker socket.
+The Operations tab marks snapshots older than ten minutes unhealthy.
+
+Rotate the bootstrap administrator credential after initial setup:
+
+```sh
+export LEASEGATE_ROTATE_ADMIN_CONFIRM=rotate-bootstrap-admin-token
+deploy/leasegate rotate-admin-token
+```
+
+The guarded command restores the previous credential if the Control Plane
+cannot restart. Encryption and signing roots must not be replaced in place;
+they require a separately designed re-encryption or trust-transition drill.
+The complete Phase 9 checklist is
+`phase-9/single-vps-ga-and-onboarding.md`.

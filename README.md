@@ -2,7 +2,7 @@
 
 KeyLease is a local-first encrypted vault and LeaseGate policy gateway for agents.
 This repository contains the Phase 0 contracts through the locally testable
-Phase 7 single-VPS hardening baseline from
+Phase 9 single-VPS onboarding and operations baseline from
 [`agent-friendly-keepass-app-proposal.md`](agent-friendly-keepass-app-proposal.md).
 Platform and live-provider release evidence is tracked separately and is not
 claimed complete from this Linux workspace.
@@ -83,6 +83,11 @@ Phase 8 automates that single-VPS release gate: pinned runtime images,
 content-addressed releases, SPDX SBOM/provenance, migration dry-runs, guarded
 upgrade/rollback, systemd backup/monitor timers and redacted diagnostics. See
 [`docs/phase-8/single-vps-operations-and-release.md`](docs/phase-8/single-vps-operations-and-release.md).
+
+Phase 9 provides the stable single-VPS lifecycle CLI, guarded first-run
+bootstrap, initial encrypted backup, redacted host-status dashboard and a
+machine-readable acceptance report. See
+[`docs/phase-9/single-vps-ga-and-onboarding.md`](docs/phase-9/single-vps-ga-and-onboarding.md).
 
 For an Intel Mac (`x86_64`) build and release-acceptance walkthrough, see
 [`docs/macos-x86_64-build-test.md`](docs/macos-x86_64-build-test.md). The

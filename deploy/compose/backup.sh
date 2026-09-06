@@ -5,7 +5,7 @@ umask 077
 script_dir=$(dirname -- "$0")
 script_dir=$(cd "$script_dir" && pwd)
 env_file=${LEASEGATE_ENV_FILE:-"$script_dir/.env"}
-output_dir=${1:-"$script_dir/backups"}
+output_dir=${1:-${LEASEGATE_BACKUP_DIR:-"$script_dir/backups"}}
 : "${LEASEGATE_AGE_RECIPIENT:?Set LEASEGATE_AGE_RECIPIENT to an age recipient}"
 retention_days=${LEASEGATE_BACKUP_RETENTION_DAYS:-30}
 case "$retention_days" in
@@ -27,7 +27,7 @@ docker compose --env-file "$env_file" -f "$script_dir/compose.yaml" exec -T post
   pg_dump -U leasegate -d leasegate --format=custom --no-owner --no-acl |
   age -r "$LEASEGATE_AGE_RECIPIENT" -o "$output_dir/$database_name"
 
-tar -C "$script_dir" -cf - secrets credential-backends.example.json siem-secrets.example.json |
+tar -C "$script_dir" -cf - .env secrets credential-backends.example.json siem-secrets.example.json |
   age -r "$LEASEGATE_AGE_RECIPIENT" -o "$output_dir/$config_name"
 
 gateway_stopped=0

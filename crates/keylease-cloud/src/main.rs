@@ -46,6 +46,10 @@ async fn main() -> Result<()> {
         CloudApiConfig {
             admin_token: admin_token.trim().to_owned(),
             maximum_body_bytes: 4 * 1024 * 1024,
+            operations_status_file: env::var("KEYLEASE_OPERATIONS_STATUS_FILE")
+                .ok()
+                .filter(|value| !value.is_empty())
+                .map(Into::into),
         },
     )
     .map_err(|error| anyhow::anyhow!(error.to_string()))?;

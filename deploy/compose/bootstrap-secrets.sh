@@ -21,6 +21,7 @@ write_random_text "$secret_dir/admin_token" "kladmin_"
 write_random_text "$secret_dir/minio_user" "klminio_"
 write_random_text "$secret_dir/minio_password" "klminio_secret_"
 write_random_text "$secret_dir/siem_hmac_secret" "klsiem_"
+write_random_text "$secret_dir/vault_password" "klvault_"
 
 if [ ! -e "$secret_dir/control_signing_key" ]; then
   openssl rand -base64 32 | tr -d '\n=' > "$secret_dir/control_signing_key"

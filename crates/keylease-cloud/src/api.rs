@@ -32,7 +32,7 @@ use leasegate_policy_bundle::{ControlSigner, verify_policy_bundle};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
+use std::{fs, path::PathBuf, sync::Arc};
 use subtle::ConstantTimeEq;
 use url::Url;
 
@@ -43,6 +43,9 @@ pub struct CloudApiConfig {
     /// credential out of ordinary operator workflows.
     pub admin_token: String,
     pub maximum_body_bytes: usize,
+    /// Optional host-generated, redacted operations snapshot. The Control
+    /// Plane receives this file read-only and never receives the Docker socket.
+    pub operations_status_file: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for CloudApiConfig {
@@ -51,6 +54,7 @@ impl std::fmt::Debug for CloudApiConfig {
             .debug_struct("CloudApiConfig")
             .field("admin_token", &"[REDACTED]")
             .field("maximum_body_bytes", &self.maximum_body_bytes)
+            .field("operations_status_file", &self.operations_status_file)
             .finish()
     }
 }
@@ -60,6 +64,7 @@ impl Default for CloudApiConfig {
         Self {
             admin_token: String::new(),
             maximum_body_bytes: 4 * 1024 * 1024,
+            operations_status_file: None,
         }
     }
 }
@@ -70,6 +75,7 @@ pub struct CloudApiState {
     pub signer: Arc<ControlSigner>,
     admin_token_digest: [u8; 32],
     maximum_body_bytes: usize,
+    operations_status_file: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for CloudApiState {
@@ -99,6 +105,7 @@ impl CloudApiState {
             signer: Arc::new(signer),
             admin_token_digest: Sha256::digest(config.admin_token.as_bytes()).into(),
             maximum_body_bytes: config.maximum_body_bytes.clamp(1024, 16 * 1024 * 1024),
+            operations_status_file: config.operations_status_file,
         })
     }
 }
@@ -109,6 +116,7 @@ pub fn router(state: CloudApiState) -> Router {
         .route("/healthz", get(health))
         .route("/readyz", get(readiness))
         .route("/metrics", get(metrics))
+        .route("/v1/system/status", get(system_status))
         .route("/v1/bootstrap", post(bootstrap))
         .route("/v1/devices", post(register_device))
         .route("/v1/vaults", post(create_vault))
@@ -278,6 +286,141 @@ async fn metrics(State(state): State<CloudApiState>) -> Response {
         database_ready, CONTROL_CONTRACT_VERSION
     );
     ([(CONTENT_TYPE, "text/plain; version=0.0.4")], body).into_response()
+}
+
+async fn system_status(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    let Some(path) = state.operations_status_file.as_ref() else {
+        return Ok(Json(json!({
+            "schema_version": 1,
+            "available": false,
+            "profile": "single_vps",
+            "reason": "host_snapshot_not_configured"
+        })));
+    };
+    load_operations_status(path).map(Json).map_err(ApiError)
+}
+
+fn load_operations_status(path: &std::path::Path) -> Result<Value> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(_) => {
+            return Ok(json!({
+                "schema_version": 1,
+                "available": false,
+                "profile": "single_vps",
+                "reason": "host_snapshot_not_published"
+            }));
+        }
+    };
+    if !metadata.file_type().is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() > 64 * 1024
+    {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "operations status snapshot must be a bounded regular file".into(),
+        });
+    }
+    let raw = fs::read(path).map_err(|_| KeyLeaseError::Storage)?;
+    let mut snapshot: OperationsSnapshot =
+        serde_json::from_slice(&raw).map_err(|_| KeyLeaseError::InvalidRequest {
+            reason: "operations status snapshot is invalid JSON".into(),
+        })?;
+    if snapshot.schema_version != 1
+        || !snapshot.available
+        || snapshot.profile != "single_vps"
+        || snapshot.release_id.is_empty()
+        || snapshot.release_id.len() > 128
+        || snapshot
+            .release_id
+            .chars()
+            .any(|value| !(value.is_ascii_alphanumeric() || "._-".contains(value)))
+        || snapshot.issues.len() > 32
+        || snapshot.issues.iter().any(|issue| {
+            issue.is_empty()
+                || issue.len() > 64
+                || issue
+                    .chars()
+                    .any(|value| !(value.is_ascii_alphanumeric() || value == '_'))
+        })
+        || snapshot.services.expected != 6
+        || snapshot.services.running > snapshot.services.expected
+        || snapshot.disk.used_percent > 100
+    {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "operations status snapshot contains unsupported values".into(),
+        });
+    }
+    let age = Utc::now().signed_duration_since(snapshot.generated_at);
+    let stale = age > Duration::minutes(10) || age < Duration::minutes(-1);
+    snapshot.stale = stale;
+    if stale {
+        snapshot.healthy = false;
+        if !snapshot
+            .issues
+            .iter()
+            .any(|value| value == "status_snapshot_stale")
+        {
+            snapshot.issues.push("status_snapshot_stale".into());
+        }
+    }
+    serde_json::to_value(snapshot).map_err(|_| KeyLeaseError::Storage)
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OperationsSnapshot {
+    schema_version: u32,
+    available: bool,
+    profile: String,
+    generated_at: DateTime<Utc>,
+    release_id: String,
+    healthy: bool,
+    issues: Vec<String>,
+    services: OperationsServices,
+    disk: OperationsDisk,
+    backup: OperationsAge,
+    tls: OperationsExpiry,
+    soak: OperationsSoak,
+    #[serde(default)]
+    stale: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OperationsServices {
+    expected: u64,
+    running: u64,
+    control_plane_ready: bool,
+    gateway_ready: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OperationsDisk {
+    used_percent: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OperationsAge {
+    age_seconds: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OperationsExpiry {
+    expiry_seconds: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OperationsSoak {
+    consecutive_seconds: u64,
+    failures: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1768,3 +1911,88 @@ impl IntoResponse for ApiError {
 
 #[derive(Debug, Serialize)]
 struct _SchemaAnchor;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operations_snapshot_fails_closed_when_stale() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("operations-status.json");
+        fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "schema_version": 1,
+                "available": true,
+                "profile": "single_vps",
+                "generated_at": "2020-01-01T00:00:00Z",
+                "release_id": "phase9-test",
+                "healthy": true,
+                "issues": [],
+                "services": {"expected":6,"running":6,"control_plane_ready":true,"gateway_ready":true},
+                "disk": {"used_percent":20},
+                "backup": {"age_seconds":60},
+                "tls": {"expiry_seconds":86400},
+                "soak": {"consecutive_seconds":100,"failures":0}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let status = load_operations_status(&path).unwrap();
+        assert_eq!(status["stale"], true);
+        assert_eq!(status["healthy"], false);
+        assert!(
+            status["issues"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("status_snapshot_stale"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn operations_snapshot_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target.json");
+        let link = directory.path().join("operations-status.json");
+        fs::write(&target, b"{}").unwrap();
+        symlink(target, &link).unwrap();
+        assert!(matches!(
+            load_operations_status(&link),
+            Err(KeyLeaseError::InvalidRequest { .. })
+        ));
+    }
+
+    #[test]
+    fn operations_snapshot_rejects_unrecognized_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("operations-status.json");
+        fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "schema_version": 1,
+                "available": true,
+                "profile": "single_vps",
+                "generated_at": Utc::now(),
+                "release_id": "phase9-test",
+                "healthy": true,
+                "issues": [],
+                "services": {"expected":6,"running":6,"control_plane_ready":true,"gateway_ready":true},
+                "disk": {"used_percent":20},
+                "backup": {"age_seconds":60},
+                "tls": {"expiry_seconds":86400},
+                "soak": {"consecutive_seconds":100,"failures":0},
+                "credential": "must-not-pass-through"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            load_operations_status(&path),
+            Err(KeyLeaseError::InvalidRequest { .. })
+        ));
+    }
+}

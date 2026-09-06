@@ -110,7 +110,12 @@ enum Command {
 }
 #[derive(Subcommand)]
 enum VaultCommand {
-    Init,
+    Init {
+        /// Read the new vault password from a mode-0600 file. Intended for
+        /// unattended self-hosted bootstrap; never pass a password on argv.
+        #[arg(long)]
+        password_file: Option<PathBuf>,
+    },
     ChangePassword,
     ImportKdbx {
         path: PathBuf,
@@ -678,16 +683,26 @@ async fn run() -> Result<()> {
 
 fn vault_command(db: &Path, command: VaultCommand) -> Result<()> {
     match command {
-        VaultCommand::Init => {
-            let first = prompt("New master password: ")?;
-            let second = prompt("Confirm master password: ")?;
-            if first != second || first.len() < 10 {
+        VaultCommand::Init { password_file } => {
+            let first = if let Some(path) = password_file {
+                read_secret_file(&path, "vault password")?
+            } else {
+                let first = prompt("New master password: ")?;
+                let second = prompt("Confirm master password: ")?;
+                if first != second {
+                    return Err(KeyLeaseError::InvalidRequest {
+                        reason: "passwords differ".into(),
+                    });
+                }
+                first
+            };
+            if first.trim().len() < 10 {
                 return Err(KeyLeaseError::InvalidRequest {
-                    reason: "passwords differ or are shorter than 10 characters".into(),
+                    reason: "password is shorter than 10 characters".into(),
                 });
             }
             let service = service(db)?;
-            let vault_id = service.initialize(first.as_bytes(), Duration::minutes(5))?;
+            let vault_id = service.initialize(first.trim().as_bytes(), Duration::minutes(5))?;
             print_json(&json!({"vault_id":vault_id,"initialized":true}))
         }
         VaultCommand::ChangePassword => {
@@ -1776,6 +1791,29 @@ mod tests {
         assert!(matches!(
             read_json::<Value>(file.path().to_str().unwrap()),
             Err(KeyLeaseError::InvalidRequest { .. })
+        ));
+    }
+
+    #[test]
+    fn unattended_vault_init_accepts_only_a_private_password_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let password_path = directory.path().join("vault-password");
+        fs::write(&password_path, "a sufficiently long password\n").unwrap();
+        fs::set_permissions(&password_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let database = directory.path().join("vault.sqlite");
+        vault_command(
+            &database,
+            VaultCommand::Init {
+                password_file: Some(password_path.clone()),
+            },
+        )
+        .unwrap();
+        assert!(database.exists());
+
+        fs::set_permissions(&password_path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(matches!(
+            read_secret_file(&password_path, "vault password"),
+            Err(KeyLeaseError::Denied { .. })
         ));
     }
 

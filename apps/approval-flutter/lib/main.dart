@@ -61,6 +61,10 @@ class _ControlHomeState extends State<ControlHome> {
   final notionClientId = TextEditingController();
   final oauthRedirect = TextEditingController();
   final oidcIdToken = TextEditingController();
+  final setupAccount = TextEditingController(text: 'acct_selfhosted_primary');
+  final setupOrganization = TextEditingController(text: 'My organization');
+  final setupProject = TextEditingController(text: 'default');
+  final setupOwner = TextEditingController(text: 'Owner');
 
   List<Map<String, dynamic>> approvals = const [];
   List<Map<String, dynamic>> edges = const [];
@@ -73,11 +77,13 @@ class _ControlHomeState extends State<ControlHome> {
   List<Map<String, dynamic>> rotations = const [];
   List<Map<String, dynamic>> securityAlerts = const [];
   Map<String, dynamic>? simulation;
+  Map<String, dynamic>? systemStatus;
   int? policyVersion;
   bool busy = false;
   bool connected = false;
   bool deviceBound = false;
   String? error;
+  String? notice;
 
   Map<String, String> get headers => {
         'authorization': 'Bearer ${token.text}',
@@ -158,6 +164,7 @@ class _ControlHomeState extends State<ControlHome> {
         getJson('$projectPrefix/credential-leases?limit=100'),
         getJson('$projectPrefix/connection-posture'),
         getJson('$projectPrefix/credential-rotations'),
+        getJson('/v1/system/status'),
       ];
       if (agent.text.isNotEmpty) {
         requests.add(getJson(
@@ -174,15 +181,62 @@ class _ControlHomeState extends State<ControlHome> {
         credentialLeases = _maps(results[5]['leases']);
         connectionPostures = _maps(results[6]['postures']);
         rotations = _maps(results[7]['rotations']);
-        if (results.length > 8) {
-          permissions = _maps(results[8]['permissions']);
-          policyVersion = results[8]['policy_version'] as int?;
+        systemStatus = results[8];
+        if (results.length > 9) {
+          permissions = _maps(results[9]['permissions']);
+          policyVersion = results[9]['policy_version'] as int?;
         }
         connected = true;
       });
     } catch (_) {
       setState(() => error =
           'Unable to load the control plane. Check identity, tenant IDs, and network.');
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> bootstrapSelfHostedOwner() async {
+    if (token.text.length < 32 || !cloud.text.startsWith('https://')) {
+      setState(() => error =
+          'Enter the HTTPS Control Plane URL and bootstrap credential first.');
+      return;
+    }
+    if ([setupAccount, setupOrganization, setupProject, setupOwner]
+        .any((controller) => controller.text.trim().isEmpty)) {
+      setState(() => error = 'Complete all setup fields.');
+      return;
+    }
+    setState(() {
+      busy = true;
+      error = null;
+      notice = null;
+    });
+    try {
+      final result = await postJson('/v1/bootstrap', {
+        'account_id': setupAccount.text.trim(),
+        'organization_name': setupOrganization.text.trim(),
+        'project_name': setupProject.text.trim(),
+        'oidc_issuer': 'urn:leasegate:direct-operator',
+        'oidc_subject': 'owner',
+        'human_name': setupOwner.text.trim(),
+      });
+      final createdOrganization =
+          Map<String, dynamic>.from(result['organization'] as Map);
+      final createdProject = Map<String, dynamic>.from(result['project'] as Map);
+      final membership = Map<String, dynamic>.from(result['membership'] as Map);
+      setState(() {
+        organization.text = '${createdOrganization['id']}';
+        project.text = '${createdProject['id']}';
+        approver.text = '${membership['human_id']}';
+        notice =
+            'Owner workspace created. Save these routing IDs in the VPS configuration, then complete local Gateway enrollment with the host CLI.';
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() => error =
+            'Bootstrap failed. This deployment may already have an owner workspace.');
+      }
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -477,6 +531,10 @@ class _ControlHomeState extends State<ControlHome> {
       notionClientId,
       oauthRedirect,
       oidcIdToken,
+      setupAccount,
+      setupOrganization,
+      setupProject,
+      setupOwner,
     ]) {
       controller.dispose();
     }
@@ -518,6 +576,16 @@ class _ControlHomeState extends State<ControlHome> {
                     actions: [
                       TextButton(
                         onPressed: () => setState(() => error = null),
+                        child: const Text('Dismiss'),
+                      ),
+                    ],
+                  ),
+                if (notice != null)
+                  MaterialBanner(
+                    content: SelectableText(notice!),
+                    actions: [
+                      TextButton(
+                        onPressed: () => setState(() => notice = null),
                         child: const Text('Dismiss'),
                       ),
                     ],
@@ -565,6 +633,32 @@ class _ControlHomeState extends State<ControlHome> {
             ),
             childrenPadding: const EdgeInsets.all(16),
             children: [
+              if (organization.text.isEmpty || project.text.isEmpty) ...[
+                _heading(
+                  'First-run setup',
+                  'Creates the first owner workspace. Credentials remain in tab memory.',
+                ),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: [
+                    _field(setupAccount, 'Account ID'),
+                    _field(setupOrganization, 'Organization name'),
+                    _field(setupProject, 'Project name'),
+                    _field(setupOwner, 'Owner name'),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: FilledButton.tonalIcon(
+                    onPressed: busy ? null : bootstrapSelfHostedOwner,
+                    icon: const Icon(Icons.rocket_launch_outlined),
+                    label: const Text('Create owner workspace'),
+                  ),
+                ),
+                const Divider(height: 32),
+              ],
               Wrap(
                 spacing: 12,
                 runSpacing: 12,
@@ -948,6 +1042,9 @@ class _ControlHomeState extends State<ControlHome> {
       ]);
 
   Widget _operationsView() => _page([
+        _heading('Single-VPS host', _hostStatusSummary()),
+        _hostStatusCard(),
+        const SizedBox(height: 20),
         _heading('Pending approvals', '${approvals.length} waiting'),
         if (approvals.isEmpty)
           const Card(child: ListTile(title: Text('No pending approvals'))),
@@ -975,6 +1072,53 @@ class _ControlHomeState extends State<ControlHome> {
               ),
             )),
       ]);
+
+  String _hostStatusSummary() {
+    final status = systemStatus;
+    if (status == null || status['available'] != true) {
+      return 'Host snapshot is not available yet';
+    }
+    return status['healthy'] == true ? 'Healthy' : 'Operator attention required';
+  }
+
+  Widget _hostStatusCard() {
+    final status = systemStatus;
+    if (status == null || status['available'] != true) {
+      return const Card(
+        child: ListTile(
+          leading: Icon(Icons.hourglass_empty),
+          title: Text('Waiting for the host monitor'),
+          subtitle: Text('Run leasegate monitor on the VPS to publish a redacted snapshot.'),
+        ),
+      );
+    }
+    final services = status['services'] is Map
+        ? Map<String, dynamic>.from(status['services'] as Map)
+        : <String, dynamic>{};
+    final backup = status['backup'] is Map
+        ? Map<String, dynamic>.from(status['backup'] as Map)
+        : <String, dynamic>{};
+    final disk = status['disk'] is Map
+        ? Map<String, dynamic>.from(status['disk'] as Map)
+        : <String, dynamic>{};
+    final tls = status['tls'] is Map
+        ? Map<String, dynamic>.from(status['tls'] as Map)
+        : <String, dynamic>{};
+    final issues = _strings(status['issues']);
+    return Card(
+      child: ListTile(
+        leading: Icon(
+          status['healthy'] == true ? Icons.check_circle_outline : Icons.warning_amber,
+        ),
+        title: Text('Release ${status['release_id'] ?? 'unknown'} · ${services['running'] ?? 0}/${services['expected'] ?? 6} services'),
+        subtitle: Text(
+          'Disk ${disk['used_percent'] ?? '?'}% · backup age ${backup['age_seconds'] ?? -1}s · TLS ${tls['expiry_seconds'] ?? -1}s\n'
+          '${issues.isEmpty ? 'No reported issue' : 'Issues: ${issues.join(', ')}'} · ${status['generated_at'] ?? 'unknown time'}',
+        ),
+        isThreeLine: true,
+      ),
+    );
+  }
 
   Widget _heading(String title, String subtitle) => Padding(
         padding: const EdgeInsets.only(bottom: 8),

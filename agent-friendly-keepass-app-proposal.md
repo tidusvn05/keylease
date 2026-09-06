@@ -711,10 +711,11 @@ Lộ trình phải ship theo vertical slices, nhưng mọi phase dùng chung tar
 3. **Phase 2 — Connector hardening và LeaseGate Local Alpha:** productionize connectors theo usage, hoàn thiện refresh/health, budgets, policy UX và adversarial conformance.
 4. **Phase 3 — KeyLease Cloud + LeaseGate Edge/MCP Beta:** E2EE vault sync, organization/project, cloud control plane, signed policy distribution, remote approval, edge gateway và scoped MCP endpoint tối thiểu.
 5. **Phase 4 — Connector platform và policy UX:** OAuth connections, permission matrix, policy simulation, rate limits/budgets và connector SDK.
-6. **Phase 5 — Dynamic/managed credentials:** token exchange, AWS-style STS, SSH certificates, database leases, optional managed cloud gateway và sender-constrained tokens.
+6. **Phase 5 — Dynamic credentials:** token exchange, AWS-style STS, SSH certificates, database leases, self-hosted local Gateway và sender-constrained tokens.
 7. **Phase 6 — Enterprise và mobile:** iOS/Android approval app, SSO/SCIM, SIEM export, policy-as-code, HA, BYOK/HSM và self-hosted control plane.
 8. **Phase 7 — Single-VPS production readiness:** hardening, health/readiness, audit verification, backup/restore validation và operational release gate cho đúng một VPS; enterprise và HA được hoãn.
 9. **Phase 8 — Single-VPS operations và release automation:** pinned images, SBOM/provenance, migration dry-run, guarded upgrade/rollback, scheduled backup/monitoring và redacted diagnostics; enterprise/HA vẫn ngoài phạm vi.
+10. **Phase 9 — Single-VPS GA và onboarding:** unified lifecycle CLI, guarded first-run bootstrap, initial encrypted backup, read-only host-status dashboard và machine-readable acceptance report; không thêm managed cloud, enterprise hoặc HA.
 
 Mỗi phase có exit criteria độc lập; chi tiết phạm vi, dependency và phần phải thiết kế trước nằm trong phần **LeaseGate target architecture và phased delivery**.
 
@@ -1846,6 +1847,25 @@ Ship:
 Exit criteria: signed candidate pass dry-run, upgrade và rollback trên disposable
 state; timers được bật trên VPS; off-host backup verify thành công; soak test một
 VPS bảy ngày không có unresolved P0/P1. Enterprise/HA tiếp tục `EXCLUDED`.
+
+#### Phase 9 — Single-VPS GA và onboarding
+
+Ship:
+
+- Một host CLI thống nhất cho install, status, backup, upgrade, rollback,
+  diagnostics và acceptance.
+- Fresh installer tạo owner workspace, local agent/Edge, signed deny-all policy,
+  local vault và encrypted backup đầu tiên mà không in one-time credential.
+- First-run web form cho owner workspace; operator token chỉ nằm trong tab memory.
+- Redacted host snapshot qua read-only bind mount; Control Plane không được mount
+  Docker socket và snapshot stale phải fail closed.
+- systemd operations chạy bằng dedicated non-root operator.
+- Machine-readable acceptance report ghi rõ real-provider tests được skip.
+
+Exit criteria: một VPS sạch với DNS sẵn sàng cài được bằng một command; runtime,
+backup, monitor và timer checks pass; backup được chuyển và verify off-host;
+signed upgrade/rollback drill cùng soak gate của Phase 8 hoàn tất. Enterprise,
+HA, managed cloud và unsafe in-place root-key replacement tiếp tục `EXCLUDED`.
 
 ### Product metrics theo phase
 

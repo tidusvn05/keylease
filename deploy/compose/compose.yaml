@@ -46,10 +46,12 @@ services:
       KEYLEASE_DATABASE_URL_FILE: /run/leasegate-secrets/database_url
       KEYLEASE_ADMIN_TOKEN_FILE: /run/leasegate-secrets/admin_token
       KEYLEASE_CONTROL_SIGNING_KEY_FILE: /run/leasegate-secrets/control_signing_key
+      KEYLEASE_OPERATIONS_STATUS_FILE: /run/leasegate-ops/operations-status.json
       KEYLEASE_CLOUD_LISTEN: 0.0.0.0:8080
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       - ./secrets:/run/leasegate-secrets:ro
+      - ./.state:/run/leasegate-ops:ro
     networks: [control]
     read_only: true
     tmpfs: [/tmp]
