@@ -2,7 +2,7 @@
 
 KeyLease is a local-first encrypted vault and LeaseGate policy gateway for agents.
 This repository contains the Phase 0 contracts through the locally testable
-Phase 5 self-hosted beta from
+Phase 6 self-hosted enterprise/mobile beta from
 [`agent-friendly-keepass-app-proposal.md`](agent-friendly-keepass-app-proposal.md).
 Platform and live-provider release evidence is tracked separately and is not
 claimed complete from this Linux workspace.
@@ -68,6 +68,11 @@ profile. Its architecture and implementation evidence are in
 [`docs/phase-5/architecture-and-tech-stack.md`](docs/phase-5/architecture-and-tech-stack.md)
 and
 [`docs/phase-5/implementation-status.md`](docs/phase-5/implementation-status.md).
+
+Phase 6 keeps that ownership model and adds enterprise identity, device-bound
+mobile approval, policy-as-code, SIEM/compliance and HA coordination. See
+[`docs/phase-6/architecture-and-tech-stack.md`](docs/phase-6/architecture-and-tech-stack.md)
+and [`docs/phase-6/implementation-status.md`](docs/phase-6/implementation-status.md).
 
 For an Intel Mac (`x86_64`) build and release-acceptance walkthrough, see
 [`docs/macos-x86_64-build-test.md`](docs/macos-x86_64-build-test.md). The

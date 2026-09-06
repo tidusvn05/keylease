@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use chrono::{Duration, Utc};
-use keylease_cloud::CloudRepository;
+use keylease_cloud::{CloudRepository, SiemExporter};
 use std::{env, fs, path::Path, time::Duration as StdDuration};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -27,9 +27,29 @@ async fn main() -> Result<()> {
         .parse::<u64>()
         .context("invalid worker interval")?
         .clamp(1, 300);
-    info!(interval, "KeyLease Cloud worker started");
+    let holder_id = env::var("LEASEGATE_INSTANCE_ID")
+        .unwrap_or_else(|_| format!("worker-{}", uuid::Uuid::now_v7().simple()));
+    let siem_exporter = env::var("KEYLEASE_SIEM_SECRETS_FILE")
+        .ok()
+        .map(|path| SiemExporter::from_file(Path::new(&path)))
+        .transpose()
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    info!(interval, %holder_id, siem_enabled = siem_exporter.is_some(), "KeyLease Cloud worker started");
     loop {
         let now = Utc::now();
+        let leader = repository
+            .acquire_worker_lease(
+                "control-plane-maintenance",
+                &holder_id,
+                now,
+                Duration::seconds((interval.saturating_mul(3)).clamp(15, 300) as i64),
+            )
+            .await
+            .unwrap_or(false);
+        if !leader {
+            tokio::time::sleep(StdDuration::from_secs(interval)).await;
+            continue;
+        }
         match repository
             .mark_stale_edges_offline(now - Duration::minutes(2))
             .await
@@ -52,6 +72,51 @@ async fn main() -> Result<()> {
             .await
         {
             warn!(error = %error, "connection posture/expiry alert sweep failed");
+        }
+        if let Err(error) = repository.expire_access_reviews(now).await {
+            warn!(error = %error, "access review expiry sweep failed");
+        }
+        if let Err(error) = repository.sweep_retention(now).await {
+            warn!(error = %error, "retention sweep failed");
+        }
+        if let Err(error) = repository.sweep_security_alerts(now).await {
+            warn!(error = %error, "security alert projection failed");
+        }
+        if let Some(exporter) = &siem_exporter {
+            match repository.all_enabled_siem_destinations().await {
+                Ok(destinations) => {
+                    for destination in destinations {
+                        let batch = match repository.pending_siem_batch(&destination, 250).await {
+                            Ok(batch) => batch,
+                            Err(error) => {
+                                warn!(destination_id = %destination.destination_id, error = %error, "SIEM batch query failed");
+                                continue;
+                            }
+                        };
+                        if batch.events.is_empty() {
+                            continue;
+                        }
+                        match exporter.export(&destination, &batch).await {
+                            Ok(()) => {
+                                if let Err(error) = repository
+                                    .acknowledge_siem_batch(
+                                        &destination.destination_id,
+                                        batch.after,
+                                        batch.cursor,
+                                    )
+                                    .await
+                                {
+                                    warn!(destination_id = %destination.destination_id, error = %error, "SIEM cursor acknowledgement failed");
+                                }
+                            }
+                            Err(error) => {
+                                warn!(destination_id = %destination.destination_id, error = %error, "SIEM delivery failed")
+                            }
+                        }
+                    }
+                }
+                Err(error) => warn!(error = %error, "SIEM destination query failed"),
+            }
         }
         if let Err(error) = repository.dispatch_outbox_batch(100).await {
             warn!(error = %error, "outbox dispatch failed");

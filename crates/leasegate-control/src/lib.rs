@@ -1,5 +1,9 @@
 //! Versioned contracts shared by KeyLease Cloud and LeaseGate Edge.
 
+mod enterprise;
+
+pub use enterprise::*;
+
 use chrono::{DateTime, Utc};
 use keylease_core::{
     AccountId, AgentId, ApprovalId, ApprovalSemanticSummary, AuditEvent, ConnectionHealth,
@@ -38,6 +42,8 @@ pub struct Project {
 pub enum MembershipRole {
     Owner,
     Admin,
+    SecurityAdmin,
+    Operator,
     Approver,
     Member,
     Auditor,

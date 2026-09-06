@@ -220,6 +220,7 @@ pub fn router(state: CloudApiState) -> Router {
             "/v1/organizations/{organization}/projects/{project}/credential-rotations/{rotation}/transition",
             post(transition_rotation),
         )
+        .merge(crate::enterprise_api::router())
         .layer(DefaultBodyLimit::max(maximum))
         .with_state(state)
 }
@@ -1622,7 +1623,7 @@ async fn find_manifest(
     Ok(entry.package.payload.manifest)
 }
 
-fn authorize(state: &CloudApiState, headers: &HeaderMap) -> ApiResult<()> {
+pub(crate) fn authorize(state: &CloudApiState, headers: &HeaderMap) -> ApiResult<()> {
     let presented = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -1655,7 +1656,7 @@ async fn authorize_edge(
         .map_err(ApiError)
 }
 
-fn bearer(headers: &HeaderMap) -> ApiResult<&str> {
+pub(crate) fn bearer(headers: &HeaderMap) -> ApiResult<&str> {
     headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -1667,10 +1668,10 @@ fn bearer(headers: &HeaderMap) -> ApiResult<&str> {
         })
 }
 
-type ApiResult<T> = std::result::Result<T, ApiError>;
+pub(crate) type ApiResult<T> = std::result::Result<T, ApiError>;
 
 #[derive(Debug)]
-struct ApiError(KeyLeaseError);
+pub(crate) struct ApiError(pub(crate) KeyLeaseError);
 
 impl From<KeyLeaseError> for ApiError {
     fn from(value: KeyLeaseError) -> Self {

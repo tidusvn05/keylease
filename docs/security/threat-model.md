@@ -1,4 +1,4 @@
-# KeyLease and LeaseGate threat model (Phase 0)
+# KeyLease and LeaseGate threat model (through Phase 6 beta)
 
 Status: accepted for the local MVP. This document is an engineering baseline,
 not an external security review.
@@ -23,7 +23,11 @@ never fall back when the local Gateway is unavailable.
 | Prompt injection in provider content | Content is marked untrusted; policy is deterministic and connector data cannot change grants | An authorized agent may still misuse data within its granted task |
 | Confused deputy | Identity/delegation, connection, canonical resource, action and material arguments are bound into every decision and approval | Same-UID malware requires process/user isolation outside KeyLease |
 | Lease-token theft | Tokens are random, stored only as SHA-256 hashes, short-lived, max-use and revocable; default debug output is redacted | MVP bearer tokens can be replayed before revocation |
-| Dynamic-credential theft | Policy/backend TTL ceilings, one-response delivery, no-store HTTP, encrypted local handles, upstream expiry; SSH certificate is bound to the caller public key | AWS STS and OAuth bearer material can be replayed until upstream expiry; DPoP/mTLS remain disabled |
+| Dynamic-credential theft | Policy/backend TTL ceilings, one-response delivery, no-store HTTP, encrypted local handles and upstream expiry; SSH is public-key bound; OAuth DPoP requires a verified Ed25519 proof and matching provider `cnf.jkt` | AWS STS and non-DPoP OAuth bearer material can be replayed until upstream expiry; mTLS-bound token delivery is not enabled |
+| Stolen mobile session | Private device key stays in platform secure storage, biometric gates signing, challenge is one-use/two-minute and signed sessions expire after five minutes | A fully compromised unlocked mobile OS is outside the boundary |
+| Forged enterprise identity | Exact OIDC issuer/audience/signature/expiry/subject validation against bounded HTTPS JWKS; SCIM token is digest-only and cannot grant privileged roles | IdP compromise and deployment-specific browser authorization flow remain external trust dependencies |
+| Audit/SIEM tampering | Per-project hash chain, signed compliance evidence, HMAC-signed HTTPS SIEM batches and optimistic delivery cursor | Database owner can delete both events and head; external anchoring is still needed for independent non-repudiation |
+| Split-brain workers | Renewable PostgreSQL leader lease gates maintenance, retention and SIEM delivery | PostgreSQL availability/consensus is an operator responsibility |
 | Malicious/buggy connector | Typed schemas, canonicalization before authorization, outbound host allowlists, time/size limits and shared conformance tests | Provider compromise is not prevented |
 | SSRF/DNS rebinding | Built-ins use fixed HTTPS origins; custom URLs are rejected; redirects are disabled | Resolver/runtime hardening remains platform-dependent |
 | Replay/retry | Idempotency key plus vault-keyed canonical request digest; approval consumption and lease issue are atomic; transactional lease reservation; provider idempotency where available | A provider without idempotency can have an ambiguous result after a process crash |
@@ -56,7 +60,7 @@ never fall back when the local Gateway is unavailable.
 
 The beta does not defend against a fully compromised unlocked host, supply-chain
 compromise, malicious kernel, physical memory extraction, or a user granting an
-over-broad policy. Hardware-backed unlock, cloud recovery, DPoP/mTLS
-sender-constrained OAuth tokens and sandboxed third-party connectors remain
-later-phase controls. SSH certificate public-key possession is the first
-supported sender-constrained dynamic credential.
+over-broad policy. Hardware-backed unlock, vendor cloud recovery, mTLS
+sender-constrained OAuth token delivery and sandboxed third-party connectors
+remain outside this beta. SSH public-key possession and verified OAuth DPoP are
+the supported sender-constrained dynamic credential paths.

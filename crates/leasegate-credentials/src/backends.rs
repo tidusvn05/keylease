@@ -5,6 +5,7 @@ use crate::{
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, SecondsFormat, Utc};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use keylease_core::{CredentialLeaseId, KeyLeaseError, Result};
 use rand::RngCore;
 use reqwest::Client;
@@ -12,7 +13,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     time::Duration as StdDuration,
@@ -214,6 +215,7 @@ pub struct OAuthTokenExchangeConfig {
 pub struct OAuthTokenExchangeBackend {
     config: OAuthTokenExchangeConfig,
     http: Client,
+    dpop_replay: tokio::sync::Mutex<BTreeMap<String, i64>>,
 }
 
 impl std::fmt::Debug for OAuthTokenExchangeBackend {
@@ -261,7 +263,11 @@ impl OAuthTokenExchangeBackend {
             .map_err(|_| KeyLeaseError::InvalidRequest {
                 reason: "cannot construct OAuth token client".into(),
             })?;
-        Ok(Self { config, http })
+        Ok(Self {
+            config,
+            http,
+            dpop_replay: tokio::sync::Mutex::new(BTreeMap::new()),
+        })
     }
 }
 
@@ -318,12 +324,24 @@ impl CredentialBackend for OAuthTokenExchangeBackend {
         }
         if request.claims.contains_key("dpop_jkt") || request.claims.contains_key("mtls_thumbprint")
         {
-            // Never advertise sender constraint by merely copying a thumbprint.
-            // A future backend must generate the proof and verify provider
-            // confirmation before enabling RFC 9449/8705.
             return Err(KeyLeaseError::Denied {
-                reason: "this OAuth backend does not implement cryptographic sender binding".into(),
+                reason: "sender binding cannot be asserted with an unverified thumbprint".into(),
             });
+        }
+        let dpop = request
+            .claims
+            .get("dpop_proof")
+            .map(|proof| verify_dpop_proof(proof, &self.config.token_endpoint, now))
+            .transpose()?;
+        if let Some(binding) = &dpop {
+            let replay_key = format!("{}:{}", binding.jkt, binding.jti);
+            let mut cache = self.dpop_replay.lock().await;
+            cache.retain(|_, observed_at| *observed_at >= now.timestamp() - 120);
+            if cache.len() >= 4096 || cache.insert(replay_key, binding.iat).is_some() {
+                return Err(KeyLeaseError::Denied {
+                    reason: "DPoP proof replay detected".into(),
+                });
+            }
         }
         let subject_token = read_secret_file(&self.config.subject_token_file, 256 * 1024)?;
         let mut form = vec![
@@ -347,7 +365,7 @@ impl CredentialBackend for OAuthTokenExchangeBackend {
         if let Some(secret) = &client_secret {
             form.push(("client_secret", secret.to_string()));
         }
-        let response = self
+        let mut outbound = self
             .http
             .post(self.config.token_endpoint.clone())
             .header(
@@ -356,7 +374,11 @@ impl CredentialBackend for OAuthTokenExchangeBackend {
             )
             .body(form_body(
                 form.iter().map(|(key, value)| (*key, value.as_str())),
-            ))
+            ));
+        if let Some(proof) = request.claims.get("dpop_proof") {
+            outbound = outbound.header("DPoP", proof);
+        }
+        let response = outbound
             .send()
             .await
             .map_err(|_| KeyLeaseError::ConnectorUnavailable { retryable: true })?;
@@ -385,6 +407,23 @@ impl CredentialBackend for OAuthTokenExchangeBackend {
                 reason: "OAuth provider returned an already-expired token".into(),
             });
         }
+        if let Some(expected) = &dpop {
+            if token
+                .cnf
+                .as_ref()
+                .map(|confirmation| confirmation.jkt.as_str())
+                != Some(expected.jkt.as_str())
+                || !token.token_type.eq_ignore_ascii_case("dpop")
+            {
+                return Err(KeyLeaseError::Denied {
+                    reason: "OAuth provider did not confirm the verified DPoP key".into(),
+                });
+            }
+        } else if token.cnf.is_some() {
+            return Err(KeyLeaseError::Denied {
+                reason: "OAuth provider returned an unexpected sender constraint".into(),
+            });
+        }
         Ok(BackendIssue {
             credential: CredentialMaterial::OAuth {
                 access_token: token.access_token,
@@ -394,7 +433,9 @@ impl CredentialBackend for OAuthTokenExchangeBackend {
             },
             revocation_handle: None,
             expires_at: now + chrono::Duration::seconds(expires_in as i64),
-            sender_constraint: SenderConstraint::None,
+            sender_constraint: dpop
+                .map(|binding| SenderConstraint::Dpop { jkt: binding.jkt })
+                .unwrap_or(SenderConstraint::None),
             renewable: false,
         })
     }
@@ -411,6 +452,120 @@ struct TokenExchangeResponse {
     issued_token_type: Option<String>,
     expires_in: Option<u64>,
     scope: Option<String>,
+    cnf: Option<TokenConfirmation>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TokenConfirmation {
+    jkt: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DpopHeader {
+    typ: String,
+    alg: String,
+    jwk: DpopJwk,
+}
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+struct DpopJwk {
+    kty: String,
+    crv: String,
+    x: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DpopClaims {
+    htm: String,
+    htu: String,
+    iat: i64,
+    jti: String,
+}
+
+struct VerifiedDpop {
+    jkt: String,
+    jti: String,
+    iat: i64,
+}
+
+fn verify_dpop_proof(proof: &str, endpoint: &Url, now: DateTime<Utc>) -> Result<VerifiedDpop> {
+    if proof.len() > 16 * 1024 {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "DPoP proof is too large".into(),
+        });
+    }
+    let parts = proof.split('.').collect::<Vec<_>>();
+    if parts.len() != 3 {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "invalid DPoP compact JWS".into(),
+        });
+    }
+    let header: DpopHeader =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[0]).map_err(|_| {
+            KeyLeaseError::InvalidRequest {
+                reason: "invalid DPoP header".into(),
+            }
+        })?)
+        .map_err(|_| KeyLeaseError::InvalidRequest {
+            reason: "invalid DPoP header".into(),
+        })?;
+    let claims: DpopClaims =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).map_err(|_| {
+            KeyLeaseError::InvalidRequest {
+                reason: "invalid DPoP claims".into(),
+            }
+        })?)
+        .map_err(|_| KeyLeaseError::InvalidRequest {
+            reason: "invalid DPoP claims".into(),
+        })?;
+    if header.typ != "dpop+jwt"
+        || header.alg != "EdDSA"
+        || header.jwk.kty != "OKP"
+        || header.jwk.crv != "Ed25519"
+        || !claims.htm.eq_ignore_ascii_case("POST")
+        || claims.htu != endpoint.as_str()
+        || (claims.iat - now.timestamp()).abs() > 60
+        || claims.jti.is_empty()
+        || claims.jti.len() > 256
+    {
+        return Err(KeyLeaseError::Denied {
+            reason: "DPoP proof binding is invalid".into(),
+        });
+    }
+    let public: [u8; 32] = URL_SAFE_NO_PAD
+        .decode(&header.jwk.x)
+        .map_err(|_| KeyLeaseError::InvalidRequest {
+            reason: "invalid DPoP public key".into(),
+        })?
+        .try_into()
+        .map_err(|_| KeyLeaseError::InvalidRequest {
+            reason: "invalid DPoP public key length".into(),
+        })?;
+    let signature: [u8; 64] = URL_SAFE_NO_PAD
+        .decode(parts[2])
+        .map_err(|_| KeyLeaseError::InvalidRequest {
+            reason: "invalid DPoP signature".into(),
+        })?
+        .try_into()
+        .map_err(|_| KeyLeaseError::InvalidRequest {
+            reason: "invalid DPoP signature length".into(),
+        })?;
+    let signing_input = format!("{}.{}", parts[0], parts[1]);
+    VerifyingKey::from_bytes(&public)
+        .map_err(|_| KeyLeaseError::InvalidRequest {
+            reason: "invalid DPoP public key".into(),
+        })?
+        .verify(signing_input.as_bytes(), &Signature::from_bytes(&signature))
+        .map_err(|_| KeyLeaseError::Denied {
+            reason: "DPoP signature verification failed".into(),
+        })?;
+    let canonical =
+        serde_json_canonicalizer::to_vec(&header.jwk).map_err(|_| KeyLeaseError::Storage)?;
+    Ok(VerifiedDpop {
+        jkt: URL_SAFE_NO_PAD.encode(Sha256::digest(canonical)),
+        jti: claims.jti,
+        iat: claims.iat,
+    })
 }
 
 #[derive(Debug, Clone)]

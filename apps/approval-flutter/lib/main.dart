@@ -1,8 +1,12 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:cryptography/cryptography.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
+import 'package:local_auth/local_auth.dart';
 
 void main() => runApp(const LeaseGateControlApp());
 
@@ -32,6 +36,7 @@ class ControlHome extends StatefulWidget {
 }
 
 class _ControlHomeState extends State<ControlHome> {
+  static const secureStorage = FlutterSecureStorage();
   final token = TextEditingController();
   final cloud = TextEditingController(
     text: const String.fromEnvironment('KEYLEASE_CLOUD_URL'),
@@ -55,6 +60,7 @@ class _ControlHomeState extends State<ControlHome> {
   final auditAction = TextEditingController();
   final notionClientId = TextEditingController();
   final oauthRedirect = TextEditingController();
+  final oidcIdToken = TextEditingController();
 
   List<Map<String, dynamic>> approvals = const [];
   List<Map<String, dynamic>> edges = const [];
@@ -65,10 +71,12 @@ class _ControlHomeState extends State<ControlHome> {
   List<Map<String, dynamic>> credentialLeases = const [];
   List<Map<String, dynamic>> connectionPostures = const [];
   List<Map<String, dynamic>> rotations = const [];
+  List<Map<String, dynamic>> securityAlerts = const [];
   Map<String, dynamic>? simulation;
   int? policyVersion;
   bool busy = false;
   bool connected = false;
+  bool deviceBound = false;
   String? error;
 
   Map<String, String> get headers => {
@@ -127,6 +135,18 @@ class _ControlHomeState extends State<ControlHome> {
       error = null;
     });
     try {
+      if (deviceBound) {
+        final results = await Future.wait([
+          getJson('/v1/mobile${projectPrefix.substring(3)}/approvals?limit=100'),
+          getJson('/v1/mobile${projectPrefix.substring(3)}/security-alerts?limit=100'),
+        ]);
+        setState(() {
+          approvals = _maps(results[0]['approvals']);
+          securityAlerts = _maps(results[1]['alerts']);
+          connected = true;
+        });
+        return;
+      }
       final requests = <Future<Map<String, dynamic>>>[
         getJson('$projectPrefix/approvals?limit=100'),
         getJson('$projectPrefix/edges'),
@@ -175,7 +195,7 @@ class _ControlHomeState extends State<ControlHome> {
     await _operation(() async {
       final approvalId = Uri.encodeComponent('${approval['approval_id']}');
       await postJson(
-        '/v1/organizations/${Uri.encodeComponent(organization.text)}/approvals/$approvalId/decision',
+        '${deviceBound ? '/v1/mobile' : '/v1'}/organizations/${Uri.encodeComponent(organization.text)}/approvals/$approvalId/decision',
         {
           'schema_version': 1,
           'decision': approve ? 'approved' : 'denied',
@@ -340,6 +360,88 @@ class _ControlHomeState extends State<ControlHome> {
     }, 'Rotation state changed concurrently or the transition is invalid.');
   }
 
+  Future<void> enrollAndAuthenticateDevice() async {
+    if (!validateConfiguration()) return;
+    setState(() { busy = true; error = null; });
+    try {
+      final algorithm = Ed25519();
+      var deviceId = await secureStorage.read(key: 'leasegate_device_id');
+      var privateKey = await secureStorage.read(key: 'leasegate_device_private');
+      var publicKey = await secureStorage.read(key: 'leasegate_device_public');
+      if (deviceId == null || privateKey == null || publicKey == null) {
+        final pair = await algorithm.newKeyPair();
+        final data = await pair.extract();
+        final random = Random.secure();
+        deviceId = 'device_${List<int>.generate(16, (_) => random.nextInt(256)).map((value) => value.toRadixString(16).padLeft(2, '0')).join()}';
+        privateKey = base64UrlEncode(data.bytes).replaceAll('=', '');
+        publicKey = base64UrlEncode(data.publicKey.bytes).replaceAll('=', '');
+        await postJson('/v1/organizations/${Uri.encodeComponent(organization.text)}/operator-devices', {
+          'device_id': deviceId,
+          'human_id': approver.text,
+          'platform': _platformName(),
+          'display_name': 'LeaseGate approval device',
+          'verifying_key_base64': publicKey,
+          'push_token': null,
+        });
+        await secureStorage.write(key: 'leasegate_device_id', value: deviceId);
+        await secureStorage.write(key: 'leasegate_device_private', value: privateKey);
+        await secureStorage.write(key: 'leasegate_device_public', value: publicKey);
+      }
+      if (!kIsWeb) {
+        final authenticated = await LocalAuthentication().authenticate(
+          localizedReason: 'Authenticate to access LeaseGate approvals',
+        );
+        if (!authenticated) throw const FormatException('Biometric authentication failed.');
+      }
+      final challengeResponse = await postJson(
+        '/v1/organizations/${Uri.encodeComponent(organization.text)}/operator-devices/${Uri.encodeComponent(deviceId)}/challenge',
+        const {},
+      );
+      final challenge = Map<String, dynamic>.from(challengeResponse['challenge'] as Map);
+      final payload = base64Url.decode(base64Url.normalize('${challengeResponse['signing_payload_base64']}'));
+      final keyPair = SimpleKeyPairData(
+        base64Url.decode(base64Url.normalize(privateKey)),
+        publicKey: SimplePublicKey(
+          base64Url.decode(base64Url.normalize(publicKey)),
+          type: KeyPairType.ed25519,
+        ),
+        type: KeyPairType.ed25519,
+      );
+      final signature = await algorithm.sign(payload, keyPair: keyPair);
+      final verified = await postJson(
+        '/v1/organizations/${Uri.encodeComponent(organization.text)}/operator-devices/challenges/${Uri.encodeComponent('${challenge['challenge_id']}')}/verify',
+        {
+          'signature_base64': base64UrlEncode(signature.bytes).replaceAll('=', ''),
+          'id_token': oidcIdToken.text.trim().isEmpty ? null : oidcIdToken.text.trim(),
+        },
+      );
+      token.text = '${verified['access_token']}';
+      setState(() { deviceBound = true; connected = false; });
+      await refresh();
+    } catch (_) {
+      if (mounted) setState(() => error = 'Device enrollment or biometric authentication failed.');
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  String _platformName() {
+    if (kIsWeb) return 'web';
+    return switch (defaultTargetPlatform) {
+      TargetPlatform.iOS => 'ios',
+      TargetPlatform.android => 'android',
+      _ => 'web',
+    };
+  }
+
+  Future<void> acknowledgeAlert(Map<String, dynamic> alert) async {
+    await _operation(() async {
+      final alertId = Uri.encodeComponent('${alert['alert_id']}');
+      await postJson('/v1/mobile${projectPrefix.substring(3)}/security-alerts/$alertId/acknowledge', const {});
+      await refresh();
+    }, 'The alert could not be acknowledged with this device role.');
+  }
+
   Future<void> _operation(
     Future<void> Function() operation,
     String failure,
@@ -374,6 +476,7 @@ class _ControlHomeState extends State<ControlHome> {
       auditAction,
       notionClientId,
       oauthRedirect,
+      oidcIdToken,
     ]) {
       controller.dispose();
     }
@@ -409,7 +512,6 @@ class _ControlHomeState extends State<ControlHome> {
           body: SafeArea(
             child: Column(
               children: [
-                if (!connected) _configurationCard(),
                 if (error != null)
                   MaterialBanner(
                     content: Text(error!),
@@ -422,17 +524,19 @@ class _ControlHomeState extends State<ControlHome> {
                   ),
                 if (busy) const LinearProgressIndicator(),
                 Expanded(
-                  child: TabBarView(
-                    children: [
-                      _accessView(),
-                      _simulatorView(),
-                      _proposalView(),
-                      _connectionsView(),
-                      _credentialsView(),
-                      _auditView(),
-                      _operationsView(),
-                    ],
-                  ),
+                  child: !connected
+                      ? SingleChildScrollView(child: _configurationCard())
+                      : TabBarView(
+                          children: [
+                            _accessView(),
+                            _simulatorView(),
+                            _proposalView(),
+                            _connectionsView(),
+                            _credentialsView(),
+                            _auditView(),
+                            _operationsView(),
+                          ],
+                        ),
                 ),
               ],
             ),
@@ -473,6 +577,18 @@ class _ControlHomeState extends State<ControlHome> {
                   SizedBox(
                     width: 320,
                     child: TextField(
+                      controller: oidcIdToken,
+                      obscureText: true,
+                      enableSuggestions: false,
+                      autocorrect: false,
+                      decoration: const InputDecoration(
+                        labelText: 'OIDC ID token (when SSO is enabled)',
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 320,
+                    child: TextField(
                       controller: token,
                       obscureText: true,
                       enableSuggestions: false,
@@ -490,6 +606,15 @@ class _ControlHomeState extends State<ControlHome> {
                   onPressed: busy ? null : refresh,
                   icon: const Icon(Icons.lock_open),
                   label: const Text('Connect'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton.tonalIcon(
+                  onPressed: busy ? null : enrollAndAuthenticateDevice,
+                  icon: const Icon(Icons.fingerprint),
+                  label: const Text('Enroll and use device-bound session'),
                 ),
               ),
             ],
@@ -832,6 +957,23 @@ class _ControlHomeState extends State<ControlHome> {
         if (edges.isEmpty)
           const Card(child: ListTile(title: Text('No enrolled Edge'))),
         ...edges.map(_edgeCard),
+        const SizedBox(height: 20),
+        _heading('Security alerts', '${securityAlerts.where((alert) => alert['acknowledged_at'] == null).length} open'),
+        if (securityAlerts.isEmpty)
+          const Card(child: ListTile(title: Text('No security alerts'))),
+        ...securityAlerts.map((alert) => Card(
+              child: ListTile(
+                leading: Icon(alert['severity'] == 'critical' ? Icons.gpp_bad : Icons.warning_amber),
+                title: Text('${alert['code']}'),
+                subtitle: Text('${alert['aggregate_id']} · ${alert['created_at']}'),
+                trailing: alert['acknowledged_at'] == null
+                    ? FilledButton.tonal(
+                        onPressed: busy ? null : () => acknowledgeAlert(alert),
+                        child: const Text('Acknowledge'),
+                      )
+                    : const Chip(label: Text('Acknowledged')),
+              ),
+            )),
       ]);
 
   Widget _heading(String title, String subtitle) => Padding(

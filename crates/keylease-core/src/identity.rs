@@ -59,6 +59,14 @@ opaque_id!(SyncMutationId, "mutation_");
 opaque_id!(PolicyBundleId, "policy_bundle_");
 opaque_id!(PolicyProposalId, "policy_proposal_");
 opaque_id!(ConnectorPublisherId, "connector_publisher_");
+opaque_id!(AccessReviewId, "access_review_");
+opaque_id!(DeviceChallengeId, "device_challenge_");
+opaque_id!(OperatorSessionId, "operator_session_");
+opaque_id!(PolicyReleaseId, "policy_release_");
+opaque_id!(SecurityAlertId, "security_alert_");
+opaque_id!(SiemDestinationId, "siem_destination_");
+opaque_id!(WorkloadIdentityId, "workload_identity_");
+opaque_id!(KeyProviderId, "key_provider_");
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

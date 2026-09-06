@@ -5,7 +5,8 @@ use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use keylease_core::{KeyLeaseError, OrganizationId, ProjectId, Result};
 use leasegate_control::{
-    ApprovalReceiptPayload, PolicyBundlePayload, SignedApprovalReceipt, SignedPolicyBundle,
+    ApprovalReceiptPayload, ComplianceEvidence, OperatorSessionClaims, PolicyBundlePayload,
+    SignedApprovalReceipt, SignedComplianceEvidence, SignedOperatorSession, SignedPolicyBundle,
     SyncMutationEnvelope,
 };
 use rand::RngCore;
@@ -84,6 +85,34 @@ impl ControlSigner {
             signer_key_id: self.key_id.clone(),
             payload,
             payload_digest_sha256: hex(&Sha256::digest(&bytes)),
+            signature_base64: STANDARD_NO_PAD.encode(self.key.sign(&bytes).to_bytes()),
+        })
+    }
+
+    pub fn sign_operator_session(
+        &self,
+        claims: OperatorSessionClaims,
+    ) -> Result<SignedOperatorSession> {
+        let bytes = canonical_bytes(&claims)?;
+        Ok(SignedOperatorSession {
+            algorithm: ALGORITHM.into(),
+            signer_key_id: self.key_id.clone(),
+            claims,
+            claims_digest_sha256: hex(&Sha256::digest(&bytes)),
+            signature_base64: STANDARD_NO_PAD.encode(self.key.sign(&bytes).to_bytes()),
+        })
+    }
+
+    pub fn sign_compliance_evidence(
+        &self,
+        evidence: ComplianceEvidence,
+    ) -> Result<SignedComplianceEvidence> {
+        let bytes = canonical_bytes(&evidence)?;
+        Ok(SignedComplianceEvidence {
+            algorithm: ALGORITHM.into(),
+            signer_key_id: self.key_id.clone(),
+            evidence,
+            evidence_digest_sha256: hex(&Sha256::digest(&bytes)),
             signature_base64: STANDARD_NO_PAD.encode(self.key.sign(&bytes).to_bytes()),
         })
     }
@@ -201,6 +230,51 @@ pub fn verify_approval_receipt(
     Ok(())
 }
 
+pub fn verify_operator_session(
+    session: &SignedOperatorSession,
+    verifying_key_base64: &str,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    verify_signed_payload(
+        &session.algorithm,
+        &session.claims,
+        &session.claims_digest_sha256,
+        &session.signature_base64,
+        verifying_key_base64,
+    )?;
+    if session.claims.schema_version != leasegate_control::CONTROL_CONTRACT_VERSION
+        || session.claims.expires_at <= now
+        || session.claims.expires_at <= session.claims.issued_at
+        || session.claims.expires_at > session.claims.issued_at + chrono::Duration::minutes(15)
+    {
+        return Err(KeyLeaseError::Denied {
+            reason: "operator session is invalid or expired".into(),
+        });
+    }
+    Ok(())
+}
+
+pub fn verify_compliance_evidence(
+    artifact: &SignedComplianceEvidence,
+    verifying_key_base64: &str,
+) -> Result<()> {
+    verify_signed_payload(
+        &artifact.algorithm,
+        &artifact.evidence,
+        &artifact.evidence_digest_sha256,
+        &artifact.signature_base64,
+        verifying_key_base64,
+    )?;
+    if artifact.evidence.schema_version != leasegate_control::CONTROL_CONTRACT_VERSION
+        || artifact.evidence.period_end <= artifact.evidence.period_start
+    {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "invalid compliance evidence".into(),
+        });
+    }
+    Ok(())
+}
+
 pub fn verify_sync_mutation_signature(
     mutation: &SyncMutationEnvelope,
     verifying_key_base64: &str,
@@ -282,7 +356,8 @@ mod tests {
     use super::*;
     use chrono::Duration;
     use keylease_core::{AccountId, DeviceId, PolicyBundleId, SyncMutationId, VaultId};
-    use leasegate_control::CONTROL_CONTRACT_VERSION;
+    use leasegate_control::{CONTROL_CONTRACT_VERSION, ComplianceEvidence};
+    use std::collections::BTreeMap;
 
     fn payload(version: u64, previous: Option<String>) -> PolicyBundlePayload {
         PolicyBundlePayload {
@@ -349,5 +424,30 @@ mod tests {
         verify_sync_mutation_signature(&mutation, &signer.verifying_key_base64()).unwrap();
         mutation.object_id = "item_2".into();
         assert!(verify_sync_mutation_signature(&mutation, &signer.verifying_key_base64()).is_err());
+    }
+
+    #[test]
+    fn compliance_evidence_signature_detects_count_tampering() {
+        let signer = ControlSigner::generate("compliance-1").unwrap();
+        let now = Utc::now();
+        let mut artifact = signer
+            .sign_compliance_evidence(ComplianceEvidence {
+                schema_version: CONTROL_CONTRACT_VERSION,
+                organization_id: OrganizationId::new(),
+                project_id: ProjectId::new(),
+                period_start: now - Duration::days(1),
+                period_end: now,
+                generated_at: now,
+                audit_event_count: 10,
+                approval_count: 2,
+                denied_count: 1,
+                active_membership_count: 3,
+                audit_chain_head_sha256: Some("a".repeat(64)),
+                controls: BTreeMap::new(),
+            })
+            .unwrap();
+        verify_compliance_evidence(&artifact, &signer.verifying_key_base64()).unwrap();
+        artifact.evidence.audit_event_count += 1;
+        assert!(verify_compliance_evidence(&artifact, &signer.verifying_key_base64()).is_err());
     }
 }

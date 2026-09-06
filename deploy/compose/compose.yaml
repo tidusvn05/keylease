@@ -68,6 +68,8 @@ services:
     environment:
       KEYLEASE_DATABASE_URL_FILE: /run/leasegate-secrets/database_url
       KEYLEASE_WORKER_INTERVAL_SECONDS: 5
+      KEYLEASE_SIEM_SECRETS_FILE: /run/leasegate-secrets/siem-secrets.json
+      LEASEGATE_INSTANCE_ID: ${LEASEGATE_INSTANCE_ID:-worker-1}
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       - ./secrets:/run/leasegate-secrets:ro

@@ -74,7 +74,7 @@ pub enum SenderConstraint {
     None,
     /// SSH certificates are bound to possession of the matching private key.
     SshPublicKeySha256 { thumbprint: String },
-    /// Reserved for a backend that creates and verifies RFC 9449 proofs.
+    /// RFC 9449 proof and provider `cnf.jkt` were both verified by the Gateway.
     Dpop { jkt: String },
     /// Reserved for an upstream service that validates RFC 8705 binding.
     Mtls { certificate_sha256: String },

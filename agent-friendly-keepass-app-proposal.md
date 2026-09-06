@@ -1796,6 +1796,11 @@ Exit criteria: agent workflows trọng tâm không dùng long-lived downstream c
 
 #### Phase 6 — Enterprise và mobile
 
+> Quyết định phạm vi 2026-09-06: Phase 6 tiếp tục mô hình
+> `self_hosted/local_gateway`. Self-hosted Control Plane đã ship ở Phase 5;
+> Phase 6 tập trung hardening, enterprise identity, mobile approval,
+> policy-as-code, compliance và HA primitives. Không thêm vendor-managed path.
+
 Ship:
 
 - iOS/Android app cho vault, approval, revoke và security alerts.

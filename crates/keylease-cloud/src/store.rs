@@ -2101,12 +2101,31 @@ impl CloudRepository {
             .await
             .map_err(|_| KeyLeaseError::Storage)?;
         set_tenant(&mut tx, organization_id).await?;
+        sqlx::query("INSERT INTO audit_integrity_heads(project_id,organization_id,chain_digest_sha256,event_count,updated_at) VALUES($1,$2,$3,0,$4) ON CONFLICT(project_id) DO NOTHING")
+            .bind(&project_id.0).bind(&organization_id.0).bind("0".repeat(64)).bind(Utc::now())
+            .execute(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        let head = sqlx::query("SELECT chain_digest_sha256,event_count FROM audit_integrity_heads WHERE organization_id=$1 AND project_id=$2 FOR UPDATE")
+            .bind(&organization_id.0).bind(&project_id.0).fetch_one(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        let mut chain_digest: String = head
+            .try_get("chain_digest_sha256")
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let mut event_count: i64 = head
+            .try_get("event_count")
+            .map_err(|_| KeyLeaseError::Storage)?;
         for (offset, event) in batch.events.iter().enumerate() {
             let sequence = batch.first_sequence.saturating_add(offset as u64);
-            sqlx::query("INSERT INTO audit_event_index(edge_id,edge_sequence,organization_id,project_id,timestamp,request_id,agent_id,action,resource,decision,outcome,event_json,connection_id,policy_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(edge_id,edge_sequence) DO NOTHING")
-                .bind(&batch.edge_id.0).bind(sequence as i64).bind(&organization_id.0).bind(&project_id.0).bind(event.timestamp).bind(&event.request_id.0).bind(&event.agent_id.0).bind(&event.action).bind(&event.resource).bind(&event.decision).bind(&event.outcome).bind(serde_json::to_value(event).map_err(|_| KeyLeaseError::Storage)?).bind(event.connection_id.as_ref().map(|id| id.0.as_str())).bind(event.policy_version.map(|version| version as i64))
-                .execute(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+            let next_digest = audit_chain_digest(&chain_digest, &batch.edge_id, sequence, event)?;
+            let inserted: Option<bool> = sqlx::query_scalar("INSERT INTO audit_event_index(edge_id,edge_sequence,organization_id,project_id,timestamp,request_id,agent_id,action,resource,decision,outcome,event_json,connection_id,policy_version,chain_digest_sha256) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT(edge_id,edge_sequence) DO NOTHING RETURNING TRUE")
+                .bind(&batch.edge_id.0).bind(sequence as i64).bind(&organization_id.0).bind(&project_id.0).bind(event.timestamp).bind(&event.request_id.0).bind(&event.agent_id.0).bind(&event.action).bind(&event.resource).bind(&event.decision).bind(&event.outcome).bind(serde_json::to_value(event).map_err(|_| KeyLeaseError::Storage)?).bind(event.connection_id.as_ref().map(|id| id.0.as_str())).bind(event.policy_version.map(|version| version as i64)).bind(&next_digest)
+                .fetch_optional(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+            if inserted.is_some() {
+                chain_digest = next_digest;
+                event_count += 1;
+            }
         }
+        sqlx::query("UPDATE audit_integrity_heads SET chain_digest_sha256=$1,event_count=$2,updated_at=$3 WHERE organization_id=$4 AND project_id=$5")
+            .bind(&chain_digest).bind(event_count).bind(Utc::now()).bind(&organization_id.0).bind(&project_id.0)
+            .execute(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
         tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
         Ok(batch
             .first_sequence
@@ -2591,4 +2610,20 @@ fn digest(value: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+fn audit_chain_digest(
+    previous: &str,
+    edge_id: &EdgeId,
+    edge_sequence: u64,
+    event: &keylease_core::AuditEvent,
+) -> Result<String> {
+    let value = serde_json::json!({
+        "previous": previous,
+        "edge_id": edge_id,
+        "edge_sequence": edge_sequence,
+        "event": event,
+    });
+    let canonical = serde_json_canonicalizer::to_vec(&value).map_err(|_| KeyLeaseError::Storage)?;
+    Ok(digest(&canonical))
 }

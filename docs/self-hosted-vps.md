@@ -229,3 +229,44 @@ earlier if revocation state is stale or audit storage is unavailable.
 Upgrade one binary/image set at a time, run `cargo test --workspace` before the
 build, retain the prior image digest, and activate a policy with an appropriate
 `minimum_edge_version` only after Edge rollout.
+
+## 7. Phase 6 enterprise operations
+
+Configure OIDC with an exact issuer, audience and HTTPS JWKS URI through
+`/v1/organizations/{organization}/identity/oidc`. Create a short-lived SCIM
+token through `identity/scim-tokens`; its plaintext is returned once. The SCIM
+User subset is served at `/v1/scim/{organization}/Users`.
+
+The Flutter project now includes native `ios/` and `android/` targets. Device
+enrollment requires the bootstrap administrator credential once. Subsequent
+mobile approval uses an Ed25519 device proof, biometric authorization and a
+five-minute operator session. When OIDC is enabled, supply an ID token from the
+deployment's authorization-code/PKCE login flow.
+
+To publish a Git policy file:
+
+```sh
+export LEASEGATE_CLOUD_URL="https://${LEASEGATE_DOMAIN}/api"
+export LEASEGATE_ORGANIZATION_ID="org_..."
+export LEASEGATE_PROJECT_ID="project_..."
+export LEASEGATE_ADMIN_TOKEN_FILE="$PWD/secrets/admin_token"
+deploy/policy/release.sh deploy/policy/policy-release.example.json "git:COMMIT_SHA"
+```
+
+Configure a SIEM destination with `secret_ref: default`. The worker resolves
+that name through `secrets/siem-secrets.json`; the HMAC secret itself never
+enters PostgreSQL. SIEM endpoints must be HTTPS.
+
+Encrypted backup requires `age`:
+
+```sh
+export LEASEGATE_AGE_RECIPIENT='age1...'
+deploy/compose/backup.sh /encrypted/off-vps/path
+```
+
+Restore is intentionally guarded and replaces database/configuration state.
+Read `restore.sh` and use a disposable environment for the quarterly drill.
+For application-level HA, run multiple stateless Control Plane instances
+behind a load balancer and multiple workers with unique
+`LEASEGATE_INSTANCE_ID` values. PostgreSQL HA and the load balancer are
+operator-managed infrastructure.

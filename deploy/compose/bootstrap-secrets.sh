@@ -20,6 +20,7 @@ write_random_text "$secret_dir/postgres_password" "pg_"
 write_random_text "$secret_dir/admin_token" "kladmin_"
 write_random_text "$secret_dir/minio_user" "klminio_"
 write_random_text "$secret_dir/minio_password" "klminio_secret_"
+write_random_text "$secret_dir/siem_hmac_secret" "klsiem_"
 
 if [ ! -e "$secret_dir/control_signing_key" ]; then
   openssl rand -base64 32 | tr -d '\n=' > "$secret_dir/control_signing_key"
@@ -35,6 +36,9 @@ if [ ! -e "$secret_dir/database_url" ]; then
 fi
 if [ ! -e "$secret_dir/credential_backends.json" ]; then
   cp "$script_dir/credential-backends.example.json" "$secret_dir/credential_backends.json"
+fi
+if [ ! -e "$secret_dir/siem-secrets.json" ]; then
+  cp "$script_dir/siem-secrets.example.json" "$secret_dir/siem-secrets.json"
 fi
 
 chmod 600 "$secret_dir"/*

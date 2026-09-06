@@ -10,6 +10,9 @@ anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true
 chrono.workspace = true
+ed25519-dalek.workspace = true
+hmac.workspace = true
+jsonwebtoken.workspace = true
 keylease-core = { path = "../keylease-core" }
 leasegate-control = { path = "../leasegate-control" }
 leasegate-connector-sdk = { path = "../leasegate-connector-sdk" }
@@ -18,8 +21,10 @@ leasegate-credentials = { path = "../leasegate-credentials" }
 leasegate-policy = { path = "../leasegate-policy" }
 leasegate-policy-bundle = { path = "../leasegate-policy-bundle" }
 rand.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_json_canonicalizer.workspace = true
 sha2.workspace = true
 sqlx = { workspace = true, default-features = false }
 subtle.workspace = true

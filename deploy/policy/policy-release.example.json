@@ -1,0 +1,12 @@
+{
+  "created_by": "human_replace_me",
+  "canary_percent": 10,
+  "validity_seconds": 86400,
+  "minimum_edge_version": "0.1.0",
+  "offline": {
+    "allow_r0_r1": true,
+    "max_seconds": 300
+  },
+  "rollback_of": null,
+  "rules": []
+}
