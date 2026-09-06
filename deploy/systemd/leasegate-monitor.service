@@ -1,0 +1,13 @@
+[Unit]
+Description=LeaseGate single-VPS runtime and backup-age monitor
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/leasegate/operations.env
+WorkingDirectory=@LEASEGATE_ROOT@
+ExecStart=@LEASEGATE_ROOT@/deploy/operations/monitor.sh
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0022

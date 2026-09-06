@@ -1,5 +1,10 @@
 use anyhow::{Context, Result, bail};
-use axum::{Json, Router, http::StatusCode, response::IntoResponse, routing::get};
+use axum::{
+    Json, Router,
+    http::{StatusCode, header::CONTENT_TYPE},
+    response::IntoResponse,
+    routing::get,
+};
 use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
 use chrono::{Duration, Utc};
 use keylease_core::{AgentId, EdgeId, OrganizationId, ProjectId, WorkloadId};
@@ -230,6 +235,8 @@ async fn main() -> Result<()> {
     };
     let health_store = edge_store.clone();
     let health_connected = cloud_connected.clone();
+    let metrics_store = edge_store.clone();
+    let metrics_connected = cloud_connected.clone();
     let health_router = Router::new()
         .route(
             "/healthz",
@@ -246,6 +253,14 @@ async fn main() -> Result<()> {
                 let store = health_store.clone();
                 let connected = health_connected.clone();
                 async move { edge_readiness(store, connected).await }
+            }),
+        )
+        .route(
+            "/metrics",
+            get(move || {
+                let store = metrics_store.clone();
+                let connected = metrics_connected.clone();
+                async move { edge_metrics(store, connected).await }
             }),
         );
     let router = health_router
@@ -323,6 +338,39 @@ async fn local_healthcheck() -> Result<()> {
         bail!("Gateway is not ready")
     }
     Ok(())
+}
+
+async fn edge_metrics(
+    store: Arc<EdgeControlStore>,
+    cloud_connected: Arc<AtomicBool>,
+) -> impl IntoResponse {
+    let policy_active = u8::from(store.active_policy().ok().flatten().is_some());
+    let (spool_bytes, spool_maximum) = store
+        .audit_spool_status()
+        .map(|status| (status.encrypted_bytes, status.maximum_bytes))
+        .unwrap_or((0, 0));
+    let control_connected = u8::from(cloud_connected.load(Ordering::Acquire));
+    let body = format!(
+        concat!(
+            "# HELP leasegate_service_up Whether the Gateway process is serving requests.\n",
+            "# TYPE leasegate_service_up gauge\n",
+            "leasegate_service_up{{service=\"leasegate-edge\"}} 1\n",
+            "# HELP leasegate_control_connected Whether the Gateway currently reaches the Control Plane.\n",
+            "# TYPE leasegate_control_connected gauge\n",
+            "leasegate_control_connected {}\n",
+            "# HELP leasegate_policy_active Whether a verified policy is active.\n",
+            "# TYPE leasegate_policy_active gauge\n",
+            "leasegate_policy_active {}\n",
+            "# HELP leasegate_audit_spool_bytes Encrypted audit bytes waiting for upload.\n",
+            "# TYPE leasegate_audit_spool_bytes gauge\n",
+            "leasegate_audit_spool_bytes {}\n",
+            "# HELP leasegate_audit_spool_maximum_bytes Configured encrypted audit-spool ceiling.\n",
+            "# TYPE leasegate_audit_spool_maximum_bytes gauge\n",
+            "leasegate_audit_spool_maximum_bytes {}\n"
+        ),
+        control_connected, policy_active, spool_bytes, spool_maximum
+    );
+    ([(CONTENT_TYPE, "text/plain; version=0.0.4")], body)
 }
 
 fn required_env(name: &str) -> Result<String> {

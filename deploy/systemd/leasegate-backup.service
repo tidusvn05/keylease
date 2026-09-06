@@ -1,0 +1,13 @@
+[Unit]
+Description=LeaseGate encrypted single-VPS backup and verification
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/leasegate/operations.env
+WorkingDirectory=@LEASEGATE_ROOT@
+ExecStart=@LEASEGATE_ROOT@/deploy/compose/backup.sh ${LEASEGATE_BACKUP_DIR}
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077

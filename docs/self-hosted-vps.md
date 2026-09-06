@@ -296,3 +296,38 @@ a mode-0700 temporary directory, checks the PostgreSQL archive catalog and
 required config/Edge files, and does not replace running state. The restore
 script now applies the same archive-path and dump checks before stopping
 services.
+
+## 9. Phase 8 automated operations
+
+Phase 8 keeps the same one-VPS topology. Its release and operations checklist
+is `phase-8/single-vps-operations-and-release.md`.
+
+Use rootful Docker on the VPS so numeric ownership of mode-0600 bind-mounted
+secrets is preserved. The preparation check rejects rootless Docker.
+
+On the VPS, validate dependencies and prepare configuration without overwriting
+an existing `.env` or secret:
+
+```sh
+deploy/operations/prepare-host.sh --check
+deploy/operations/prepare-host.sh --prepare
+```
+
+Build releases on a trusted build host with Syft and, for signed releases,
+cosign. `build-release.sh` refuses a dirty Git tree and emits immutable image
+IDs rather than mutable tags. `upgrade.sh` verifies artifact checksums/signature,
+runs candidate migrations against a disposable PostgreSQL clone, takes an
+encrypted backup and only then changes the running containers.
+
+Install the supplied timers only after editing the mode-0600 operations file:
+
+```sh
+sudo deploy/systemd/install.sh /opt/leasegate --apply
+sudoedit /etc/leasegate/operations.env
+sudo systemctl enable --now leasegate-backup.timer leasegate-monitor.timer
+```
+
+The monitor writes node-exporter-compatible text metrics and can send a bounded
+status-code-only payload to an optional HTTPS webhook. `diagnostics.sh` never
+includes Compose secrets, `.env`, database dumps or vault files and replaces
+any potentially sensitive log line with a redaction marker.

@@ -2,7 +2,7 @@ name: leasegate
 
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
     restart: unless-stopped
     environment:
       POSTGRES_DB: leasegate
@@ -19,7 +19,7 @@ services:
     networks: [control]
 
   object-store:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     restart: unless-stopped
     command: server /data --console-address :9001
     environment:
@@ -31,6 +31,7 @@ services:
     networks: [control]
 
   control-plane:
+    image: ${LEASEGATE_CONTROL_IMAGE:-leasegate-control-plane:local}
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.cloud
@@ -60,6 +61,7 @@ services:
       start_period: 10s
 
   worker:
+    image: ${LEASEGATE_CONTROL_IMAGE:-leasegate-control-plane:local}
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.cloud
@@ -86,6 +88,7 @@ services:
     tmpfs: [/tmp]
 
   web:
+    image: ${LEASEGATE_WEB_IMAGE:-leasegate-web:local}
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.approval
@@ -110,6 +113,7 @@ services:
     networks: [control]
 
   gateway:
+    image: ${LEASEGATE_GATEWAY_IMAGE:-leasegate-gateway:local}
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.edge

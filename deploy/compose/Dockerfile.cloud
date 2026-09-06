@@ -1,9 +1,9 @@
-FROM rust:1.94-bookworm AS build
+FROM rust:1.94-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55 AS build
 WORKDIR /src
 COPY . .
 RUN cargo build --locked --release -p keylease-cloud
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
 ARG LEASEGATE_RUNTIME_UID=1000
 ARG LEASEGATE_RUNTIME_GID=1000
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*

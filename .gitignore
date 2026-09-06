@@ -9,3 +9,7 @@
 build/
 deploy/compose/.env
 deploy/compose/secrets/
+deploy/compose/backups/
+deploy/compose/.state/
+deploy/releases/
+deploy/diagnostics/

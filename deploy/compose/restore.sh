@@ -4,6 +4,7 @@ umask 077
 
 script_dir=$(dirname -- "$0")
 script_dir=$(cd "$script_dir" && pwd)
+env_file=${LEASEGATE_ENV_FILE:-"$script_dir/.env"}
 database_backup=${1:?Usage: restore.sh POSTGRES_DUMP_AGE CONFIG_TAR_AGE EDGE_TAR_AGE}
 config_backup=${2:?Usage: restore.sh POSTGRES_DUMP_AGE CONFIG_TAR_AGE EDGE_TAR_AGE}
 edge_backup=${3:?Usage: restore.sh POSTGRES_DUMP_AGE CONFIG_TAR_AGE EDGE_TAR_AGE}
@@ -14,6 +15,7 @@ if [ "$LEASEGATE_RESTORE_CONFIRM" != "replace-self-hosted-state" ]; then
   exit 2
 fi
 command -v age >/dev/null
+[ -f "$env_file" ] || { printf 'Missing environment file: %s\n' "$env_file" >&2; exit 1; }
 
 temporary_dir=$(mktemp -d)
 trap 'rm -rf "$temporary_dir"' EXIT HUP INT TERM
@@ -42,20 +44,20 @@ for required in ./edge.sqlite3 ./vault.sqlite3; do
     exit 1
   }
 done
-docker compose -f "$script_dir/compose.yaml" run --rm --no-deps --entrypoint pg_restore postgres \
+docker compose --env-file "$env_file" -f "$script_dir/compose.yaml" run --rm --no-deps --entrypoint pg_restore postgres \
   --list < "$temporary_dir/database.dump" >/dev/null
 
-docker compose -f "$script_dir/compose.yaml" stop control-plane worker gateway
+docker compose --env-file "$env_file" -f "$script_dir/compose.yaml" stop control-plane worker gateway
 tar -C "$script_dir" -xf "$temporary_dir/config.tar"
-docker compose -f "$script_dir/compose.yaml" run --rm --no-deps --entrypoint sh gateway \
+docker compose --env-file "$env_file" -f "$script_dir/compose.yaml" run --rm --no-deps --entrypoint sh gateway \
   -c 'find /var/lib/leasegate -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; tar -xf - -C /var/lib/leasegate' \
   < "$temporary_dir/edge.tar"
-docker compose -f "$script_dir/compose.yaml" up -d postgres
-docker compose -f "$script_dir/compose.yaml" exec -T postgres \
+docker compose --env-file "$env_file" -f "$script_dir/compose.yaml" up -d postgres
+docker compose --env-file "$env_file" -f "$script_dir/compose.yaml" exec -T postgres \
   dropdb -U leasegate --if-exists leasegate
-docker compose -f "$script_dir/compose.yaml" exec -T postgres \
+docker compose --env-file "$env_file" -f "$script_dir/compose.yaml" exec -T postgres \
   createdb -U leasegate leasegate
-docker compose -f "$script_dir/compose.yaml" exec -T postgres \
+docker compose --env-file "$env_file" -f "$script_dir/compose.yaml" exec -T postgres \
   pg_restore -U leasegate -d leasegate --no-owner --no-acl < "$temporary_dir/database.dump"
-docker compose -f "$script_dir/compose.yaml" up -d
+docker compose --env-file "$env_file" -f "$script_dir/compose.yaml" up -d
 printf 'Restore completed. Verify health, policy distribution, and audit chain before resuming agents.\n'

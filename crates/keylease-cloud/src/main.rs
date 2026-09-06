@@ -12,6 +12,9 @@ async fn main() -> Result<()> {
     if env::args().nth(1).as_deref() == Some("healthcheck") {
         return local_healthcheck().await;
     }
+    if env::args().nth(1).as_deref() == Some("migrate") {
+        return migrate_only().await;
+    }
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .json()
@@ -53,6 +56,24 @@ async fn main() -> Result<()> {
     axum::serve(listener, router(state))
         .await
         .context("serve cloud API")
+}
+
+async fn migrate_only() -> Result<()> {
+    let database_url = read_secret_text(
+        Path::new(&required_env("KEYLEASE_DATABASE_URL_FILE")?),
+        4096,
+    )?;
+    let repository = CloudRepository::connect(database_url.trim(), 2)
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    repository
+        .migrate()
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    repository
+        .readiness()
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
 async fn local_healthcheck() -> Result<()> {

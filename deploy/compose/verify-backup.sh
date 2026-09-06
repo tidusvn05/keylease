@@ -4,6 +4,7 @@ umask 077
 
 script_dir=$(dirname -- "$0")
 script_dir=$(cd "$script_dir" && pwd)
+env_file=${LEASEGATE_ENV_FILE:-"$script_dir/.env"}
 database_backup=${1:?Usage: verify-backup.sh POSTGRES_DUMP_AGE CONFIG_TAR_AGE EDGE_TAR_AGE}
 config_backup=${2:?Usage: verify-backup.sh POSTGRES_DUMP_AGE CONFIG_TAR_AGE EDGE_TAR_AGE}
 edge_backup=${3:?Usage: verify-backup.sh POSTGRES_DUMP_AGE CONFIG_TAR_AGE EDGE_TAR_AGE}
@@ -11,6 +12,7 @@ edge_backup=${3:?Usage: verify-backup.sh POSTGRES_DUMP_AGE CONFIG_TAR_AGE EDGE_T
 
 command -v age >/dev/null
 command -v docker >/dev/null
+[ -f "$env_file" ] || { printf 'Missing environment file: %s\n' "$env_file" >&2; exit 1; }
 for backup in "$database_backup" "$config_backup" "$edge_backup"; do
   [ -s "$backup" ] || {
     printf 'Backup is missing or empty: %s\n' "$backup" >&2
@@ -18,13 +20,24 @@ for backup in "$database_backup" "$config_backup" "$edge_backup"; do
   }
 done
 
+database_base=$(basename -- "$database_backup")
+timestamp=${database_base#postgres-}
+timestamp=${timestamp%.dump.age}
+checksum_file=$(dirname -- "$database_backup")/backup-$timestamp.sha256
+if [ -f "$checksum_file" ]; then
+  (
+    cd "$(dirname -- "$database_backup")"
+    sha256sum -c "$(basename -- "$checksum_file")" >/dev/null
+  )
+fi
+
 temporary_dir=$(mktemp -d)
 trap 'rm -rf "$temporary_dir"' EXIT HUP INT TERM
 age -d -i "$LEASEGATE_AGE_IDENTITY" -o "$temporary_dir/database.dump" "$database_backup"
 age -d -i "$LEASEGATE_AGE_IDENTITY" -o "$temporary_dir/config.tar" "$config_backup"
 age -d -i "$LEASEGATE_AGE_IDENTITY" -o "$temporary_dir/edge.tar" "$edge_backup"
 
-docker compose -f "$script_dir/compose.yaml" run --rm --no-deps --entrypoint pg_restore postgres \
+docker compose --env-file "$env_file" -f "$script_dir/compose.yaml" run --rm --no-deps --entrypoint pg_restore postgres \
   --list < "$temporary_dir/database.dump" >/dev/null
 
 reject_unsafe_archive() {

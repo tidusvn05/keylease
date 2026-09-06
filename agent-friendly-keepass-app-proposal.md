@@ -714,6 +714,7 @@ Lộ trình phải ship theo vertical slices, nhưng mọi phase dùng chung tar
 6. **Phase 5 — Dynamic/managed credentials:** token exchange, AWS-style STS, SSH certificates, database leases, optional managed cloud gateway và sender-constrained tokens.
 7. **Phase 6 — Enterprise và mobile:** iOS/Android approval app, SSO/SCIM, SIEM export, policy-as-code, HA, BYOK/HSM và self-hosted control plane.
 8. **Phase 7 — Single-VPS production readiness:** hardening, health/readiness, audit verification, backup/restore validation và operational release gate cho đúng một VPS; enterprise và HA được hoãn.
+9. **Phase 8 — Single-VPS operations và release automation:** pinned images, SBOM/provenance, migration dry-run, guarded upgrade/rollback, scheduled backup/monitoring và redacted diagnostics; enterprise/HA vẫn ngoài phạm vi.
 
 Mỗi phase có exit criteria độc lập; chi tiết phạm vi, dependency và phần phải thiết kế trước nằm trong phần **LeaseGate target architecture và phased delivery**.
 
@@ -1830,6 +1831,21 @@ Ship:
 Exit criteria: mọi P0 trong `docs/phase-7/single-vps-checklist.md` có evidence,
 runtime check pass trên VPS, backup gần nhất verify được và có ít nhất một restore
 drill thành công. Enterprise/HA items được đánh dấu `EXCLUDED` không chặn release.
+
+#### Phase 8 — Single-VPS operations và release automation
+
+Ship:
+
+- Base images pin bằng registry digest và application images bind bằng local image ID.
+- SPDX SBOM, provenance/checksum manifest và optional cosign signature.
+- Migration dry-run trên disposable clone của PostgreSQL production.
+- Upgrade/rollback bắt buộc preflight và encrypted backup; không tự động rewind database.
+- systemd timers cho daily backup và five-minute runtime/backup-age monitor.
+- Prometheus text metrics tối thiểu và diagnostic bundle đã redact.
+
+Exit criteria: signed candidate pass dry-run, upgrade và rollback trên disposable
+state; timers được bật trên VPS; off-host backup verify thành công; soak test một
+VPS bảy ngày không có unresolved P0/P1. Enterprise/HA tiếp tục `EXCLUDED`.
 
 ### Product metrics theo phase
 

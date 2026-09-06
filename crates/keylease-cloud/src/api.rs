@@ -2,7 +2,7 @@ use crate::{ApprovalDecisionBinding, AuditQueryFilter, CloudRepository, Credenti
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, Query, State},
-    http::{HeaderMap, StatusCode, header::AUTHORIZATION},
+    http::{HeaderMap, StatusCode, header::AUTHORIZATION, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
@@ -108,6 +108,7 @@ pub fn router(state: CloudApiState) -> Router {
     Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(readiness))
+        .route("/metrics", get(metrics))
         .route("/v1/bootstrap", post(bootstrap))
         .route("/v1/devices", post(register_device))
         .route("/v1/vaults", post(create_vault))
@@ -258,6 +259,25 @@ async fn readiness(State(state): State<CloudApiState>) -> Response {
         )
             .into_response(),
     }
+}
+
+async fn metrics(State(state): State<CloudApiState>) -> Response {
+    let database_ready = u8::from(state.repository.readiness().await.is_ok());
+    let body = format!(
+        concat!(
+            "# HELP leasegate_service_up Whether the service process is serving requests.\n",
+            "# TYPE leasegate_service_up gauge\n",
+            "leasegate_service_up{{service=\"keylease-cloud\"}} 1\n",
+            "# HELP leasegate_database_ready Whether PostgreSQL passed a minimal readiness query.\n",
+            "# TYPE leasegate_database_ready gauge\n",
+            "leasegate_database_ready{{service=\"keylease-cloud\"}} {}\n",
+            "# HELP leasegate_contract_version Active Control Plane contract version.\n",
+            "# TYPE leasegate_contract_version gauge\n",
+            "leasegate_contract_version{{service=\"keylease-cloud\"}} {}\n"
+        ),
+        database_ready, CONTROL_CONTRACT_VERSION
+    );
+    ([(CONTENT_TYPE, "text/plain; version=0.0.4")], body).into_response()
 }
 
 #[derive(Debug, Deserialize)]

@@ -56,8 +56,8 @@ column. Do not mark a manual check complete based only on a code review.
 | P1 | MANUAL | Logs are retained with size/age limits and contain no credential material. | Record logging configuration and redaction spot-check. |
 | P1 | MANUAL | Upgrade and rollback are rehearsed with pinned image/source revisions. | Record tested revision and rollback duration. |
 | P1 | MANUAL | Every enabled connector passes one bounded smoke action and revoke/expiry check. | Real provider accounts are operator acceptance, not CI. |
-| P2 | TODO | Publish reproducible image digests, SBOM and signed release attestations. | Does not block an internal beta; required before public GA. |
-| P2 | TODO | Add a lightweight metrics exporter and disk/backup-age dashboard. | Do not add a multi-node monitoring dependency to the default stack. |
+| P2 | DONE | Generate content-addressed image IDs, SPDX SBOM, provenance and optional cosign signature. | Implemented by the Phase 8 release builder; publishing a signed candidate remains manual. |
+| P2 | DONE | Add lightweight service metrics plus disk/backup-age textfile metrics. | Implemented by Phase 8 without adding a monitoring cluster to the default stack. |
 | P2 | OPTIONAL | Native mobile approval distribution. | Web approval remains sufficient for the single-VPS baseline. |
 
 ## 3. Explicitly excluded

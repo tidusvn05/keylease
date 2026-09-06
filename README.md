@@ -79,6 +79,11 @@ self-hosted VPS. Enterprise and HA capabilities are excluded from its exit
 criteria. Track implementation and operator evidence in
 [`docs/phase-7/single-vps-checklist.md`](docs/phase-7/single-vps-checklist.md).
 
+Phase 8 automates that single-VPS release gate: pinned runtime images,
+content-addressed releases, SPDX SBOM/provenance, migration dry-runs, guarded
+upgrade/rollback, systemd backup/monitor timers and redacted diagnostics. See
+[`docs/phase-8/single-vps-operations-and-release.md`](docs/phase-8/single-vps-operations-and-release.md).
+
 For an Intel Mac (`x86_64`) build and release-acceptance walkthrough, see
 [`docs/macos-x86_64-build-test.md`](docs/macos-x86_64-build-test.md). The
 companion `scripts/macos-x86_64-check.sh` runs the automated Rust, Flutter,
