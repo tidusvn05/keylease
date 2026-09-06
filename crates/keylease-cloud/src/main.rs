@@ -9,6 +9,9 @@ use zeroize::Zeroizing;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if env::args().nth(1).as_deref() == Some("healthcheck") {
+        return local_healthcheck().await;
+    }
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .json()
@@ -50,6 +53,27 @@ async fn main() -> Result<()> {
     axum::serve(listener, router(state))
         .await
         .context("serve cloud API")
+}
+
+async fn local_healthcheck() -> Result<()> {
+    let listen: SocketAddr = env::var("KEYLEASE_CLOUD_LISTEN")
+        .unwrap_or_else(|_| "127.0.0.1:8080".into())
+        .parse()
+        .context("invalid KEYLEASE_CLOUD_LISTEN")?;
+    let response = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(2))
+        .timeout(std::time::Duration::from_secs(4))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .context("build healthcheck client")?
+        .get(format!("http://127.0.0.1:{}/readyz", listen.port()))
+        .send()
+        .await
+        .context("request Control Plane readiness")?;
+    if !response.status().is_success() {
+        bail!("Control Plane is not ready")
+    }
+    Ok(())
 }
 
 fn required_env(name: &str) -> Result<String> {

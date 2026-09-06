@@ -52,6 +52,12 @@ services:
     networks: [control]
     read_only: true
     tmpfs: [/tmp]
+    healthcheck:
+      test: ["CMD", "keylease-cloud", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
 
   worker:
     build:
@@ -68,7 +74,9 @@ services:
     environment:
       KEYLEASE_DATABASE_URL_FILE: /run/leasegate-secrets/database_url
       KEYLEASE_WORKER_INTERVAL_SECONDS: 5
-      KEYLEASE_SIEM_SECRETS_FILE: /run/leasegate-secrets/siem-secrets.json
+      # Empty by default for the single-VPS profile. Set the container path
+      # explicitly only when the optional enterprise SIEM exporter is enabled.
+      KEYLEASE_SIEM_SECRETS_FILE: ${KEYLEASE_SIEM_SECRETS_FILE:-}
       LEASEGATE_INSTANCE_ID: ${LEASEGATE_INSTANCE_ID:-worker-1}
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
@@ -88,7 +96,9 @@ services:
         KEYLEASE_APPROVER_ID: ${KEYLEASE_APPROVER_ID:-}
         KEYLEASE_AGENT_ID: ${LEASEGATE_AGENT_ID:-}
     restart: unless-stopped
-    depends_on: [control-plane]
+    depends_on:
+      control-plane:
+        condition: service_healthy
     environment:
       LEASEGATE_DOMAIN: ${LEASEGATE_DOMAIN}
     ports:
@@ -133,6 +143,12 @@ services:
       - edge-data:/var/lib/leasegate
       - ./secrets:/run/leasegate-secrets:ro
     networks: [control]
+    healthcheck:
+      test: ["CMD", "leasegate-edge", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
 
 networks:
   control:

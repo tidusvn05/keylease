@@ -21,6 +21,30 @@ age -d -i "$LEASEGATE_AGE_IDENTITY" -o "$temporary_dir/database.dump" "$database
 age -d -i "$LEASEGATE_AGE_IDENTITY" -o "$temporary_dir/config.tar" "$config_backup"
 age -d -i "$LEASEGATE_AGE_IDENTITY" -o "$temporary_dir/edge.tar" "$edge_backup"
 
+reject_unsafe_archive() {
+  archive=$1
+  if tar -tf "$archive" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+    printf 'Archive contains an unsafe path: %s\n' "$archive" >&2
+    exit 1
+  fi
+}
+reject_unsafe_archive "$temporary_dir/config.tar"
+reject_unsafe_archive "$temporary_dir/edge.tar"
+for required in secrets/admin_token secrets/control_signing_key secrets/database_url; do
+  tar -tf "$temporary_dir/config.tar" | grep -Fx "$required" >/dev/null || {
+    printf 'Configuration backup is missing %s\n' "$required" >&2
+    exit 1
+  }
+done
+for required in ./edge.sqlite3 ./vault.sqlite3; do
+  tar -tf "$temporary_dir/edge.tar" | grep -Fx "$required" >/dev/null || {
+    printf 'Edge backup is missing %s\n' "$required" >&2
+    exit 1
+  }
+done
+docker compose -f "$script_dir/compose.yaml" run --rm --no-deps --entrypoint pg_restore postgres \
+  --list < "$temporary_dir/database.dump" >/dev/null
+
 docker compose -f "$script_dir/compose.yaml" stop control-plane worker gateway
 tar -C "$script_dir" -xf "$temporary_dir/config.tar"
 docker compose -f "$script_dir/compose.yaml" run --rm --no-deps --entrypoint sh gateway \

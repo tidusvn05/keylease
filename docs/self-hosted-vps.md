@@ -270,3 +270,29 @@ For application-level HA, run multiple stateless Control Plane instances
 behind a load balancer and multiple workers with unique
 `LEASEGATE_INSTANCE_ID` values. PostgreSQL HA and the load balancer are
 operator-managed infrastructure.
+
+## 8. Phase 7 single-VPS release gate
+
+The current release target does not require enterprise identity, SIEM, HSM or
+multi-node HA. Use the dedicated checklist at
+`phase-7/single-vps-checklist.md`; excluded rows are not release blockers.
+
+Run the preflight after provisioning secrets and enrollment credentials:
+
+```sh
+deploy/compose/single-vps-check.sh preflight
+docker compose --env-file deploy/compose/.env \
+  -f deploy/compose/compose.yaml up -d
+deploy/compose/single-vps-check.sh runtime
+```
+
+`/api/healthz` is process liveness. `/api/readyz` additionally checks
+PostgreSQL. The Gateway's local `/readyz` requires an active signed policy and
+free audit-spool capacity; a disconnected Control Plane is reported in the
+response without pretending cached offline authority is broader than policy.
+
+Before trusting a backup for recovery, run `verify-backup.sh`. It decrypts into
+a mode-0700 temporary directory, checks the PostgreSQL archive catalog and
+required config/Edge files, and does not replace running state. The restore
+script now applies the same archive-path and dump checks before stopping
+services.

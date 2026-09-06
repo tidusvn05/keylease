@@ -23,6 +23,7 @@ async fn phase4_registry_proposal_connections_and_audit_are_tenant_scoped() {
     };
     let repository = CloudRepository::connect(&database_url, 5).await.unwrap();
     repository.migrate().await.unwrap();
+    repository.readiness().await.unwrap();
 
     let account = AccountId::new();
     let (organization, project, membership) = repository
@@ -338,13 +339,81 @@ async fn phase4_registry_proposal_connections_and_audit_are_tenant_scoped() {
             &project.id,
             &AuditBatch {
                 schema_version: CONTROL_CONTRACT_VERSION,
-                edge_id: edge.edge.id,
+                edge_id: edge.edge.id.clone(),
                 first_sequence: 1,
-                events: vec![event],
+                events: vec![event.clone()],
             },
         )
         .await
         .unwrap();
+    let integrity = repository
+        .verify_audit_integrity(&organization.id, &project.id)
+        .await
+        .unwrap();
+    assert!(integrity.valid);
+    assert_eq!(integrity.event_count, 1);
+    assert_eq!(integrity.verified_event_count, 1);
+    assert_eq!(integrity.legacy_unverifiable_event_count, 0);
+    let mut conflicting_event = event.clone();
+    conflicting_event.outcome = "conflicting-replay".into();
+    assert!(
+        repository
+            .ingest_audit(
+                &organization.id,
+                &project.id,
+                &AuditBatch {
+                    schema_version: CONTROL_CONTRACT_VERSION,
+                    edge_id: edge.edge.id.clone(),
+                    first_sequence: 1,
+                    events: vec![conflicting_event],
+                },
+            )
+            .await
+            .is_err()
+    );
+    sqlx::query("UPDATE audit_event_index SET previous_chain_digest_sha256=NULL,chain_position=NULL WHERE organization_id=$1 AND project_id=$2")
+        .bind(&organization.id.0)
+        .bind(&project.id.0)
+        .execute(repository.pool())
+        .await
+        .unwrap();
+    let mut second_event = event;
+    second_event.request_id = RequestId::new();
+    second_event.timestamp += Duration::seconds(1);
+    second_event.action = "notion.page.phase7_integrity_fixture".into();
+    repository
+        .ingest_audit(
+            &organization.id,
+            &project.id,
+            &AuditBatch {
+                schema_version: CONTROL_CONTRACT_VERSION,
+                edge_id: edge.edge.id,
+                first_sequence: 2,
+                events: vec![second_event],
+            },
+        )
+        .await
+        .unwrap();
+    let legacy_integrity = repository
+        .verify_audit_integrity(&organization.id, &project.id)
+        .await
+        .unwrap();
+    assert!(legacy_integrity.valid);
+    assert_eq!(legacy_integrity.event_count, 2);
+    assert_eq!(legacy_integrity.verified_event_count, 1);
+    assert_eq!(legacy_integrity.legacy_unverifiable_event_count, 1);
+    sqlx::query("UPDATE audit_event_index SET event_json=jsonb_set(event_json,'{outcome}',to_jsonb('tampered'::text),true) WHERE organization_id=$1 AND project_id=$2 AND chain_position=2")
+        .bind(&organization.id.0)
+        .bind(&project.id.0)
+        .execute(repository.pool())
+        .await
+        .unwrap();
+    let tampered_integrity = repository
+        .verify_audit_integrity(&organization.id, &project.id)
+        .await
+        .unwrap();
+    assert!(!tampered_integrity.valid);
+    assert_eq!(tampered_integrity.first_invalid_position, Some(2));
     let page = repository
         .query_audit(
             &organization.id,

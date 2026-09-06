@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use axum::{Json, Router, http::StatusCode, response::IntoResponse, routing::get};
 use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
 use chrono::{Duration, Utc};
 use keylease_core::{AgentId, EdgeId, OrganizationId, ProjectId, WorkloadId};
@@ -29,6 +30,9 @@ use zeroize::Zeroizing;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if env::args().nth(1).as_deref() == Some("healthcheck") {
+        return local_healthcheck().await;
+    }
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .json()
@@ -224,20 +228,41 @@ async fn main() -> Result<()> {
         on_behalf_of: env::var("LEASEGATE_ON_BEHALF_OF").ok(),
         client_session_id: format!("gateway-{}", std::process::id()),
     };
-    let router = agent_router_with_discovery(
-        "/mcp",
-        identity.clone(),
-        enforced,
-        discovery,
-        security.clone(),
-    )
-    .merge(credential_api_router(
-        credential_gateway,
-        identity,
-        edge_store,
-        cloud,
-        security,
-    ));
+    let health_store = edge_store.clone();
+    let health_connected = cloud_connected.clone();
+    let health_router = Router::new()
+        .route(
+            "/healthz",
+            get(|| async {
+                Json(serde_json::json!({
+                    "ok": true,
+                    "service": leasegate_edge::SERVICE_NAME
+                }))
+            }),
+        )
+        .route(
+            "/readyz",
+            get(move || {
+                let store = health_store.clone();
+                let connected = health_connected.clone();
+                async move { edge_readiness(store, connected).await }
+            }),
+        );
+    let router = health_router
+        .merge(agent_router_with_discovery(
+            "/mcp",
+            identity.clone(),
+            enforced,
+            discovery,
+            security.clone(),
+        ))
+        .merge(credential_api_router(
+            credential_gateway,
+            identity,
+            edge_store,
+            cloud,
+            security,
+        ));
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .context("bind Edge MCP listener")?;
@@ -245,6 +270,59 @@ async fn main() -> Result<()> {
     axum::serve(listener, router)
         .await
         .context("serve Edge MCP")
+}
+
+async fn edge_readiness(
+    store: Arc<EdgeControlStore>,
+    cloud_connected: Arc<AtomicBool>,
+) -> impl IntoResponse {
+    let policy = store.active_policy();
+    let spool = store.audit_spool_status();
+    let ready = policy.as_ref().is_ok_and(Option::is_some)
+        && spool
+            .as_ref()
+            .is_ok_and(|status| status.encrypted_bytes < status.maximum_bytes);
+    let status = if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    let policy_version = policy.ok().flatten().map(|bundle| bundle.payload.version);
+    let (audit_spool_bytes, audit_spool_maximum_bytes) = spool
+        .map(|value| (Some(value.encrypted_bytes), Some(value.maximum_bytes)))
+        .unwrap_or((None, None));
+    (
+        status,
+        Json(serde_json::json!({
+            "ok": ready,
+            "service": leasegate_edge::SERVICE_NAME,
+            "control_connected": cloud_connected.load(Ordering::Acquire),
+            "policy_version": policy_version,
+            "audit_spool_bytes": audit_spool_bytes,
+            "audit_spool_maximum_bytes": audit_spool_maximum_bytes
+        })),
+    )
+}
+
+async fn local_healthcheck() -> Result<()> {
+    let listen: SocketAddr = env::var("LEASEGATE_EDGE_LISTEN")
+        .unwrap_or_else(|_| "127.0.0.1:8090".into())
+        .parse()
+        .context("invalid LEASEGATE_EDGE_LISTEN")?;
+    let response = reqwest::Client::builder()
+        .connect_timeout(StdDuration::from_secs(2))
+        .timeout(StdDuration::from_secs(4))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .context("build healthcheck client")?
+        .get(format!("http://127.0.0.1:{}/readyz", listen.port()))
+        .send()
+        .await
+        .context("request Gateway readiness")?;
+    if !response.status().is_success() {
+        bail!("Gateway is not ready")
+    }
+    Ok(())
 }
 
 fn required_env(name: &str) -> Result<String> {

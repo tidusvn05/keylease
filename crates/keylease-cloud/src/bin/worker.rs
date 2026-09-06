@@ -31,6 +31,7 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| format!("worker-{}", uuid::Uuid::now_v7().simple()));
     let siem_exporter = env::var("KEYLEASE_SIEM_SECRETS_FILE")
         .ok()
+        .filter(|path| !path.trim().is_empty())
         .map(|path| SiemExporter::from_file(Path::new(&path)))
         .transpose()
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;

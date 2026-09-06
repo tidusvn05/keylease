@@ -107,6 +107,7 @@ pub fn router(state: CloudApiState) -> Router {
     let maximum = state.maximum_body_bytes;
     Router::new()
         .route("/healthz", get(health))
+        .route("/readyz", get(readiness))
         .route("/v1/bootstrap", post(bootstrap))
         .route("/v1/devices", post(register_device))
         .route("/v1/vaults", post(create_vault))
@@ -201,6 +202,10 @@ pub fn router(state: CloudApiState) -> Router {
             get(query_audit).post(ingest_audit),
         )
         .route(
+            "/v1/organizations/{organization}/projects/{project}/audit/integrity",
+            get(audit_integrity),
+        )
+        .route(
             "/v1/organizations/{organization}/projects/{project}/credential-leases",
             get(list_credential_leases),
         )
@@ -229,6 +234,30 @@ async fn health() -> Json<Value> {
     Json(
         json!({"ok":true,"service":crate::SERVICE_NAME,"contract_version":CONTROL_CONTRACT_VERSION}),
     )
+}
+
+async fn readiness(State(state): State<CloudApiState>) -> Response {
+    match state.repository.readiness().await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "service": crate::SERVICE_NAME,
+                "database": "ready",
+                "contract_version": CONTROL_CONTRACT_VERSION
+            })),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "ok": false,
+                "service": crate::SERVICE_NAME,
+                "database": "unavailable"
+            })),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1569,6 +1598,21 @@ async fn query_audit(
         .await?;
     Ok(Json(
         serde_json::to_value(page).map_err(|_| ApiError(KeyLeaseError::Storage))?,
+    ))
+}
+
+async fn audit_integrity(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((organization, project)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers)?;
+    let report = state
+        .repository
+        .verify_audit_integrity(&OrganizationId(organization), &ProjectId(project))
+        .await?;
+    Ok(Json(
+        serde_json::to_value(report).map_err(|_| ApiError(KeyLeaseError::Storage))?,
     ))
 }
 

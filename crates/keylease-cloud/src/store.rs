@@ -111,6 +111,20 @@ pub struct AuditQueryPage {
     pub has_more: bool,
 }
 
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct AuditIntegrityReport {
+    pub organization_id: OrganizationId,
+    pub project_id: ProjectId,
+    pub valid: bool,
+    pub chain_head_sha256: String,
+    pub event_count: u64,
+    pub verified_event_count: u64,
+    /// Rows written before Phase 7 have no stored predecessor and cannot be
+    /// reconstructed. New rows remain verifiable from that legacy head.
+    pub legacy_unverifiable_event_count: u64,
+    pub first_invalid_position: Option<u64>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CredentialLeaseFilter {
     pub agent_id: Option<String>,
@@ -141,6 +155,19 @@ impl CloudRepository {
             .run(&self.pool)
             .await
             .map_err(|_| KeyLeaseError::Storage)
+    }
+
+    /// Performs the minimal dependency check used by the readiness endpoint.
+    /// It deliberately does not inspect tenant data or expose database detail.
+    pub async fn readiness(&self) -> Result<()> {
+        let value: i32 = sqlx::query_scalar("SELECT 1")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        if value != 1 {
+            return Err(KeyLeaseError::Storage);
+        }
+        Ok(())
     }
 
     pub async fn bootstrap_tenant(
@@ -2084,7 +2111,10 @@ impl CloudRepository {
         project_id: &ProjectId,
         batch: &AuditBatch,
     ) -> Result<u64> {
-        if batch.schema_version != CONTROL_CONTRACT_VERSION || batch.events.len() > 1000 {
+        if batch.schema_version != CONTROL_CONTRACT_VERSION
+            || batch.events.is_empty()
+            || batch.events.len() > 1000
+        {
             return Err(KeyLeaseError::InvalidRequest {
                 reason: "invalid audit batch".into(),
             });
@@ -2114,13 +2144,22 @@ impl CloudRepository {
             .map_err(|_| KeyLeaseError::Storage)?;
         for (offset, event) in batch.events.iter().enumerate() {
             let sequence = batch.first_sequence.saturating_add(offset as u64);
+            let event_json = serde_json::to_value(event).map_err(|_| KeyLeaseError::Storage)?;
             let next_digest = audit_chain_digest(&chain_digest, &batch.edge_id, sequence, event)?;
-            let inserted: Option<bool> = sqlx::query_scalar("INSERT INTO audit_event_index(edge_id,edge_sequence,organization_id,project_id,timestamp,request_id,agent_id,action,resource,decision,outcome,event_json,connection_id,policy_version,chain_digest_sha256) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT(edge_id,edge_sequence) DO NOTHING RETURNING TRUE")
-                .bind(&batch.edge_id.0).bind(sequence as i64).bind(&organization_id.0).bind(&project_id.0).bind(event.timestamp).bind(&event.request_id.0).bind(&event.agent_id.0).bind(&event.action).bind(&event.resource).bind(&event.decision).bind(&event.outcome).bind(serde_json::to_value(event).map_err(|_| KeyLeaseError::Storage)?).bind(event.connection_id.as_ref().map(|id| id.0.as_str())).bind(event.policy_version.map(|version| version as i64)).bind(&next_digest)
+            let chain_position = event_count.saturating_add(1);
+            let inserted: Option<bool> = sqlx::query_scalar("INSERT INTO audit_event_index(edge_id,edge_sequence,organization_id,project_id,timestamp,request_id,agent_id,action,resource,decision,outcome,event_json,connection_id,policy_version,chain_digest_sha256,previous_chain_digest_sha256,chain_position) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT(edge_id,edge_sequence) DO NOTHING RETURNING TRUE")
+                .bind(&batch.edge_id.0).bind(sequence as i64).bind(&organization_id.0).bind(&project_id.0).bind(event.timestamp).bind(&event.request_id.0).bind(&event.agent_id.0).bind(&event.action).bind(&event.resource).bind(&event.decision).bind(&event.outcome).bind(&event_json).bind(event.connection_id.as_ref().map(|id| id.0.as_str())).bind(event.policy_version.map(|version| version as i64)).bind(&next_digest).bind(&chain_digest).bind(chain_position)
                 .fetch_optional(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
             if inserted.is_some() {
                 chain_digest = next_digest;
                 event_count += 1;
+            } else {
+                let persisted: Option<serde_json::Value> = sqlx::query_scalar("SELECT event_json FROM audit_event_index WHERE organization_id=$1 AND project_id=$2 AND edge_id=$3 AND edge_sequence=$4")
+                    .bind(&organization_id.0).bind(&project_id.0).bind(&batch.edge_id.0).bind(sequence as i64)
+                    .fetch_optional(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+                if persisted.as_ref() != Some(&event_json) {
+                    return Err(KeyLeaseError::IdempotencyConflict);
+                }
             }
         }
         sqlx::query("UPDATE audit_integrity_heads SET chain_digest_sha256=$1,event_count=$2,updated_at=$3 WHERE organization_id=$4 AND project_id=$5")
@@ -2130,6 +2169,123 @@ impl CloudRepository {
         Ok(batch
             .first_sequence
             .saturating_add(batch.events.len().saturating_sub(1) as u64))
+    }
+
+    pub async fn verify_audit_integrity(
+        &self,
+        organization_id: &OrganizationId,
+        project_id: &ProjectId,
+    ) -> Result<AuditIntegrityReport> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KeyLeaseError::Storage)?;
+        set_tenant(&mut tx, organization_id).await?;
+        let project_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE organization_id=$1 AND project_id=$2)",
+        )
+        .bind(&organization_id.0)
+        .bind(&project_id.0)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| KeyLeaseError::Storage)?;
+        if !project_exists {
+            return Err(KeyLeaseError::NotFound {
+                resource: project_id.0.clone(),
+            });
+        }
+        let head = sqlx::query("SELECT chain_digest_sha256,event_count FROM audit_integrity_heads WHERE organization_id=$1 AND project_id=$2")
+            .bind(&organization_id.0).bind(&project_id.0)
+            .fetch_optional(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        let Some(head) = head else {
+            tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+            return Ok(AuditIntegrityReport {
+                organization_id: organization_id.clone(),
+                project_id: project_id.clone(),
+                valid: true,
+                chain_head_sha256: "0".repeat(64),
+                event_count: 0,
+                verified_event_count: 0,
+                legacy_unverifiable_event_count: 0,
+                first_invalid_position: None,
+            });
+        };
+        let chain_head: String = head
+            .try_get("chain_digest_sha256")
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let event_count: i64 = head
+            .try_get("event_count")
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let legacy_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_event_index WHERE organization_id=$1 AND project_id=$2 AND chain_position IS NULL")
+            .bind(&organization_id.0).bind(&project_id.0)
+            .fetch_one(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        let rows = sqlx::query("SELECT edge_id,edge_sequence,event_json,chain_digest_sha256,previous_chain_digest_sha256,chain_position FROM audit_event_index WHERE organization_id=$1 AND project_id=$2 AND chain_position IS NOT NULL ORDER BY chain_position")
+            .bind(&organization_id.0).bind(&project_id.0)
+            .fetch_all(&mut *tx).await.map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().await.map_err(|_| KeyLeaseError::Storage)?;
+
+        let mut previous = if legacy_count == 0 {
+            "0".repeat(64)
+        } else {
+            rows.first()
+                .and_then(|row| {
+                    row.try_get::<String, _>("previous_chain_digest_sha256")
+                        .ok()
+                })
+                .unwrap_or_else(|| chain_head.clone())
+        };
+        let mut first_invalid_position = None;
+        let mut verified_count = 0_u64;
+        for (offset, row) in rows.iter().enumerate() {
+            let expected_position = legacy_count.saturating_add(offset as i64).saturating_add(1);
+            let position: i64 = row
+                .try_get("chain_position")
+                .map_err(|_| KeyLeaseError::Storage)?;
+            let claimed_previous: String = row
+                .try_get("previous_chain_digest_sha256")
+                .map_err(|_| KeyLeaseError::Storage)?;
+            let claimed_digest: String = row
+                .try_get("chain_digest_sha256")
+                .map_err(|_| KeyLeaseError::Storage)?;
+            let edge_id = EdgeId(row.try_get("edge_id").map_err(|_| KeyLeaseError::Storage)?);
+            let edge_sequence: i64 = row
+                .try_get("edge_sequence")
+                .map_err(|_| KeyLeaseError::Storage)?;
+            let event: keylease_core::AuditEvent = serde_json::from_value(
+                row.try_get("event_json")
+                    .map_err(|_| KeyLeaseError::Storage)?,
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+            let calculated = if edge_sequence < 0 {
+                String::new()
+            } else {
+                audit_chain_digest(&previous, &edge_id, edge_sequence as u64, &event)?
+            };
+            if position != expected_position
+                || claimed_previous != previous
+                || claimed_digest != calculated
+            {
+                first_invalid_position = Some(position.max(0) as u64);
+                break;
+            }
+            previous = calculated;
+            verified_count = verified_count.saturating_add(1);
+        }
+        let expected_total = legacy_count.saturating_add(rows.len() as i64);
+        let valid = first_invalid_position.is_none()
+            && event_count == expected_total
+            && previous == chain_head;
+        Ok(AuditIntegrityReport {
+            organization_id: organization_id.clone(),
+            project_id: project_id.clone(),
+            valid,
+            chain_head_sha256: chain_head,
+            event_count: event_count.max(0) as u64,
+            verified_event_count: verified_count,
+            legacy_unverifiable_event_count: legacy_count.max(0) as u64,
+            first_invalid_position,
+        })
     }
 
     pub async fn query_audit(

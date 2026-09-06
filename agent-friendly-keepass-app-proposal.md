@@ -713,6 +713,7 @@ Lộ trình phải ship theo vertical slices, nhưng mọi phase dùng chung tar
 5. **Phase 4 — Connector platform và policy UX:** OAuth connections, permission matrix, policy simulation, rate limits/budgets và connector SDK.
 6. **Phase 5 — Dynamic/managed credentials:** token exchange, AWS-style STS, SSH certificates, database leases, optional managed cloud gateway và sender-constrained tokens.
 7. **Phase 6 — Enterprise và mobile:** iOS/Android approval app, SSO/SCIM, SIEM export, policy-as-code, HA, BYOK/HSM và self-hosted control plane.
+8. **Phase 7 — Single-VPS production readiness:** hardening, health/readiness, audit verification, backup/restore validation và operational release gate cho đúng một VPS; enterprise và HA được hoãn.
 
 Mỗi phase có exit criteria độc lập; chi tiết phạm vi, dependency và phần phải thiết kế trước nằm trong phần **LeaseGate target architecture và phased delivery**.
 
@@ -1810,6 +1811,25 @@ Ship:
 - Policy-as-code, signed bundles, staged rollout và rollback.
 
 Exit criteria: multi-region/HA failure tests, separated-admin threat tests và external security review hoàn tất cho enterprise launch.
+
+#### Phase 7 — Single-VPS production readiness
+
+> Quyết định phạm vi 2026-09-06: release target hiện tại là đúng một VPS với
+> `self_hosted/local_gateway`. Enterprise identity/compliance/BYOK và mọi topology
+> HA không nằm trong exit criteria. Code Phase 6 có thể vẫn tồn tại nhưng không
+> bắt buộc cấu hình hoặc xác minh cho profile này.
+
+Ship:
+
+- Liveness/readiness cho Control Plane, PostgreSQL và local Gateway.
+- Preflight/runtime status command cho một Docker Compose stack.
+- Audit-chain verification và reject conflicting replay.
+- Encrypted off-host backup, non-destructive backup verification và guarded restore.
+- Checklist vận hành gồm TLS, firewall, disk, clock, log, upgrade và provider smoke tests.
+
+Exit criteria: mọi P0 trong `docs/phase-7/single-vps-checklist.md` có evidence,
+runtime check pass trên VPS, backup gần nhất verify được và có ít nhất một restore
+drill thành công. Enterprise/HA items được đánh dấu `EXCLUDED` không chặn release.
 
 ### Product metrics theo phase
 

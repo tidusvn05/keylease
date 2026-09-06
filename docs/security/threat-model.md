@@ -1,4 +1,4 @@
-# KeyLease and LeaseGate threat model (through Phase 6 beta)
+# KeyLease and LeaseGate threat model (through Phase 7 single-VPS beta)
 
 Status: accepted for the local MVP. This document is an engineering baseline,
 not an external security review.
@@ -26,8 +26,9 @@ never fall back when the local Gateway is unavailable.
 | Dynamic-credential theft | Policy/backend TTL ceilings, one-response delivery, no-store HTTP, encrypted local handles and upstream expiry; SSH is public-key bound; OAuth DPoP requires a verified Ed25519 proof and matching provider `cnf.jkt` | AWS STS and non-DPoP OAuth bearer material can be replayed until upstream expiry; mTLS-bound token delivery is not enabled |
 | Stolen mobile session | Private device key stays in platform secure storage, biometric gates signing, challenge is one-use/two-minute and signed sessions expire after five minutes | A fully compromised unlocked mobile OS is outside the boundary |
 | Forged enterprise identity | Exact OIDC issuer/audience/signature/expiry/subject validation against bounded HTTPS JWKS; SCIM token is digest-only and cannot grant privileged roles | IdP compromise and deployment-specific browser authorization flow remain external trust dependencies |
-| Audit/SIEM tampering | Per-project hash chain, signed compliance evidence, HMAC-signed HTTPS SIEM batches and optimistic delivery cursor | Database owner can delete both events and head; external anchoring is still needed for independent non-repudiation |
+| Audit/SIEM tampering | Per-project predecessor/position hash chain, conflicting-replay rejection, on-demand integrity verification, signed compliance evidence, HMAC-signed HTTPS SIEM batches and optimistic delivery cursor | Database owner can rewrite both events and the local head; encrypted off-host checkpoints or external anchoring are needed for independent evidence |
 | Split-brain workers | Renewable PostgreSQL leader lease gates maintenance, retention and SIEM delivery | PostgreSQL availability/consensus is an operator responsibility |
+| Single-VPS outage | Encrypted off-host PostgreSQL/config/Edge backups, non-destructive backup verification and guarded restore runbook | One VPS has no live failover; recovery time depends on replacement infrastructure and the operator's restore drill |
 | Malicious/buggy connector | Typed schemas, canonicalization before authorization, outbound host allowlists, time/size limits and shared conformance tests | Provider compromise is not prevented |
 | SSRF/DNS rebinding | Built-ins use fixed HTTPS origins; custom URLs are rejected; redirects are disabled | Resolver/runtime hardening remains platform-dependent |
 | Replay/retry | Idempotency key plus vault-keyed canonical request digest; approval consumption and lease issue are atomic; transactional lease reservation; provider idempotency where available | A provider without idempotency can have an ambiguous result after a process crash |
