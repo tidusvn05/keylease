@@ -1,15 +1,18 @@
 name: keylease_desktop
-description: KeyLease macOS presentation client
+description: KeyLease cross-platform presentation client
 publish_to: none
 version: 0.1.0+1
 environment:
-  sdk: ">=3.4.0 <4.0.0"
+  sdk: ">=3.13.0 <4.0.0"
 dependencies:
   flutter:
     sdk: flutter
-  # UI spikes only. The production entry point still uses Material 3.
-  forui: 0.21.3
-  macos_ui: 2.2.2
+  # Production UI library. Forui is 0.x, so the version is pinned exactly and
+  # upgrades go through the changelog review recorded in docs/.
+  forui: 0.26.0
+  # Flutter 3.47 moved Material out of the SDK. Forui 0.26 builds on the
+  # package, so the app must use the same one for theme/type compatibility.
+  material_ui: 1.1.1
 dev_dependencies:
   flutter_test:
     sdk: flutter

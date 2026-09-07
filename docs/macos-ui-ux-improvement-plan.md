@@ -1,6 +1,11 @@
 # Kế hoạch cải thiện UI/UX KeyLease
 
-Ngày cập nhật: 2026-09-07. Trạng thái: **đã chốt Forui; prototype và spike hoàn tất**.
+Ngày cập nhật: 2026-09-07. Trạng thái: **Phase 0–3 và Phase 5 (mức fixture) đã
+triển khai và kiểm chứng bằng analyze/test trên Flutter 3.47.2. Phase 4 chỉ hoàn
+tất phần kiểm chứng được ngoài macOS; các mục cần Mac thật vẫn mở.**
+
+Quyết định phát sinh trong lúc triển khai được ghi ở
+[docs/forui-migration-decisions.md](forui-migration-decisions.md).
 
 ## Quyết định đã chốt
 
@@ -30,13 +35,16 @@ vẫn thích ứng theo form factor; không ép sidebar desktop lên điện tho
 | So sánh thư viện | Hoàn tất | `docs/macos-ui-library-research.md` |
 | Spike `macos_ui` và Forui | Hoàn tất | Cùng model/list/detail; analyze, widget test và debug build macOS pass |
 | Chọn thư viện | Hoàn tất | Forui được chọn cho production |
-| Migration production | Chưa bắt đầu | `lib/main.dart` vẫn là app Material 3 hiện tại |
+| Nâng toolchain + Forui 0.26.0 | Hoàn tất | Flutter 3.47.2 / Dart 3.13.2; `forui: 0.26.0` pin chính xác |
+| Gỡ `macos_ui` khỏi production | Hoàn tất | `flutter pub deps` không còn `macos_ui`/`macos_window_utils`; spike archive tại `apps/desktop-flutter/spikes/macos_ui/` |
+| Migration production | Hoàn tất phần Dart | `lib/main.dart` chỉ còn `runApp`; app nằm ở `lib/app`, `lib/core`, `lib/features`, `lib/ui` |
+| Nghiệm thu trên Mac thật | Chưa | Phiên triển khai chạy trên Linux; xem "Chưa kiểm chứng" |
 
-Spike đang pin Forui 0.21.3 vì máy thực hiện dùng Flutter 3.41.4. Toolchain
-release của repo là Flutter 3.47.2; cổng đầu tiên của migration là nâng lên
-Forui 0.26.x tương thích, chạy migration cần thiết và xác minh lại. Forui đang
-ở version `0.x`, vì vậy production phải pin version và review changelog trước
-mỗi lần nâng.
+Spike ban đầu pin Forui 0.21.3 vì máy đó dùng Flutter 3.41.4. Đã nâng xong:
+production và spike hiện dùng Forui `0.26.0` trên Flutter 3.47.2. Forui vẫn ở
+version `0.x`, nên version được pin chính xác và mỗi lần nâng phải review
+changelog; danh sách breaking change đã xử lý nằm trong
+[forui-migration-decisions.md](forui-migration-decisions.md).
 
 ## Mục tiêu sản phẩm
 
@@ -123,6 +131,11 @@ chưa bao gồm hoàn thiện/phát hành riêng Android, iOS và Windows. Tổn
 Hoàn tất khi Forui spike mới pass analyze, widget test và debug build; production
 entry point cũ vẫn build; không còn dependency native chỉ phục vụ spike đối chứng.
 
+**Trạng thái: hoàn tất, trừ debug build macOS.** Flutter 3.47.2/Dart 3.13.2;
+`forui: 0.26.0`; `material_ui: 1.1.1`; `macos_ui` đã bị gỡ; spike archive ngoài
+`lib/`; `flutter analyze` sạch, `flutter test` pass, `flutter build bundle`
+compile toàn bộ app. `flutter build macos --debug` chưa chạy vì không có host macOS.
+
 ### Giai đoạn 1 — Foundation và app states (3–5 ngày)
 
 - Tách RPC, typed models và state khỏi `main.dart`.
@@ -137,6 +150,12 @@ Hoàn tất khi trạng thái mở app không còn bị đồng nhất sai thàn
 không overflow ở breakpoint mục tiêu và cùng state model render được trên
 desktop lẫn phone fixture.
 
+**Trạng thái: hoàn tất.** `AppPhase` tách 6 trạng thái, `VaultListState` tách
+empty/search-empty; `SplitPane` có min/max, lưu độ rộng và điều khiển được bằng
+bàn phím; shell desktop/rail/compact chọn theo breakpoint; Settings dùng draft.
+Test: `test/app_state_test.dart`, `test/adaptive_shell_test.dart`,
+`test/vault_flow_test.dart`.
+
 ### Giai đoạn 2 — Vault cốt lõi (4–6 ngày)
 
 - Chuyển Vault sang list/detail; cửa sổ hẹp dùng list → detail.
@@ -148,6 +167,11 @@ desktop lẫn phone fixture.
 
 Hoàn tất khi tìm → chọn → copy làm được bằng chuột và bàn phím; CRUD hoạt động
 với IPC thật; RPC lỗi không làm mất draft hoặc lộ secret.
+
+**Trạng thái: hoàn tất ở mức fixture.** Search debounce 220 ms và bỏ response cũ
+theo sequence; reveal/copy lấy dữ liệu theo yêu cầu qua adapter native; draft
+sống sót qua save lỗi. CRUD với **IPC thật** chưa chạy vì phiên này không có
+daemon đang chạy — xem "Chưa kiểm chứng".
 
 ### Giai đoạn 3 — Onboarding và màn hình phụ (3–5 ngày)
 
@@ -162,6 +186,13 @@ với IPC thật; RPC lỗi không làm mất draft hoặc lộ secret.
 Hoàn tất khi người dùng luôn biết bước tiếp theo và mọi thao tác nhạy cảm vẫn
 qua policy/backend hiện tại.
 
+**Trạng thái: hoàn tất.** Mỗi phase có màn hình riêng kèm hành động kế tiếp;
+Connections hiển thị health + `health_reason` + cách sửa; Approvals dùng
+`risk`/`semantic_summary` và ràng buộc quyết định vào đúng digest, từ chối
+request đã hết hạn hoặc đã đổi; Activity có filter và thời gian dễ đọc. Các field
+không có trong contract đã bị bỏ khỏi UI, ghi trong
+[forui-migration-decisions.md](forui-migration-decisions.md).
+
 ### Giai đoạn 4 — Hoàn thiện macOS (3–5 ngày)
 
 - Nối menu native, shortcuts, context menu, window state và restore kích thước.
@@ -174,6 +205,13 @@ qua policy/backend hiện tại.
 Hoàn tất khi bản release macOS vượt checklist nghiệm thu và không còn lỗi chặn
 luồng mở khóa, tìm, copy, edit hoặc lock.
 
+**Trạng thái: một phần.** Đã làm: menu native + window autosave trong
+`MainFlutterWindow.swift` (kèm phát hiện AppKit nuốt ⌘F/⌘,), shortcuts, focus,
+hover cursor, pane resizing bằng chuột và bàn phím, typography/token light-dark,
+kiểm tra text scaling 1.4×. **Chưa làm/chưa kiểm chứng:** build và chạy trên Mac
+thật, VoiceOver, clipboard/sleep/screen-lock/file-access thực tế, sandbox,
+context menu, và đo hiệu năng với 1.000 entry.
+
 ### Giai đoạn 5 — Xác nhận nền móng đa nền tảng (2 ngày)
 
 - Build Forui shell trên Android, iOS và Windows bằng fixture, chưa nối secret thật.
@@ -184,33 +222,68 @@ Hoàn tất khi cùng model và component nghiệp vụ compile trên các targe
 trợ; các khác biệt platform được ghi thành adapter hoặc shell task, không tạo
 fork của business logic.
 
+**Trạng thái: một phần.** Cùng một cây widget render đúng cho macOS, Windows,
+Android và iPad trong widget test (`cross-platform shell` trong
+`test/adaptive_shell_test.dart`), không có fork business logic. **Chưa làm:**
+repo chưa có thư mục runner `android/`, `ios/`, `windows/`, nên chưa có build
+thật cho các target đó; đây là backlog riêng cùng với native adapter tương ứng.
+
 ## Checklist nghiệm thu macOS
 
-- [ ] Production dùng Forui 0.26.x đã pin với Flutter 3.47.2; lockfile được review.
-- [ ] `macos_ui` không còn trong dependency graph production.
-- [ ] `flutter analyze`, widget tests và debug/release build pass.
-- [ ] Phân biệt đúng setup, offline, locked, denied, ready và empty.
-- [ ] Không overflow ở 800×600 và 1280×800; test Retina, light/dark, text scaling.
-- [ ] Tìm và copy entry có sẵn trong ≤10 giây sau hướng dẫn ban đầu.
-- [ ] Với 1.000 entry giả, search-to-results p95 ≤500 ms gồm debounce và RPC
-      trên máy nghiệm thu; xác định UI/backend nếu không đạt.
-- [ ] Unlock, search, chọn entry, copy, edit và lock dùng được bằng keyboard;
-      focus luôn thấy được và VoiceOver đọc đúng nhãn/trạng thái.
-- [ ] Response cũ không ghi đè màn hình mới; lỗi không mất draft; busy state
-      chỉ khóa action liên quan.
-- [ ] Secret mặc định che; reveal theo yêu cầu; lock/sleep/screen lock xóa nội
-      dung nhạy cảm; clipboard giữ cơ chế xóa có điều kiện hiện tại.
-- [ ] Approval hết hạn hoặc đã xử lý không thể quyết định lại từ state cũ.
+Cập nhật 2026-09-07. `[x]` = đã kiểm chứng bằng lệnh chạy thật trên máy triển
+khai (Linux, Flutter 3.47.2). `[~]` = đã triển khai nhưng chỉ kiểm chứng ở mức
+analyze/widget test. `[ ]` = chưa đạt, cần Mac thật hoặc daemon thật.
+
+- [x] Production dùng Forui 0.26.x đã pin với Flutter 3.47.2; lockfile được review.
+- [x] `macos_ui` không còn trong dependency graph production.
+- [~] `flutter analyze` và widget tests pass (57 test). Debug/release build macOS
+      **chưa chạy**: không có host macOS. `flutter build bundle` compile được
+      toàn bộ app.
+- [x] Phân biệt đúng setup, offline, locked, denied, ready và empty.
+- [~] Không overflow ở 800×600 và 1280×800; đã test light/dark và text scaling
+      1.4×. Retina và text scaling ở mức hệ điều hành chưa test trên Mac thật.
+- [ ] Tìm và copy entry có sẵn trong ≤10 giây sau hướng dẫn ban đầu — cần đo với
+      người dùng thật.
+- [ ] Với 1.000 entry giả, search-to-results p95 ≤500 ms — cần daemon thật.
+- [~] Unlock, search, chọn entry, copy, edit và lock dùng được bằng keyboard;
+      focus luôn thấy được. **VoiceOver chưa test** — cần Mac thật.
+- [x] Response cũ không ghi đè màn hình mới; lỗi không mất draft; busy state chỉ
+      khóa action liên quan (`BusyRegistry` theo key).
+- [~] Secret mặc định che; reveal theo yêu cầu; lock/sleep/screen lock xóa nội
+      dung nhạy cảm. Cơ chế clipboard có điều kiện giữ nguyên trong Swift, nhưng
+      chỉ được kiểm chứng qua adapter giả.
+- [x] Approval hết hạn hoặc đã xử lý không thể quyết định lại từ state cũ.
 - [ ] Kiểm thử native clipboard, security-scoped file, window và sleep trên Mac thật.
 
-## Thứ tự thực hiện ngay
+### Chưa kiểm chứng trong phiên triển khai này
 
-1. Nâng toolchain và Forui, khóa theme/tokens.
-2. Tách state/RPC khỏi `main.dart` và dựng adaptive shell production.
-3. Chuyển hoàn chỉnh luồng Vault.
-4. Chuyển onboarding, Connections, Approvals, Activity và Settings.
-5. Hoàn thiện macOS native behavior và acceptance.
-6. Build fixture trên Android, iOS và Windows để xác nhận kiến trúc dùng chung.
+Phiên chạy trên Linux (`ruan-dev`), không có macOS host, không có daemon
+KeyLease đang chạy. Những mục sau **chưa được chạy thật**, không suy diễn:
+
+1. `flutter build macos --debug` và `--release`.
+2. Mã Swift mới trong `MainFlutterWindow.swift` (menu native, window autosave)
+   chưa được compile.
+3. VoiceOver, Retina, text scaling ở mức hệ điều hành.
+4. Clipboard có điều kiện, security-scoped file access, sleep/screen lock,
+   sandbox và OAuth browser flow trên máy thật.
+5. CRUD và search với IPC thật; đo p95 với 1.000 entry.
+6. Build Android, iOS và Windows: repo chưa có thư mục runner cho các target đó.
+
+## Việc còn lại
+
+Các bước 1–4 của thứ tự cũ đã xong. Còn lại, theo thứ tự:
+
+1. Trên một Mac có Xcode: `flutter build macos --debug` rồi `--release`, sửa mọi
+   lỗi compile Swift phát sinh từ menu native và window autosave.
+2. Chạy `keylease serve --start-locked`, đăng ký client, rồi kiểm chứng CRUD,
+   search, copy, TOTP, approvals và Activity với IPC thật.
+3. Nghiệm thu macOS: VoiceOver, clipboard có điều kiện, security-scoped file,
+   sleep/screen lock, sandbox, Retina và text scaling.
+4. Đo p95 search với 1.000 entry giả; nếu không đạt, xác định UI hay backend.
+5. Thêm runner `android/`, `ios/`, `windows/` và build fixture trên từng target;
+   ghi backlog native adapter riêng cho mỗi platform.
+6. Nếu muốn Favorites, recent ordering hoặc tên client dễ đọc: bổ sung contract
+   IPC có test trước, không thêm dữ liệu giả vào UI.
 
 Hoãn animation trang trí, dashboard mới, AI feature và đổi thương hiệu cho đến
 khi luồng chính và acceptance macOS hoàn tất.

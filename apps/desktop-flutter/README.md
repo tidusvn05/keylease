@@ -1,6 +1,9 @@
 # KeyLease desktop
 
-This is the thin macOS presentation client for the versioned local IPC API. It
+This is the thin presentation client for the versioned local IPC API. One
+Flutter code base targets macOS, Windows, Android and iOS; macOS is the first
+deployment and acceptance target. The UI is built on
+[Forui](https://forui.dev) `0.26.0`, pinned exactly, with Flutter 3.47.2. It
 provides vault/group navigation, metadata search, login create/edit/delete,
 connection posture, exact-request approval decisions and the redacted audit
 view. It does not contain crypto, KDBX parsing, policy decisions, or connector
@@ -18,11 +21,43 @@ password reveal, and TOTP, plus `connection:list`,
 oversized, or group/world-readable client-token files and bounds IPC requests
 and responses to 4 MiB.
 
-The macOS runner is checked in. Build and run it on a macOS Flutter workstation:
+## Layout
+
+```text
+lib/
+├── main.dart                  # runApp only
+├── app/                       # KeyLeaseApp, theme, adaptive shell, shortcuts
+├── core/
+│   ├── rpc/                   # line-delimited JSON client + typed errors
+│   ├── models/                # typed views over the IPC payloads
+│   ├── state/                 # AppController, VaultController, drafts
+│   └── platform/              # native adapter interfaces
+├── features/                  # onboarding, vault, connections, approvals,
+│                              # activity, settings
+└── ui/
+    ├── tokens/                # KeyLease design tokens
+    └── components/            # EntryRow, SecretField, RequestSummary, …
+```
+
+The shell adapts to the window: a persistent sidebar with a resizable
+list/detail split on desktop, a rail on tablets, and compact navigation with a
+list → detail route on phones. State, validation, permission semantics and the
+RPC contract are shared; only the shell changes.
+
+## Build and run
+
+The macOS runner is checked in. Build and run it on a macOS Flutter workstation
+with Flutter 3.47.2:
 
 ```sh
+flutter pub get
+flutter analyze
+flutter test
 flutter run -d macos
 ```
+
+The app has no native plugin dependencies, so
+`flutter config --enable-swift-package-manager` is not required.
 
 Start `keylease serve --start-locked` first. In Settings, select the mode-0600
 client-token file issued by `keylease client register`, then unlock from the
@@ -42,5 +77,13 @@ browser. The native runner only opens an HTTPS URL whose host is exactly
 code exchange, selected-file validation, and encrypted token storage. OAuth
 tokens never enter Flutter method arguments or state.
 
-Signing/notarization and exercising the sandbox, security-scoped URL, and
-sleep/screen-lock behavior remain macOS release acceptance checks.
+The native menu bar is wired in `macos/Runner/MainFlutterWindow.swift`: macOS
+consumes a menu key equivalent before the Flutter view sees it, so the
+template's `Find… ⌘F` and `Preferences… ⌘,` items are retargeted onto the app's
+own intents, and a Vault menu adds New Item ⌘N, Refresh ⌘R and Lock Vault ⌘L.
+The window restores its last size and position.
+
+Signing/notarization and exercising the sandbox, security-scoped URL, VoiceOver
+and sleep/screen-lock behavior remain macOS release acceptance checks. See
+[docs/macos-ui-ux-improvement-plan.md](../../docs/macos-ui-ux-improvement-plan.md)
+for the acceptance checklist and what is still unverified.

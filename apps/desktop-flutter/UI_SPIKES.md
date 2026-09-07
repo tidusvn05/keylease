@@ -3,6 +3,12 @@
 **Quyết định 2026-09-07:** chọn Forui cho production. Spike `macos_ui` được giữ
 làm đối chứng về macOS shell, không phải hướng implementation tiếp theo.
 
+**Cập nhật sau Phase 0:** production đã chuyển sang Forui `0.26.0` trên Flutter
+3.47.2. Spike Forui vẫn còn tại `lib/ui_spikes/` và đã được migrate theo API mới.
+Spike `macos_ui` được archive tại `spikes/macos_ui/`, ngoài `lib/` và ngoài
+dependency graph. Chi tiết breaking change và quyết định:
+[docs/forui-migration-decisions.md](../../docs/forui-migration-decisions.md).
+
 Hai spike dùng cùng model và cùng widget nghiệp vụ list/detail để so sánh phần
 shell và controls của `macos_ui` với Forui. Chúng dùng fixture, không gọi IPC,
 đọc token, copy clipboard hoặc thay đổi entry point production `lib/main.dart`.
@@ -12,23 +18,19 @@ shell và controls của `macos_ui` với Forui. Chúng dùng fixture, không g�
 Từ `apps/desktop-flutter`:
 
 ```sh
-flutter config --enable-swift-package-manager
 flutter pub get
-flutter run -d macos -t lib/ui_spikes/macos_ui_spike.dart
 flutter run -d macos -t lib/ui_spikes/forui_spike.dart
 ```
+
+Spike `macos_ui` không chạy trực tiếp được nữa; xem `spikes/macos_ui/README.md`.
 
 Kiểm tra code và build:
 
 ```sh
 flutter analyze lib/ui_spikes test/ui_spikes_test.dart
 flutter test test/ui_spikes_test.dart
-flutter build macos --debug -t lib/ui_spikes/macos_ui_spike.dart
 flutter build macos --debug -t lib/ui_spikes/forui_spike.dart
 ```
-
-Hai lệnh build cùng ghi vào `build/macos/Build/Products/Debug/KeyLease.app`;
-build sau thay artifact của build trước.
 
 ## Phạm vi so sánh
 
@@ -47,7 +49,10 @@ native clipboard, menu bar, VoiceOver, light/dark đầy đủ hoặc mobile run
 
 ## Dependency và build finding
 
-- Máy thực hiện spike: Flutter 3.41.4, Dart 3.11.1.
+- Máy thực hiện spike ban đầu: Flutter 3.41.4, Dart 3.11.1.
+- Sau Phase 0: Flutter 3.47.2, Dart 3.13.2, Forui `0.26.0`.
+- App không còn plugin native nào, nên `flutter config
+  --enable-swift-package-manager` **không còn bắt buộc**.
 - `macos_ui` 2.2.2 yêu cầu Flutter >=3.35 và thêm các plugin macOS.
 - `macos_ui` không build được khi Flutter tự tạo CocoaPods integration nhưng
   máy không có CocoaPods executable. Spike đã được build với Flutter setting

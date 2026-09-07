@@ -88,13 +88,16 @@ class SpikeVaultModel extends ChangeNotifier {
 
   List<SpikeEntry> get visibleEntries {
     final normalized = query.trim().toLowerCase();
-    return entries.where((entry) {
-      final inGroup = group == 'All items' ||
-          (group == 'Favorites' ? entry.favorite : entry.group == group);
-      final searchable =
-          '${entry.title} ${entry.username} ${entry.website}'.toLowerCase();
-      return inGroup && searchable.contains(normalized);
-    }).toList(growable: false);
+    return entries
+        .where((entry) {
+          final inGroup =
+              group == 'All items' ||
+              (group == 'Favorites' ? entry.favorite : entry.group == group);
+          final searchable = '${entry.title} ${entry.username} ${entry.website}'
+              .toLowerCase();
+          return inGroup && searchable.contains(normalized);
+        })
+        .toList(growable: false);
   }
 
   SpikeEntry? get selected {

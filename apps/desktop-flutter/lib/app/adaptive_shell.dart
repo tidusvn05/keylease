@@ -1,0 +1,507 @@
+import 'package:forui/forui.dart';
+import 'package:material_ui/material_ui.dart';
+
+import '../core/models/models.dart';
+import '../core/state/app_controller.dart';
+import '../core/state/app_phase.dart';
+import '../features/activity/activity_page.dart';
+import '../features/approvals/approvals_page.dart';
+import '../features/connections/connections_page.dart';
+import '../features/onboarding/phase_screens.dart';
+import '../features/settings/settings_page.dart';
+import '../features/vault/entry_editor.dart';
+import '../features/vault/totp_dialog.dart';
+import '../features/vault/vault_page.dart';
+import '../ui/components/keylease_dialog.dart';
+import '../ui/components/keylease_mark.dart';
+import '../ui/components/message_banner.dart';
+import '../ui/components/secret_field.dart';
+import '../ui/components/split_pane.dart';
+import '../ui/tokens/keylease_tokens.dart';
+import 'app_scope.dart';
+
+/// Chooses the shell for the current window, then hands every form factor the
+/// same feature state.
+///
+/// Desktop keeps a persistent sidebar and a resizable list/detail split.
+/// Tablet keeps a rail and the split when there is room. Phone uses compact
+/// navigation and routes list → detail.
+class AdaptiveShell extends StatelessWidget {
+  const AdaptiveShell({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final app = AppScope.of(context);
+    final tokens = KeyLeaseTokens.of(context);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final splitView = width >= tokens.splitBreakpoint;
+        final body = _ShellBody(app: app, splitView: splitView);
+        if (width >= tokens.expandedBreakpoint) {
+          return _DesktopShell(app: app, body: body);
+        }
+        if (width >= tokens.compactBreakpoint) {
+          return _RailShell(app: app, body: body);
+        }
+        return _CompactShell(app: app, body: body);
+      },
+    );
+  }
+}
+
+/// Section content plus the app-wide banner, shared by every shell.
+class _ShellBody extends StatelessWidget {
+  const _ShellBody({required this.app, required this.splitView});
+
+  final AppController app;
+  final bool splitView;
+
+  @override
+  Widget build(BuildContext context) {
+    final section = app.section;
+    final gated = section.requiresReady && !app.isReady;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (app.banner != null)
+          MessageBanner(
+            message: app.banner!,
+            onDismiss: app.dismissBanner,
+            onAction: app.refresh,
+          ),
+        Expanded(
+          child: gated
+              ? PhaseScreen(phase: app.phase)
+              : switch (section) {
+                  AppSection.vault => VaultPage(splitView: splitView),
+                  AppSection.connections => const ConnectionsPage(),
+                  AppSection.approvals => const ApprovalsPage(),
+                  AppSection.activity => const ActivityPage(),
+                  AppSection.settings => const SettingsPage(),
+                },
+        ),
+      ],
+    );
+  }
+}
+
+class _Header extends StatelessWidget {
+  const _Header({required this.app});
+
+  final AppController app;
+
+  @override
+  Widget build(BuildContext context) => FHeader(
+    title: Text(app.section.label),
+    suffixes: [
+      if (app.section == AppSection.vault && app.isReady)
+        FHeaderAction(
+          semanticsLabel: 'New item',
+          icon: const Icon(FLucideIcons.plus),
+          onPress: () => openEntryEditor(context, app),
+        ),
+      FHeaderAction(
+        semanticsLabel: 'Refresh',
+        icon: const Icon(FLucideIcons.refreshCw),
+        onPress: app.isBusy(AppController.refreshKey) ? null : app.refresh,
+      ),
+      if (app.isReady)
+        FHeaderAction(
+          semanticsLabel: 'Lock vault',
+          icon: const Icon(FLucideIcons.lock),
+          onPress: app.isBusy(AppController.lockKey) ? null : app.lock,
+        ),
+    ],
+  );
+}
+
+class _DesktopShell extends StatelessWidget {
+  const _DesktopShell({required this.app, required this.body});
+
+  final AppController app;
+  final Widget body;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = KeyLeaseTokens.of(context);
+    // The sidebar spans the full window height and the toolbar sits over the
+    // content area, matching the prototype's information architecture.
+    return SplitPane(
+      width: app.sidebarWidth,
+      minWidth: tokens.sidebarMinWidth,
+      maxWidth: tokens.sidebarMaxWidth,
+      semanticsLabel: 'Resize the sidebar',
+      onWidthChanged: (value) => app.setPaneWidths(sidebar: value),
+      leading: _Sidebar(app: app),
+      trailing: FScaffold(
+        childPad: false,
+        header: _Header(app: app),
+        child: body,
+      ),
+    );
+  }
+}
+
+class _RailShell extends StatelessWidget {
+  const _RailShell({required this.app, required this.body});
+
+  final AppController app;
+  final Widget body;
+
+  @override
+  Widget build(BuildContext context) => FScaffold(
+    childPad: false,
+    header: _Header(app: app),
+    child: Row(
+      children: [
+        _Rail(app: app),
+        ColoredBox(
+          color: context.theme.colors.border,
+          child: const SizedBox(width: 1, height: double.infinity),
+        ),
+        Expanded(child: body),
+      ],
+    ),
+  );
+}
+
+class _CompactShell extends StatelessWidget {
+  const _CompactShell({required this.app, required this.body});
+
+  final AppController app;
+  final Widget body;
+
+  @override
+  Widget build(BuildContext context) => FScaffold(
+    childPad: false,
+    header: _Header(app: app),
+    footer: FBottomNavigationBar(
+      index: AppSection.values.indexOf(app.section),
+      onChange: (index) => app.selectSection(AppSection.values[index]),
+      children: const [
+        FBottomNavigationBarItem(
+          icon: Icon(FLucideIcons.keyRound),
+          label: Text('Vault'),
+        ),
+        FBottomNavigationBarItem(
+          icon: Icon(FLucideIcons.link),
+          label: Text('Links'),
+        ),
+        FBottomNavigationBarItem(
+          icon: Icon(FLucideIcons.shieldCheck),
+          label: Text('Approvals'),
+        ),
+        FBottomNavigationBarItem(
+          icon: Icon(FLucideIcons.clock),
+          label: Text('Activity'),
+        ),
+        FBottomNavigationBarItem(
+          icon: Icon(FLucideIcons.settings),
+          label: Text('Settings'),
+        ),
+      ],
+    ),
+    child: body,
+  );
+}
+
+class _Rail extends StatelessWidget {
+  const _Rail({required this.app});
+
+  final AppController app;
+
+  static const _icons = {
+    AppSection.vault: FLucideIcons.keyRound,
+    AppSection.connections: FLucideIcons.link,
+    AppSection.approvals: FLucideIcons.shieldCheck,
+    AppSection.activity: FLucideIcons.clock,
+    AppSection.settings: FLucideIcons.settings,
+  };
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 68,
+    child: Column(
+      children: [
+        const SizedBox(height: 12),
+        const KeyLeaseBrandMark(size: 32),
+        const SizedBox(height: 12),
+        for (final section in AppSection.values)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            child: IconAction(
+              label: section.label,
+              icon: _icons[section]!,
+              variant: app.section == section
+                  ? FButtonVariant.secondary
+                  : FButtonVariant.ghost,
+              onPress: () => app.selectSection(section),
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
+class _Sidebar extends StatelessWidget {
+  const _Sidebar({required this.app});
+
+  final AppController app;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.theme;
+    return Observe(
+      listenable: app.vault,
+      builder: (context, vault) => FSidebar(
+        header: Padding(
+          padding: const EdgeInsets.fromLTRB(6, 6, 6, 15),
+          child: Row(
+            children: [
+              const KeyLeaseBrandMark(),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'KeyLease',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    Text(
+                      app.status?.vaultId == null
+                          ? 'Local vault'
+                          : 'Vault ${app.status!.vaultId}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.typography.body.xs.copyWith(
+                        color: theme.colors.mutedForeground,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        footer: _ConnectionFooter(app: app),
+        children: [
+          FSidebarGroup(
+            children: [
+              for (final section in AppSection.values)
+                FSidebarItem(
+                  key: ValueKey('nav-${section.name}'),
+                  icon: Icon(_Rail._icons[section]),
+                  label: Text(section.label),
+                  selected: app.section == section,
+                  onPress: () => app.selectSection(section),
+                ),
+            ],
+          ),
+          if (app.section == AppSection.vault && app.isReady)
+            FSidebarGroup(
+              label: const Text('Groups'),
+              action: const Icon(FLucideIcons.folderPlus, size: 15),
+              onActionPress: () => _createGroup(context),
+              children: [
+                FSidebarItem(
+                  key: const ValueKey('group-all'),
+                  icon: const Icon(FLucideIcons.layoutGrid),
+                  label: const Text('All items'),
+                  selected: vault.selectedGroupId == null,
+                  onPress: () => vault.selectGroup(null),
+                ),
+                for (final group in vault.groups)
+                  FSidebarItem(
+                    key: ValueKey('group-${group.id}'),
+                    icon: const Icon(FLucideIcons.folder),
+                    label: Text(group.name),
+                    selected: vault.selectedGroupId == group.id,
+                    onPress: () => vault.selectGroup(group.id),
+                  ),
+                if (vault.groups.isNotEmpty)
+                  FSidebarItem(
+                    key: const ValueKey('group-manage'),
+                    icon: const Icon(FLucideIcons.settings2),
+                    label: const Text('Manage groups'),
+                    onPress: () => _manageGroups(context),
+                  ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _createGroup(BuildContext context) async {
+    final name = TextEditingController();
+    final submitted = await showKeyLeaseDialog<bool>(
+      context: context,
+      title: 'New group',
+      bodyBuilder: (context) => FTextField(
+        key: const ValueKey('group-name'),
+        label: const Text('Name'),
+        autofocus: true,
+        control: FTextFieldControl.managed(controller: name),
+      ),
+      actionsBuilder: (context) => [
+        FButton(
+          variant: FButtonVariant.outline,
+          onPress: () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FButton(
+          onPress: () => Navigator.of(context).pop(true),
+          child: const Text('Create'),
+        ),
+      ],
+    );
+    final value = name.text.trim();
+    name.dispose();
+    if (submitted != true || value.isEmpty || !context.mounted) return;
+    try {
+      await app.vault.createGroup(value);
+    } catch (caught) {
+      if (context.mounted) showFailure(context, caught);
+    }
+  }
+
+  Future<void> _manageGroups(BuildContext context) => showKeyLeaseDialog<void>(
+    context: context,
+    title: 'Manage groups',
+    description: 'Rename a group, or delete one that is already empty.',
+    bodyBuilder: (context) => Observe(
+      listenable: app.vault,
+      builder: (context, vault) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final group in vault.groups) _GroupRow(app: app, group: group),
+        ],
+      ),
+    ),
+    actionsBuilder: (context) => [
+      FButton(
+        onPress: () => Navigator.of(context).pop(),
+        child: const Text('Done'),
+      ),
+    ],
+  );
+}
+
+class _GroupRow extends StatelessWidget {
+  const _GroupRow({required this.app, required this.group});
+
+  final AppController app;
+  final VaultGroup group;
+
+  @override
+  Widget build(BuildContext context) => FItem(
+    title: Text(group.name),
+    suffix: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconAction(
+          label: 'Rename ${group.name}',
+          icon: FLucideIcons.squarePen,
+          onPress: () => _rename(context),
+        ),
+        const SizedBox(width: 6),
+        IconAction(
+          label: 'Delete ${group.name}',
+          icon: FLucideIcons.trash2,
+          onPress: () => _delete(context),
+        ),
+      ],
+    ),
+  );
+
+  Future<void> _rename(BuildContext context) async {
+    final name = TextEditingController(text: group.name);
+    final submitted = await showKeyLeaseDialog<bool>(
+      context: context,
+      title: 'Rename group',
+      bodyBuilder: (context) => FTextField(
+        label: const Text('Name'),
+        autofocus: true,
+        control: FTextFieldControl.managed(controller: name),
+      ),
+      actionsBuilder: (context) => [
+        FButton(
+          variant: FButtonVariant.outline,
+          onPress: () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FButton(
+          onPress: () => Navigator.of(context).pop(true),
+          child: const Text('Rename'),
+        ),
+      ],
+    );
+    final value = name.text.trim();
+    name.dispose();
+    if (submitted != true || value.isEmpty || !context.mounted) return;
+    try {
+      await app.vault.renameGroup(group, value);
+    } catch (caught) {
+      if (context.mounted) showFailure(context, caught);
+    }
+  }
+
+  Future<void> _delete(BuildContext context) async {
+    final confirmed = await confirm(
+      context: context,
+      title: 'Delete this group?',
+      message:
+          'Only an empty group can be deleted. "${group.name}" is '
+          'removed from the vault.',
+      confirmLabel: 'Delete',
+      destructive: true,
+    );
+    if (!confirmed || !context.mounted) return;
+    try {
+      await app.vault.deleteGroup(group);
+    } catch (caught) {
+      if (context.mounted) showFailure(context, caught);
+    }
+  }
+}
+
+class _ConnectionFooter extends StatelessWidget {
+  const _ConnectionFooter({required this.app});
+
+  final AppController app;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = KeyLeaseTokens.of(context);
+    final (label, color) = switch (app.phase) {
+      AppPhase.checking => ('Checking the local service', tokens.warning),
+      AppPhase.setupRequired => ('Setup needed', tokens.warning),
+      AppPhase.serviceUnavailable => ('Service unavailable', tokens.danger),
+      AppPhase.locked => ('Connected · Vault locked', tokens.warning),
+      AppPhase.permissionDenied => ('Connected · Not permitted', tokens.danger),
+      AppPhase.ready => ('Connected · Vault unlocked', tokens.success),
+    };
+    return Padding(
+      padding: const EdgeInsets.all(7),
+      child: Row(
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              label,
+              maxLines: 2,
+              style: context.theme.typography.body.xs.copyWith(color: color),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

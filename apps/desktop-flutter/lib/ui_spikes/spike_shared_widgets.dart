@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'spike_model.dart';
 
@@ -43,8 +43,10 @@ class SpikeEntryList extends StatelessWidget {
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 100),
                 margin: const EdgeInsets.only(bottom: 2),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
                   color: selected
                       ? spikeBlue.withValues(alpha: 0.14)
@@ -139,7 +141,7 @@ class SpikeEntryDetail extends StatelessWidget {
   final SpikeVaultModel model;
   final VoidCallback onReveal;
   final Widget Function(String label, IconData icon, VoidCallback action)
-      actionBuilder;
+  actionBuilder;
 
   @override
   Widget build(BuildContext context) {
@@ -180,8 +182,11 @@ class SpikeEntryDetail extends StatelessWidget {
             SpikeField(
               label: 'Username',
               value: entry.username,
-              action:
-                  actionBuilder('Copy username', Icons.copy_outlined, () {}),
+              action: actionBuilder(
+                'Copy username',
+                Icons.copy_outlined,
+                () {},
+              ),
             ),
             SpikeField(
               label: 'Password',
@@ -246,15 +251,13 @@ class SpikeSectionLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 9),
-        child: Text(
-          text.toUpperCase(),
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                letterSpacing: 0.7,
-                fontWeight: FontWeight.w600,
-              ),
-        ),
-      );
+    padding: const EdgeInsets.only(bottom: 9),
+    child: Text(
+      text.toUpperCase(),
+      style: Theme.of(context).textTheme.labelSmall
+          ?.copyWith(letterSpacing: 0.7, fontWeight: FontWeight.w600),
+    ),
+  );
 }
 
 class SpikeFieldGroup extends StatelessWidget {
@@ -263,20 +266,20 @@ class SpikeFieldGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        decoration: BoxDecoration(
-          border: Border.all(color: Theme.of(context).dividerColor),
-          borderRadius: BorderRadius.circular(9),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          children: [
-            for (var index = 0; index < children.length; index++) ...[
-              if (index > 0) const Divider(height: 1),
-              children[index],
-            ],
-          ],
-        ),
-      );
+    decoration: BoxDecoration(
+      border: Border.all(color: Theme.of(context).dividerColor),
+      borderRadius: BorderRadius.circular(9),
+    ),
+    clipBehavior: Clip.antiAlias,
+    child: Column(
+      children: [
+        for (var index = 0; index < children.length; index++) ...[
+          if (index > 0) const Divider(height: 1),
+          children[index],
+        ],
+      ],
+    ),
+  );
 }
 
 class SpikeField extends StatelessWidget {
@@ -297,30 +300,29 @@ class SpikeField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(label, style: Theme.of(context).textTheme.labelSmall),
-                  const SizedBox(height: 5),
-                  Text(
-                    value,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontFamily: monospace ? 'Menlo' : null,
-                      letterSpacing:
-                          monospace && value.startsWith('•') ? 1.8 : 0,
-                      color: accent ? spikeBlue : null,
-                    ),
-                  ),
-                ],
+    padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+    child: Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: Theme.of(context).textTheme.labelSmall),
+              const SizedBox(height: 5),
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontFamily: monospace ? 'Menlo' : null,
+                  letterSpacing: monospace && value.startsWith('•') ? 1.8 : 0,
+                  color: accent ? spikeBlue : null,
+                ),
               ),
-            ),
-            action,
-          ],
+            ],
+          ),
         ),
-      );
+        action,
+      ],
+    ),
+  );
 }

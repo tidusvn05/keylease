@@ -5,6 +5,7 @@ class MainFlutterWindow: NSWindow {
   private var observerTokens: [NSObjectProtocol] = []
   private var securityScopedURLs: [URL] = []
   private var sensitivePasteboardChangeCount: Int?
+  private var menuChannel: FlutterMethodChannel?
 
   private func clearSensitiveClipboardIfUnchanged() {
     let pasteboard = NSPasteboard.general
@@ -16,11 +17,71 @@ class MainFlutterWindow: NSWindow {
     sensitivePasteboardChangeCount = nil
   }
 
+  /// Forwards a menu selection to Flutter, which owns the actual behaviour.
+  @objc private func keyLeaseMenuAction(_ sender: NSMenuItem) {
+    guard let action = sender.representedObject as? String else { return }
+    menuChannel?.invokeMethod("menuAction", arguments: action)
+  }
+
+  /// Retargets the first menu item with the exact shortcut, depth first.
+  @discardableResult
+  private func retarget(
+    _ menu: NSMenu,
+    keyEquivalent: String,
+    modifiers: NSEvent.ModifierFlags,
+    action: String
+  ) -> Bool {
+    for item in menu.items {
+      if item.keyEquivalent == keyEquivalent, item.keyEquivalentModifierMask == modifiers {
+        item.target = self
+        item.action = #selector(keyLeaseMenuAction(_:))
+        item.representedObject = action
+        return true
+      }
+      if let submenu = item.submenu,
+        retarget(submenu, keyEquivalent: keyEquivalent, modifiers: modifiers, action: action)
+      {
+        return true
+      }
+    }
+    return false
+  }
+
+  private func vaultMenuItem(_ title: String, _ key: String, _ action: String) -> NSMenuItem {
+    let item = NSMenuItem(
+      title: title, action: #selector(keyLeaseMenuAction(_:)), keyEquivalent: key)
+    item.target = self
+    item.representedObject = action
+    return item
+  }
+
+  /// Without this, the template menu swallows the shortcuts KeyLease uses:
+  /// AppKit consumes a menu key equivalent before the Flutter view sees it,
+  /// so Command-F and Command-Comma would never reach the app's shortcuts.
+  private func wireMenu(channel: FlutterMethodChannel) {
+    menuChannel = channel
+    guard let mainMenu = NSApp.mainMenu else { return }
+    retarget(mainMenu, keyEquivalent: "f", modifiers: [.command], action: "search")
+    retarget(mainMenu, keyEquivalent: ",", modifiers: [.command], action: "settings")
+
+    let vaultMenu = NSMenu(title: "Vault")
+    vaultMenu.addItem(vaultMenuItem("New Item", "n", "new_item"))
+    vaultMenu.addItem(vaultMenuItem("Refresh", "r", "refresh"))
+    vaultMenu.addItem(.separator())
+    vaultMenu.addItem(vaultMenuItem("Lock Vault", "l", "lock"))
+    let vaultItem = NSMenuItem(title: "Vault", action: nil, keyEquivalent: "")
+    vaultItem.submenu = vaultMenu
+    // After the application and Edit menus, before Window and Help.
+    mainMenu.insertItem(vaultItem, at: min(2, mainMenu.items.count))
+  }
+
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
     self.contentViewController = flutterViewController
     self.setFrame(windowFrame, display: true)
+    // Restores the size and position the user left the window in.
+    self.setFrameAutosaveName("KeyLeaseMainWindow")
 
     let registrar = flutterViewController.registrar(forPlugin: "KeyLeaseSecurity")
     let channel = FlutterMethodChannel(
@@ -112,6 +173,8 @@ class MainFlutterWindow: NSWindow {
       channel.invokeMethod("lockRequested", arguments: "screen_lock")
     }
     observerTokens.append(screenToken)
+
+    wireMenu(channel: channel)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 

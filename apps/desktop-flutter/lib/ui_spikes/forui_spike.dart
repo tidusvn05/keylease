@@ -1,5 +1,5 @@
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:forui/forui.dart';
 
 import 'spike_model.dart';
@@ -21,16 +21,16 @@ class ForuiSpikeApp extends StatelessWidget {
       TargetPlatform.fuchsia => FPlatformVariant.android,
     };
     final theme = platform.desktop
-        ? FThemes.neutral.light.desktop
-        : FThemes.neutral.light.touch;
+        ? FTheme.neutral.light.desktop
+        : FTheme.neutral.light.touch;
     return MaterialApp(
       title: 'KeyLease — Forui spike',
       debugShowCheckedModeBanner: false,
       localizationsDelegates: FLocalizations.localizationsDelegates,
       supportedLocales: FLocalizations.supportedLocales,
       theme: theme.toApproximateMaterialTheme().copyWith(
-            dividerColor: const Color(0xffe1e5eb),
-          ),
+        dividerColor: const Color(0xffe1e5eb),
+      ),
       builder: (context, child) => FTheme(
         data: theme,
         platform: platform,
@@ -75,182 +75,178 @@ class _ForuiVaultSpikeState extends State<ForuiVaultSpike> {
 
   @override
   Widget build(BuildContext context) => FScaffold(
-        childPad: false,
-        sidebar: SizedBox(
-          width: 224,
-          child: FSidebar(
-            header: const Padding(
-              padding: EdgeInsets.fromLTRB(6, 6, 6, 15),
-              child: Row(
-                children: [
-                  _ForuiKeyLeaseMark(),
-                  SizedBox(width: 10),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'KeyLease',
-                        style: TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      Text('Personal vault', style: TextStyle(fontSize: 11)),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            footer: const Padding(
-              padding: EdgeInsets.all(7),
-              child: Row(
-                children: [
-                  Icon(FIcons.circleCheck, size: 14),
-                  SizedBox(width: 7),
-                  Expanded(
-                    child: Text(
-                      'Connected · Vault unlocked',
-                      style: TextStyle(fontSize: 11),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+    childPad: false,
+    sidebar: SizedBox(
+      width: 224,
+      child: FSidebar(
+        header: const Padding(
+          padding: EdgeInsets.fromLTRB(6, 6, 6, 15),
+          child: Row(
             children: [
-              FSidebarGroup(
+              _ForuiKeyLeaseMark(),
+              SizedBox(width: 10),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _item('All items', FIcons.layoutGrid, '6'),
-                  _item('Favorites', FIcons.star, '3'),
-                ],
-              ),
-              FSidebarGroup(
-                label: const Text('Groups'),
-                children: [
-                  _item('Work', FIcons.folder),
-                  _item('Personal', FIcons.folder),
-                  _item('Infrastructure', FIcons.folder),
-                ],
-              ),
-              const FSidebarGroup(
-                label: Text('Workspace'),
-                children: [
-                  FSidebarItem(
-                    icon: Icon(FIcons.link),
-                    label: Text('Connections'),
+                  Text(
+                    'KeyLease',
+                    style: TextStyle(fontWeight: FontWeight.w600),
                   ),
-                  FSidebarItem(
-                    icon: Icon(FIcons.shieldCheck),
-                    label: Text('Approvals · 2'),
-                  ),
-                  FSidebarItem(
-                    icon: Icon(FIcons.clock),
-                    label: Text('Activity'),
-                  ),
+                  Text('Personal vault', style: TextStyle(fontSize: 11)),
                 ],
               ),
             ],
           ),
         ),
-        header: FHeader(
-          title: Text(model.group),
-          suffixes: [
-            FHeaderAction(
-              semanticsLabel: 'Lock vault',
-              icon: const Icon(FIcons.lock),
-              onPress: () {},
-            ),
-            FButton(
-              onPress: () {},
-              prefix: const Icon(FIcons.plus),
-              child: const Text('New item'),
-            ),
-          ],
-        ),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final showDetail = constraints.maxWidth >= 660;
-            return Row(
-              children: [
-                SizedBox(
-                  width: showDetail ? 306 : constraints.maxWidth,
-                  child: Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(15, 17, 15, 9),
-                        child: FTextField(
-                          key: const ValueKey('forui-search'),
-                          control: FTextFieldControl.managed(
-                            controller: search,
-                            onChange: (value) => model.setQuery(value.text),
-                          ),
-                          hint: 'Search your vault',
-                          prefixBuilder: (context, style, variants) =>
-                              const Padding(
-                            padding: EdgeInsets.only(left: 11, right: 6),
-                            child: Icon(FIcons.search, size: 17),
-                          ),
-                          clearable: (value) => value.text.isNotEmpty,
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                        child: Row(
-                          children: [
-                            Text(
-                              '${model.visibleEntries.length} items',
-                              style: const TextStyle(fontSize: 11),
-                            ),
-                            const Spacer(),
-                            const Text(
-                              'Recently used',
-                              style: TextStyle(fontSize: 11),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Expanded(
-                        child: SpikeEntryList(
-                          model: model,
-                          onSelect: model.select,
-                        ),
-                      ),
-                    ],
-                  ),
+        footer: const Padding(
+          padding: EdgeInsets.all(7),
+          child: Row(
+            children: [
+              Icon(FLucideIcons.circleCheck, size: 14),
+              SizedBox(width: 7),
+              Expanded(
+                child: Text(
+                  'Connected · Vault unlocked',
+                  style: TextStyle(fontSize: 11),
                 ),
-                if (showDetail) ...[
-                  const VerticalDivider(width: 1),
-                  Expanded(
-                    child: SpikeEntryDetail(
-                      model: model,
-                      onReveal: model.toggleReveal,
-                      actionBuilder: (label, icon, action) => KeyedSubtree(
-                        key: ValueKey('action-$label'),
-                        child: FTooltip(
-                          tipBuilder: (context, controller) => Text(label),
-                          child: FButton.icon(
-                            onPress: action,
-                            child: Icon(icon, semanticLabel: label, size: 17),
+              ),
+            ],
+          ),
+        ),
+        children: [
+          FSidebarGroup(
+            children: [
+              _item('All items', FLucideIcons.layoutGrid, '6'),
+              _item('Favorites', FLucideIcons.star, '3'),
+            ],
+          ),
+          FSidebarGroup(
+            label: const Text('Groups'),
+            children: [
+              _item('Work', FLucideIcons.folder),
+              _item('Personal', FLucideIcons.folder),
+              _item('Infrastructure', FLucideIcons.folder),
+            ],
+          ),
+          const FSidebarGroup(
+            label: Text('Workspace'),
+            children: [
+              FSidebarItem(
+                icon: Icon(FLucideIcons.link),
+                label: Text('Connections'),
+              ),
+              FSidebarItem(
+                icon: Icon(FLucideIcons.shieldCheck),
+                label: Text('Approvals · 2'),
+              ),
+              FSidebarItem(
+                icon: Icon(FLucideIcons.clock),
+                label: Text('Activity'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ),
+    header: FHeader(
+      title: Text(model.group),
+      suffixes: [
+        FHeaderAction(
+          semanticsLabel: 'Lock vault',
+          icon: const Icon(FLucideIcons.lock),
+          onPress: () {},
+        ),
+        FButton(
+          onPress: () {},
+          prefix: const Icon(FLucideIcons.plus),
+          child: const Text('New item'),
+        ),
+      ],
+    ),
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        final showDetail = constraints.maxWidth >= 660;
+        return Row(
+          children: [
+            SizedBox(
+              width: showDetail ? 306 : constraints.maxWidth,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(15, 17, 15, 9),
+                    child: FTextField(
+                      key: const ValueKey('forui-search'),
+                      control: FTextFieldControl.managed(
+                        controller: search,
+                        onChange: (value) => model.setQuery(value.text),
+                      ),
+                      hint: 'Search your vault',
+                      prefixBuilder: (context, style, variants) =>
+                          const Padding(
+                            padding: EdgeInsets.only(left: 11, right: 6),
+                            child: Icon(FLucideIcons.search, size: 17),
                           ),
+                      clearable: (value) => value.text.isNotEmpty,
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: Row(
+                      children: [
+                        Text(
+                          '${model.visibleEntries.length} items',
+                          style: const TextStyle(fontSize: 11),
                         ),
+                        const Spacer(),
+                        const Text(
+                          'Recently used',
+                          style: TextStyle(fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: SpikeEntryList(model: model, onSelect: model.select),
+                  ),
+                ],
+              ),
+            ),
+            if (showDetail) ...[
+              const VerticalDivider(width: 1),
+              Expanded(
+                child: SpikeEntryDetail(
+                  model: model,
+                  onReveal: model.toggleReveal,
+                  actionBuilder: (label, icon, action) => KeyedSubtree(
+                    key: ValueKey('action-$label'),
+                    child: FTooltip(
+                      tipBuilder: (context, controller) => Text(label),
+                      child: FButton.icon(
+                        onPress: action,
+                        child: Icon(icon, semanticLabel: label, size: 17),
                       ),
                     ),
                   ),
-                ],
-              ],
-            );
-          },
-        ),
-      );
+                ),
+              ),
+            ],
+          ],
+        );
+      },
+    ),
+  );
 
   Widget _item(String label, IconData icon, [String? count]) => FSidebarItem(
-        icon: Icon(icon),
-        label: Row(
-          children: [
-            Expanded(child: Text(label)),
-            if (count != null)
-              Text(count, style: const TextStyle(fontSize: 11)),
-          ],
-        ),
-        selected: model.group == label,
-        onPress: () => selectGroup(label),
-      );
+    icon: Icon(icon),
+    label: Row(
+      children: [
+        Expanded(child: Text(label)),
+        if (count != null) Text(count, style: const TextStyle(fontSize: 11)),
+      ],
+    ),
+    selected: model.group == label,
+    onPress: () => selectGroup(label),
+  );
 }
 
 class _ForuiKeyLeaseMark extends StatelessWidget {
@@ -258,13 +254,13 @@ class _ForuiKeyLeaseMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        width: 36,
-        height: 36,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: spikeBlue,
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: const Icon(FIcons.keyRound, color: Colors.white, size: 20),
-      );
+    width: 36,
+    height: 36,
+    alignment: Alignment.center,
+    decoration: BoxDecoration(
+      color: spikeBlue,
+      borderRadius: BorderRadius.circular(10),
+    ),
+    child: const Icon(FLucideIcons.keyRound, color: Colors.white, size: 20),
+  );
 }

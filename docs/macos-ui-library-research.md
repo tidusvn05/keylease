@@ -9,8 +9,11 @@ shell, không phải hướng triển khai tiếp theo.
 
 Prototype đầu tiên nằm tại [`prototypes/macos`](../prototypes/macos/README.md).
 Đây là bản thiết kế có tương tác, không phải bản build web của `macos_ui`.
-Bước tiếp theo: nâng toolchain theo release baseline, chuyển spike Forui lên
-0.26.x, rồi xây foundation/theme và lát cắt Vault list/detail trên macOS thật.
+
+**Cập nhật 2026-09-07 (sau migration):** đã nâng toolchain lên Flutter 3.47.2 và
+Forui `0.26.0`, gỡ `macos_ui` khỏi production, và triển khai app production trên
+Forui. Quyết định phát sinh: [forui-migration-decisions.md](forui-migration-decisions.md).
+Còn lại là nghiệm thu trên macOS thật.
 
 Hai Flutter spike đã được thêm tại
 [`apps/desktop-flutter/lib/ui_spikes`](../apps/desktop-flutter/UI_SPIKES.md):
@@ -94,8 +97,9 @@ không phải thư viện accessibility được chứng nhận.
 
 ## Những việc phải xác minh khi triển khai app
 
-1. Dùng Flutter 3.47.2 theo release baseline, nâng Forui từ spike 0.21.3 lên
-   0.26.x, xử lý migration rồi pin chính xác phiên bản đã kiểm chứng.
+1. ~~Dùng Flutter 3.47.2 theo release baseline, nâng Forui từ spike 0.21.3 lên
+   0.26.x, xử lý migration rồi pin chính xác phiên bản đã kiểm chứng.~~ Đã xong:
+   `forui: 0.26.0` trên Flutter 3.47.2.
 2. Giữ runner và native adapter hiện có; kiểm thử native file access, menu,
    copy timeout, sleep/screen lock trong lúc RPC đang chạy.
 3. So cùng mẫu ở 800×600, 1280×800, light/dark, resize và text scaling.
