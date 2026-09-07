@@ -7,6 +7,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # UI spikes only. The production entry point still uses Material 3.
+  forui: 0.21.3
+  macos_ui: 2.2.2
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>KeyLease — macOS prototype</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="review-bar" aria-label="Prototype controls">
+    <span class="review-title"><strong>KeyLease</strong><span class="review-divider"></span>macOS prototype <span class="version">01</span></span>
+    <div class="review-controls">
+      <label for="scenario">Preview</label>
+      <select id="scenario"><option value="ready">Vault · ready</option><option value="locked">Vault · locked</option><option value="setup">First-time setup</option><option value="offline">Service unavailable</option><option value="denied">Permission required</option><option value="empty">Empty vault</option></select>
+      <button id="theme-toggle" class="icon-button" aria-label="Switch to dark appearance" title="Change appearance"></button>
+      <button id="reset" class="quiet" title="Reset all demo changes">Reset</button>
+    </div>
+  </div>
+  <div class="window" id="window">
+    <aside class="sidebar" aria-label="Main navigation">
+      <div class="sidebar-chrome"><span class="traffic-lights" aria-hidden="true"><i></i><i></i><i></i></span><button class="icon-button" id="sidebar-toggle" title="Toggle sidebar" aria-label="Toggle sidebar"></button></div>
+      <div class="vault-brand"><div class="app-mark" data-icon="key"></div><div><strong>KeyLease</strong><span>Personal vault</span></div></div>
+      <nav id="navigation"></nav>
+      <div class="sidebar-footer"><div class="service-status" id="service-status"></div><button class="nav-item" id="settings-button"><span data-icon="settings"></span><span>Settings</span><kbd>⌘ ,</kbd></button></div>
+    </aside>
+    <div class="sidebar-resizer resizer" role="separator" tabindex="0" aria-label="Sidebar width" aria-orientation="vertical" aria-valuemin="180" aria-valuemax="280" aria-valuenow="214"></div>
+    <main id="main">
+      <header class="toolbar"><div class="toolbar-heading"><button id="show-sidebar" class="icon-button" aria-label="Show sidebar" title="Show sidebar"></button><div><h1 id="page-title">All items</h1><span id="page-subtitle">Your private workspace</span></div></div><div class="toolbar-actions"><button id="lock-button" class="icon-button" title="Lock vault" aria-label="Lock vault"></button><span class="toolbar-divider"></span><button class="primary" id="new-button"><span data-icon="plus"></span>New item</button></div></header>
+      <div id="workspace"></div>
+    </main>
+  </div>
+  <footer class="review-footer"><span><i class="demo-dot"></i>Demo data · No service connection</span><span>⌘ F Search <span class="footer-dot">·</span> ⌘ N New item <span class="footer-dot">·</span> ↑ ↓ Browse</span></footer>
+  <dialog id="dialog" aria-labelledby="dialog-title"></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
