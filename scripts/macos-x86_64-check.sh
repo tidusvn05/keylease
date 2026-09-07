@@ -30,7 +30,7 @@ rustc -vV
 flutter --version
 flutter doctor -v
 
-if ! rustc -vV | grep -q '^host: x86_64-apple-darwin$'; then
+if [[ "$(rustc -vV | sed -n 's/^host: //p')" != "x86_64-apple-darwin" ]]; then
   echo "error: Rust host is not x86_64-apple-darwin" >&2
   exit 1
 fi
