@@ -15,20 +15,38 @@ Future<T?> showKeyLeaseDialog<T>({
   String? description,
   bool barrierDismissible = true,
   double maxWidth = 560,
-}) => showFDialog<T>(
-  context: context,
-  barrierDismissible: barrierDismissible,
-  builder: (context, style, animation) => FDialog(
-    semanticsLabel: title,
-    constraints: BoxConstraints(minWidth: 280, maxWidth: maxWidth),
-    builder: (context, style) => KeyLeaseDialogBody(
-      title: title,
-      description: description,
-      actions: actionsBuilder(context),
-      child: bodyBuilder(context),
+}) {
+  final theme = context.theme;
+  final localizations = FLocalizations.of(context) ?? FDefaultLocalizations();
+
+  // Forui's default dialog route animates a sigma-5 BackdropFilter across the
+  // complete window. That is disproportionately expensive on desktop GPUs and
+  // makes opening even a small confirmation dialog drop frames. A solid modal
+  // scrim preserves hierarchy and contrast without re-rasterizing the scene
+  // behind it on every animation frame.
+  return showGeneralDialog<T>(
+    context: context,
+    barrierDismissible: barrierDismissible,
+    barrierLabel: localizations.barrierLabel,
+    barrierColor: theme.colors.barrier,
+    transitionDuration: const Duration(milliseconds: 80),
+    transitionBuilder: (context, animation, secondaryAnimation, child) =>
+        FadeTransition(
+          opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+          child: child,
+        ),
+    pageBuilder: (context, animation, secondaryAnimation) => FDialog(
+      semanticsLabel: title,
+      constraints: BoxConstraints(minWidth: 280, maxWidth: maxWidth),
+      builder: (context, style) => KeyLeaseDialogBody(
+        title: title,
+        description: description,
+        actions: actionsBuilder(context),
+        child: bodyBuilder(context),
+      ),
     ),
-  ),
-);
+  );
+}
 
 class KeyLeaseDialogBody extends StatelessWidget {
   const KeyLeaseDialogBody({

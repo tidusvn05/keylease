@@ -90,6 +90,10 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('group-manage')));
       await tester.pumpAndSettle();
 
+      // Desktop dialogs use a solid scrim. Reintroducing Forui's full-window
+      // backdrop blur here causes visible raster jank on older Intel Macs.
+      expect(find.byType(BackdropFilter), findsNothing);
+
       final handle = find.byKey(const ValueKey('manage-drag-group-alpha'));
       final delete = find.byKey(const ValueKey('action-Delete Alpha'));
       expect(handle, findsOneWidget);

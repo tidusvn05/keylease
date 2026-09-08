@@ -28,7 +28,7 @@ abstract final class KeyLeaseTheme {
     final tokens = dark
         ? KeyLeaseTokens.dark(touch: !desktop)
         : KeyLeaseTokens.light(touch: !desktop);
-    return FThemeData(
+    final base = FThemeData(
       debugLabel:
           'KeyLease ${dark ? 'Dark' : 'Light'} '
           '${desktop ? 'Desktop' : 'Touch'}',
@@ -37,6 +37,25 @@ abstract final class KeyLeaseTheme {
         primary: tokens.accent,
         primaryForeground: tokens.onAccent,
         error: tokens.danger,
+      ),
+    );
+    if (!desktop) return base;
+
+    // A desktop select is a short, direct interaction. Forui normally waits
+    // for its 100ms closing animation before applying the selected value.
+    // Besides feeling delayed, the scale transition makes a portal embedded
+    // in a dialog unnecessarily expensive to composite. Keep touch motion
+    // unchanged, but make desktop selects immediate.
+    return base.copyWith(
+      selectStyle: const FSelectStyleDelta.delta(
+        contentStyle: FSelectContentStyleDelta.delta(
+          motion: FPopoverMotion(
+            entranceDuration: Duration.zero,
+            exitDuration: Duration.zero,
+            scaleTween: FImmutableTween(begin: 1.0, end: 1.0),
+            fadeTween: FImmutableTween(begin: 1.0, end: 1.0),
+          ),
+        ),
       ),
     );
   }
