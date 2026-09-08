@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:forui/forui.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../core/models/models.dart';
 import '../../core/state/app_controller.dart';
+import '../../core/state/user_message.dart';
 import '../../core/state/vault_controller.dart';
 import '../../ui/components/keylease_dialog.dart';
 import '../../ui/components/keylease_mark.dart';
@@ -51,6 +54,50 @@ class EntryDetail extends StatelessWidget {
     }
   }
 
+  Future<void> _copyAgentPrompt(BuildContext context, EntrySummary item) async {
+    final copied = await app.copyAgentPrompt(item);
+    if (!copied || !context.mounted) return;
+    showFToast(
+      context: context,
+      title: const Text('Entry prompt copied'),
+      description: const Text('Paste it into Codex or another local agent.'),
+    );
+  }
+
+  Future<void> _copyCliCommand(BuildContext context, EntrySummary item) async {
+    final copied = await app.copyCliCommand(item);
+    if (!copied || !context.mounted) return;
+    showFToast(
+      context: context,
+      title: const Text('CLI command copied'),
+      description: const Text('Paste it into Terminal.'),
+    );
+  }
+
+  Future<void> _openWebsite(BuildContext context, String value) async {
+    final trimmed = value.trim();
+    final candidate = trimmed.contains('://') ? trimmed : 'https://$trimmed';
+    final uri = Uri.tryParse(candidate);
+    if (uri == null ||
+        !const {'http', 'https'}.contains(uri.scheme.toLowerCase()) ||
+        uri.host.isEmpty) {
+      if (context.mounted) {
+        showFToast(
+          context: context,
+          title: const Text('Invalid website'),
+          description: const Text('Edit this item and enter a valid web URL.'),
+        );
+      }
+      return;
+    }
+    try {
+      final opened = await app.adapter.openExternalUrl(uri.toString());
+      if (!opened) throw Exception('The browser did not open the website.');
+    } catch (caught) {
+      if (context.mounted) showFailure(context, caught);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final item = entry;
@@ -65,6 +112,75 @@ class EntryDetail extends StatelessWidget {
     final theme = context.theme;
     final password = vault.revealedValue(item.id, 'password');
     final username = vault.revealedValue(item.id, 'username');
+    final hasUsername = (username ?? item.username)?.isNotEmpty == true;
+    final hasLoginDetails =
+        hasUsername || item.hasPassword || item.primaryUrl != null;
+    Widget identity() => Row(
+      children: [
+        KeyLeaseMark(text: item.monogram, large: true),
+        SizedBox(width: tokens.gutter),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                item.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: tokens.titleSize,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 5),
+              Text(
+                item.primaryUrl ?? kindLabel(item.kind),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.typography.body.sm.copyWith(
+                  color: theme.colors.mutedForeground,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+    Widget actions() => Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      alignment: WrapAlignment.end,
+      children: [
+        FButton(
+          key: ValueKey('entry-prompt-${item.id}'),
+          variant: FButtonVariant.outline,
+          size: FButtonSizeVariant.xs,
+          mainAxisSize: MainAxisSize.min,
+          prefix: const Icon(FLucideIcons.terminal, size: 14),
+          onPress: () => _copyAgentPrompt(context, item),
+          child: const Text('Prompt'),
+        ),
+        FButton(
+          key: ValueKey('entry-cli-${item.id}'),
+          variant: FButtonVariant.outline,
+          size: FButtonSizeVariant.xs,
+          mainAxisSize: MainAxisSize.min,
+          prefix: const Icon(FLucideIcons.copy, size: 14),
+          onPress: () => _copyCliCommand(context, item),
+          child: const Text('CLI'),
+        ),
+        IconAction(
+          label: 'Edit',
+          icon: FLucideIcons.squarePen,
+          onPress: () => openEntryEditor(context, app, existing: item),
+        ),
+        IconAction(
+          label: 'Delete',
+          icon: FLucideIcons.trash2,
+          onPress: () => _delete(context, item),
+        ),
+      ],
+    );
     return ListView(
       key: ValueKey('detail-${item.id}'),
       padding: EdgeInsets.fromLTRB(
@@ -84,115 +200,88 @@ class EntryDetail extends StatelessWidget {
               child: const Text('Items'),
             ),
           ),
-        Row(
-          children: [
-            KeyLeaseMark(text: item.monogram, large: true),
-            SizedBox(width: tokens.gutter),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final stack =
+                constraints.maxWidth < 480 ||
+                MediaQuery.textScalerOf(context).scale(1) > 1.15;
+            if (!stack) {
+              return Row(
                 children: [
-                  Text(
-                    item.title,
-                    style: TextStyle(
-                      fontSize: tokens.titleSize,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    item.primaryUrl ?? kindLabel(item.kind),
-                    style: theme.typography.body.sm.copyWith(
-                      color: theme.colors.mutedForeground,
-                    ),
-                  ),
+                  Expanded(child: identity()),
+                  SizedBox(width: tokens.gutter),
+                  actions(),
                 ],
-              ),
-            ),
-            IconAction(
-              label: 'Edit',
-              icon: FLucideIcons.squarePen,
-              onPress: () => openEntryEditor(context, app, existing: item),
-            ),
-            const SizedBox(width: 6),
-            IconAction(
-              label: 'Delete',
-              icon: FLucideIcons.trash2,
-              onPress: () => _delete(context, item),
-            ),
-          ],
-        ),
-        SizedBox(height: tokens.gutter * 1.8),
-        const SectionLabel('Login details'),
-        FieldGroup(
-          children: [
-            DetailField(
-              label: 'Username',
-              value: username ?? item.username,
-              placeholder: 'Not set',
-              actions: [
-                IconAction(
-                  label: 'Copy username',
-                  icon: FLucideIcons.copy,
-                  onPress: () => _copy(context, item, 'username', 'Username'),
-                ),
+              );
+            }
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                identity(),
+                SizedBox(height: tokens.gutterSmall),
+                Align(alignment: Alignment.centerRight, child: actions()),
               ],
-            ),
-            SecretField(
-              label: 'Password',
-              revealedValue: password,
-              busy: vault.isBusy('reveal.${item.id}/password'),
-              onReveal: () => vault.reveal(item, 'password'),
-              onHide: () => vault.hideSecret(item.id, 'password'),
-              onCopy: () => _copy(context, item, 'password', 'Password'),
-            ),
-            if (item.primaryUrl != null)
-              DetailField(
-                label: 'Website',
-                value: item.primaryUrl,
-                accent: true,
-              ),
-          ],
+            );
+          },
         ),
+        if (hasLoginDetails) ...[
+          SizedBox(height: tokens.gutter * 1.8),
+          const SectionLabel('Login details'),
+          FieldGroup(
+            children: [
+              if (hasUsername)
+                DetailField(
+                  label: 'Username',
+                  value: username ?? item.username,
+                  actions: [
+                    IconAction(
+                      label: 'Copy username',
+                      icon: FLucideIcons.copy,
+                      onPress: () =>
+                          _copy(context, item, 'username', 'Username'),
+                    ),
+                  ],
+                ),
+              if (item.hasPassword)
+                SecretField(
+                  label: 'Password',
+                  revealedValue: password,
+                  busy: vault.isBusy('reveal.${item.id}/password'),
+                  onReveal: () => vault.reveal(item, 'password'),
+                  onHide: () => vault.hideSecret(item.id, 'password'),
+                  onCopy: () => _copy(context, item, 'password', 'Password'),
+                ),
+              if (item.primaryUrl != null)
+                DetailField(
+                  label: 'Website',
+                  value: item.primaryUrl,
+                  accent: true,
+                  onPress: () => _openWebsite(context, item.primaryUrl!),
+                  actions: [
+                    IconAction(
+                      label: 'Open website',
+                      icon: FLucideIcons.externalLink,
+                      onPress: () => _openWebsite(context, item.primaryUrl!),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+        ],
+        if (item.hasTotp) ...[
+          SizedBox(height: tokens.gutter * 1.5),
+          const SectionLabel('Two-factor authentication'),
+          _InlineTotpField(app: app, entry: item),
+        ],
+        if (item.hasNotes) ...[
+          SizedBox(height: tokens.gutter * 1.5),
+          _InlineNotesSection(app: app, entry: item),
+        ],
         SizedBox(height: tokens.gutter * 1.5),
-        const SectionLabel('Two-factor authentication'),
-        FieldGroup(
-          children: [
-            DetailField(
-              label: 'One-time password',
-              value: 'Available on request',
-              actions: [
-                IconAction(
-                  label: 'Show code',
-                  icon: FLucideIcons.timer,
-                  onPress: () => showTotpDialog(context, app, item),
-                ),
-              ],
-            ),
-          ],
-        ),
-        SizedBox(height: tokens.gutter * 1.5),
-        const SectionLabel('Item details'),
-        FieldGroup(
-          children: [
-            DetailField(label: 'Template', value: kindLabel(item.kind)),
-            DetailField(label: 'Group', value: _groupName(item.groupId)),
-            DetailField(
-              label: 'Last updated',
-              value: item.updatedAt?.toString() ?? 'Unknown',
-            ),
-            DetailField(
-              label: 'Revision',
-              value: '${item.revision}',
-              actions: [
-                IconAction(
-                  label: 'View history',
-                  icon: FLucideIcons.history,
-                  onPress: () => _history(context, item),
-                ),
-              ],
-            ),
-          ],
+        _MetadataSection(
+          item: item,
+          groupName: _groupName(item.groupId),
+          onHistory: () => _history(context, item),
         ),
       ],
     );
@@ -251,6 +340,316 @@ class EntryDetail extends StatelessWidget {
         FButton(
           onPress: () => Navigator.of(context).pop(),
           child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+}
+
+class _InlineNotesSection extends StatefulWidget {
+  const _InlineNotesSection({required this.app, required this.entry});
+
+  final AppController app;
+  final EntrySummary entry;
+
+  @override
+  State<_InlineNotesSection> createState() => _InlineNotesSectionState();
+}
+
+class _InlineNotesSectionState extends State<_InlineNotesSection> {
+  String? _notes;
+  String? _error;
+  bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_load());
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant _InlineNotesSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.entry.id != widget.entry.id) {
+      _notes = null;
+      _error = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_load());
+      });
+    }
+  }
+
+  Future<void> _load() async {
+    if (_loading) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    final notes = await widget.app.vault.fetchSecret(widget.entry, 'notes');
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _notes = notes;
+      if (notes == null) _error = 'Could not load notes';
+    });
+  }
+
+  Future<void> _copy(BuildContext context) async {
+    final notes = _notes;
+    if (notes == null || notes.isEmpty) return;
+    final copied = await widget.app.copySensitive(notes);
+    if (copied && context.mounted) {
+      showFToast(
+        context: context,
+        title: const Text('Notes copied'),
+        description: const Text('The clipboard clears in 30 seconds.'),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = KeyLeaseTokens.of(context);
+    final theme = context.theme;
+    final notes = _notes;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SectionLabel(
+          'Notes',
+          action: notes == null
+              ? null
+              : IconAction(
+                  label: 'Copy notes',
+                  icon: FLucideIcons.copy,
+                  onPress: () => _copy(context),
+                ),
+        ),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            border: Border.all(color: theme.colors.border),
+            borderRadius: BorderRadius.circular(9),
+          ),
+          child: Padding(
+            padding: EdgeInsets.all(tokens.gutter),
+            child: _loading
+                ? const Align(
+                    alignment: Alignment.centerLeft,
+                    child: FCircularProgress(),
+                  )
+                : _error != null
+                ? Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _error!,
+                          style: TextStyle(color: theme.colors.destructive),
+                        ),
+                      ),
+                      FButton(
+                        size: FButtonSizeVariant.xs,
+                        variant: FButtonVariant.outline,
+                        onPress: _load,
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  )
+                : SelectionArea(
+                    child: Text(
+                      notes ?? '',
+                      key: ValueKey('entry-notes-${widget.entry.id}'),
+                      style: TextStyle(
+                        fontSize: tokens.bodySize,
+                        color: theme.colors.foreground,
+                        height: 1.45,
+                      ),
+                    ),
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MetadataSection extends StatefulWidget {
+  const _MetadataSection({
+    required this.item,
+    required this.groupName,
+    required this.onHistory,
+  });
+
+  final EntrySummary item;
+  final String groupName;
+  final VoidCallback onHistory;
+
+  @override
+  State<_MetadataSection> createState() => _MetadataSectionState();
+}
+
+class _MetadataSectionState extends State<_MetadataSection> {
+  bool _expanded = false;
+
+  @override
+  void didUpdateWidget(covariant _MetadataSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.id != widget.item.id) _expanded = false;
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      FButton(
+        key: ValueKey('metadata-toggle-${widget.item.id}'),
+        variant: FButtonVariant.ghost,
+        size: FButtonSizeVariant.sm,
+        mainAxisSize: MainAxisSize.max,
+        onPress: () => setState(() => _expanded = !_expanded),
+        child: Row(
+          children: [
+            Icon(
+              _expanded ? FLucideIcons.chevronDown : FLucideIcons.chevronRight,
+              size: 16,
+            ),
+            const SizedBox(width: 7),
+            const Text('Metadata'),
+          ],
+        ),
+      ),
+      if (_expanded) ...[
+        const SizedBox(height: 8),
+        FieldGroup(
+          children: [
+            DetailField(label: 'Template', value: kindLabel(widget.item.kind)),
+            DetailField(label: 'Group', value: widget.groupName),
+            DetailField(
+              label: 'Last updated',
+              value: widget.item.updatedAt?.toString() ?? 'Unknown',
+            ),
+            DetailField(
+              label: 'Revision',
+              value: '${widget.item.revision}',
+              actions: [
+                IconAction(
+                  label: 'View history',
+                  icon: FLucideIcons.history,
+                  onPress: widget.onHistory,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ],
+    ],
+  );
+}
+
+class _InlineTotpField extends StatefulWidget {
+  const _InlineTotpField({required this.app, required this.entry});
+
+  final AppController app;
+  final EntrySummary entry;
+
+  @override
+  State<_InlineTotpField> createState() => _InlineTotpFieldState();
+}
+
+class _InlineTotpFieldState extends State<_InlineTotpField> {
+  String? _code;
+  String? _error;
+  int _remaining = 0;
+  bool _loading = false;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  @override
+  void didUpdateWidget(covariant _InlineTotpField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.entry.id != widget.entry.id) {
+      _timer?.cancel();
+      _code = null;
+      _error = null;
+      unawaited(_load());
+    }
+  }
+
+  Future<void> _load() async {
+    if (_loading) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final response = await widget.app.vault.totp(widget.entry);
+      if (!mounted) return;
+      _timer?.cancel();
+      setState(() {
+        _code = '${response['code']}';
+        _remaining = (response['expires_in'] as num?)?.toInt() ?? 0;
+        _loading = false;
+      });
+      if (_remaining > 0) {
+        _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+          if (!mounted) return;
+          if (_remaining <= 1) {
+            _timer?.cancel();
+            setState(() => _remaining = 0);
+            unawaited(_load());
+          } else {
+            setState(() => _remaining--);
+          }
+        });
+      }
+    } catch (caught) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _code = null;
+        _error = UserMessage.from(caught).detail;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final code = _code;
+    return FieldGroup(
+      children: [
+        DetailField(
+          label: 'One-time password',
+          value: _loading
+              ? 'Loading code…'
+              : code == null
+              ? (_error ?? 'Could not load code')
+              : '$code · ${_remaining}s',
+          actions: [
+            if (code != null)
+              IconAction(
+                label: 'Copy one-time password',
+                icon: FLucideIcons.copy,
+                onPress: () => widget.app.copySensitive(code),
+              ),
+            if (_error != null)
+              IconAction(
+                label: 'Retry one-time password',
+                icon: FLucideIcons.refreshCw,
+                onPress: _load,
+              ),
+          ],
         ),
       ],
     );

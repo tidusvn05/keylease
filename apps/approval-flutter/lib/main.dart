@@ -15,7 +15,7 @@ class LeaseGateControlApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-        title: 'LeaseGate Control',
+        title: 'Leasegate Control',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(
@@ -306,7 +306,7 @@ class _ControlHomeState extends State<ControlHome> {
         'expected_proposal_digest_sha256':
             proposal['proposal_digest_sha256'],
         'expected_base_policy_version': proposal['base_policy_version'],
-        'note': approve ? 'Approved in LeaseGate Control' : 'Rejected in LeaseGate Control',
+        'note': approve ? 'Approved in Leasegate Control' : 'Rejected in Leasegate Control',
       });
       await refresh();
     }, 'Proposal review failed because its state or base policy changed.');
@@ -373,7 +373,7 @@ class _ControlHomeState extends State<ControlHome> {
       final leaseId = Uri.encodeComponent('${lease['lease_id']}');
       await postJson('$projectPrefix/credential-leases/$leaseId/revoke', {
         'schema_version': 1,
-        'reason': 'Operator revoked from LeaseGate Control',
+        'reason': 'Operator revoked from Leasegate Control',
       });
       await refresh();
     }, 'Credential revocation failed or the lease is already terminal.');
@@ -433,7 +433,7 @@ class _ControlHomeState extends State<ControlHome> {
           'device_id': deviceId,
           'human_id': approver.text,
           'platform': _platformName(),
-          'display_name': 'LeaseGate approval device',
+          'display_name': 'Leasegate approval device',
           'verifying_key_base64': publicKey,
           'push_token': null,
         });
@@ -443,9 +443,11 @@ class _ControlHomeState extends State<ControlHome> {
       }
       if (!kIsWeb) {
         final authenticated = await LocalAuthentication().authenticate(
-          localizedReason: 'Authenticate to access LeaseGate approvals',
+          localizedReason: 'Authenticate to access Leasegate approvals',
         );
-        if (!authenticated) throw const FormatException('Biometric authentication failed.');
+        if (!authenticated) {
+          throw const FormatException('Biometric authentication failed.');
+        }
       }
       final challengeResponse = await postJson(
         '/v1/organizations/${Uri.encodeComponent(organization.text)}/operator-devices/${Uri.encodeComponent(deviceId)}/challenge',
@@ -473,7 +475,9 @@ class _ControlHomeState extends State<ControlHome> {
       setState(() { deviceBound = true; connected = false; });
       await refresh();
     } catch (_) {
-      if (mounted) setState(() => error = 'Device enrollment or biometric authentication failed.');
+      if (mounted) {
+        setState(() => error = 'Device enrollment or biometric authentication failed.');
+      }
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -546,7 +550,7 @@ class _ControlHomeState extends State<ControlHome> {
         length: 7,
         child: Scaffold(
           appBar: AppBar(
-            title: const Text('LeaseGate Control'),
+            title: const Text('Leasegate Control'),
             actions: [
               IconButton(
                 tooltip: 'Refresh',

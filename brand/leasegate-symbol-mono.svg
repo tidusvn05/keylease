@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Leasegate monochrome symbol</title>
+  <desc id="desc">A monochrome open geometric gateway.</desc>
+  <path fill="currentColor" d="M226 812V390c0-117 95-212 212-212h250c61 0 110 49 110 110v174H650V326H438c-35 0-64 29-64 64v422H226Zm250-386 190 110v210L476 856V426Z"/>
+</svg>

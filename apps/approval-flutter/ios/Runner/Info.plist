@@ -27,7 +27,7 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSFaceIDUsageDescription</key>
-	<string>LeaseGate uses Face ID to authorize access to approval signing keys.</string>
+	<string>Leasegate uses Face ID to authorize access to approval signing keys.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

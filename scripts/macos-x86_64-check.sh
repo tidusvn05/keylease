@@ -6,6 +6,8 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 FLUTTER_DIR="$REPO_DIR/apps/desktop-flutter"
 APP_PATH="$FLUTTER_DIR/build/macos/Build/Products/Release/KeyLease.app"
 APP_BINARY="$APP_PATH/Contents/MacOS/KeyLease"
+HELPER_BINARY="$APP_PATH/Contents/Resources/keylease"
+SERVICE_PLIST="$APP_PATH/Contents/Library/LaunchAgents/app.keylease.service.plist"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "error: this check must run on macOS" >&2
@@ -63,6 +65,14 @@ if ! lipo -archs "$APP_BINARY" | grep -qw x86_64; then
   echo "error: KeyLease.app does not contain x86_64" >&2
   exit 1
 fi
+for architecture in x86_64 arm64; do
+  if ! lipo -archs "$HELPER_BINARY" | grep -qw "$architecture"; then
+    echo "error: embedded runtime does not contain $architecture" >&2
+    exit 1
+  fi
+done
+plutil -lint "$SERVICE_PLIST" >/dev/null
+codesign --force --options runtime --sign - "$APP_PATH"
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
 echo "== Result =="

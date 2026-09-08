@@ -74,6 +74,9 @@ class EntrySummary {
     required this.revision,
     this.username,
     this.urls = const [],
+    this.hasPassword = false,
+    this.hasNotes = false,
+    this.hasTotp = false,
     this.updatedAt,
   });
 
@@ -85,6 +88,9 @@ class EntrySummary {
     revision: (json['revision'] as num?)?.toInt() ?? 0,
     username: _string<String>(json['username']),
     urls: _strings(json['urls']),
+    hasPassword: json['has_password'] == true,
+    hasNotes: json['has_notes'] == true,
+    hasTotp: json['has_totp'] == true,
     updatedAt: _time(json['updated_at']),
   );
 
@@ -95,6 +101,9 @@ class EntrySummary {
   final int revision;
   final String? username;
   final List<String> urls;
+  final bool hasPassword;
+  final bool hasNotes;
+  final bool hasTotp;
   final DateTime? updatedAt;
 
   String? get primaryUrl => urls.isEmpty ? null : urls.first;

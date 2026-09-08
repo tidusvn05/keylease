@@ -202,7 +202,8 @@ void main() {
       app.selectSection(AppSection.settings);
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const ValueKey('settings-socket')), findsOneWidget);
+      expect(find.text('Managed vault'), findsOneWidget);
+      expect(find.text('Unix socket'), findsNothing);
     });
   });
 

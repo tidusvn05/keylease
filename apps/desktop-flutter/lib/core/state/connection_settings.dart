@@ -15,9 +15,11 @@ class ConnectionSettings {
   });
 
   factory ConnectionSettings.defaults() => ConnectionSettings(
-    socketPath: '/tmp/keylease-${Platform.environment['USER'] ?? 'user'}.sock',
+    socketPath:
+        '${Platform.environment['HOME'] ?? Directory.systemTemp.path}/.keylease/run/keylease.sock',
     agentId: 'agent_desktop',
-    tokenPath: '',
+    tokenPath:
+        '${Platform.environment['HOME'] ?? Directory.systemTemp.path}/.keylease/desktop.token',
   );
 
   factory ConnectionSettings.fromJson(Map<String, dynamic> json) {
@@ -48,11 +50,7 @@ class ConnectionSettings {
     tokenPath: tokenPath ?? this.tokenPath,
   );
 
-  Map<String, dynamic> toJson() => {
-    'socket_path': socketPath,
-    'agent_id': agentId,
-    'token_path': tokenPath,
-  };
+  Map<String, dynamic> toJson() => const {};
 
   @override
   bool operator ==(Object other) =>

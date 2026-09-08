@@ -1,11 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
-/// Non-secret UI preferences: where the local service lives, which client id
-/// to present, the path of the registered token file, and pane geometry.
-///
-/// The client token itself is never stored here; only its path, which the user
-/// picked through the native security-scoped panel.
+/// Non-secret UI preferences such as pane geometry. Runtime paths are managed
+/// internally under `~/.keylease` and never exposed as preferences.
 abstract class PreferencesStore {
   Future<Map<String, dynamic>> load();
 
@@ -38,7 +35,7 @@ class FilePreferencesStore implements PreferencesStore {
         Platform.environment['USERPROFILE'] ??
         Directory.systemTemp.path;
     if (Platform.isMacOS) {
-      return '$home/Library/Application Support/KeyLease/desktop-ui.json';
+      return '$home/.keylease/ui.json';
     }
     if (Platform.isWindows) {
       final appData = Platform.environment['APPDATA'] ?? home;

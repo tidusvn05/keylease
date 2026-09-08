@@ -12,6 +12,7 @@ class DetailField extends StatelessWidget {
     this.monospace = false,
     this.accent = false,
     this.placeholder,
+    this.onPress,
     super.key,
   });
 
@@ -21,6 +22,7 @@ class DetailField extends StatelessWidget {
   final bool monospace;
   final bool accent;
   final String? placeholder;
+  final VoidCallback? onPress;
 
   @override
   Widget build(BuildContext context) {
@@ -46,22 +48,17 @@ class DetailField extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 5),
-                SelectionArea(
-                  child: Text(
-                    empty ? (placeholder ?? 'Not set') : value!,
-                    style: TextStyle(
-                      fontSize: tokens.bodySize,
-                      fontFamily: monospace ? 'Menlo' : null,
-                      fontFamilyFallback: monospace
-                          ? const ['Courier New', 'monospace']
-                          : null,
-                      color: empty
-                          ? theme.colors.mutedForeground
-                          : accent
-                          ? tokens.accent
-                          : theme.colors.foreground,
-                    ),
-                  ),
+                _DetailValue(
+                  key: ValueKey('detail-field-value-$label'),
+                  value: empty ? (placeholder ?? 'Not set') : value!,
+                  monospace: monospace,
+                  color: empty
+                      ? theme.colors.mutedForeground
+                      : accent
+                      ? tokens.accent
+                      : theme.colors.foreground,
+                  fontSize: tokens.bodySize,
+                  onPress: empty ? null : onPress,
                 ),
               ],
             ),
@@ -71,6 +68,62 @@ class DetailField extends StatelessWidget {
             Row(mainAxisSize: MainAxisSize.min, children: actions),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _DetailValue extends StatefulWidget {
+  const _DetailValue({
+    required this.value,
+    required this.monospace,
+    required this.color,
+    required this.fontSize,
+    this.onPress,
+    super.key,
+  });
+
+  final String value;
+  final bool monospace;
+  final Color color;
+  final double fontSize;
+  final VoidCallback? onPress;
+
+  @override
+  State<_DetailValue> createState() => _DetailValueState();
+}
+
+class _DetailValueState extends State<_DetailValue> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Text(
+      widget.value,
+      style: TextStyle(
+        fontSize: widget.fontSize,
+        fontFamily: widget.monospace ? 'Menlo' : null,
+        fontFamilyFallback: widget.monospace
+            ? const ['Courier New', 'monospace']
+            : null,
+        color: widget.color,
+        decoration: widget.onPress != null && _hovered
+            ? TextDecoration.underline
+            : null,
+        decorationColor: widget.color,
+      ),
+    );
+    final onPress = widget.onPress;
+    if (onPress == null) return SelectionArea(child: text);
+    return Semantics(
+      button: true,
+      link: true,
+      label: widget.value,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: GestureDetector(onTap: onPress, child: text),
       ),
     );
   }

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Leasegate symbol</title>
+  <desc id="desc">An open geometric gateway with a mint access plane.</desc>
+  <path fill="#2F72FF" d="M226 812V390c0-117 95-212 212-212h250c61 0 110 49 110 110v174H650V326H438c-35 0-64 29-64 64v422H226Z"/>
+  <path fill="#36E3A2" d="m476 426 190 110v210L476 856V426Z"/>
+</svg>

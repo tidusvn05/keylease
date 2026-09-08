@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 420" role="img" aria-labelledby="title desc">
+  <title id="title">Leasegate logo</title>
+  <desc id="desc">Leasegate gateway symbol and wordmark.</desc>
+  <g transform="translate(28 28) scale(.355)">
+    <path fill="#2F72FF" d="M226 812V390c0-117 95-212 212-212h250c61 0 110 49 110 110v174H650V326H438c-35 0-64 29-64 64v422H226Z"/>
+    <path fill="#36E3A2" d="m476 426 190 110v210L476 856V426Z"/>
+  </g>
+  <text x="410" y="278" fill="#071426" font-family="Inter, SF Pro Display, system-ui, sans-serif" font-size="214" font-weight="700" letter-spacing="-7">Leasegate</text>
+</svg>

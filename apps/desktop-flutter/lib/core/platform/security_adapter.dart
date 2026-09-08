@@ -40,6 +40,9 @@ abstract class SecurityAdapter {
   /// Opens the Google authorization URL in the user's browser.
   Future<bool> openGoogleAuthorization(String url);
 
+  /// Opens an ordinary HTTP(S) URL in the user's default browser.
+  Future<bool> openExternalUrl(String url);
+
   Future<void> dispose();
 }
 
@@ -134,6 +137,15 @@ class MethodChannelSecurityAdapter implements SecurityAdapter {
     try {
       return await channel.invokeMethod<bool>('openGoogleAuthorization', url) ??
           false;
+    } on MissingPluginException {
+      throw const UnsupportedPlatformCapability('browser hand-off');
+    }
+  }
+
+  @override
+  Future<bool> openExternalUrl(String url) async {
+    try {
+      return await channel.invokeMethod<bool>('openExternalUrl', url) ?? false;
     } on MissingPluginException {
       throw const UnsupportedPlatformCapability('browser hand-off');
     }

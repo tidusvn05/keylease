@@ -12,7 +12,9 @@ use keylease_crypto::{
     encrypt_item, keyed_digest, unlock_password_slot, unwrap_vault_key, wrap_vault_key,
 };
 use rand::RngCore;
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, TransactionBehavior, backup::Backup, params,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{path::Path, sync::Mutex};
@@ -109,6 +111,24 @@ pub struct BackupHistory {
 }
 
 impl NativeStore {
+    /// Copies a consistent SQLite snapshot without changing the source file.
+    pub fn snapshot_database(source: &Path, destination: &Path) -> Result<()> {
+        let source = Connection::open_with_flags(source, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|_| KeyLeaseError::InvalidRequest {
+                reason: "cannot open the existing KeyLease database".into(),
+            })?;
+        let mut destination = Connection::open(destination).map_err(|_| KeyLeaseError::Storage)?;
+        let backup = Backup::new(&source, &mut destination).map_err(|_| KeyLeaseError::Storage)?;
+        backup
+            .run_to_completion(64, std::time::Duration::from_millis(10), None)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        drop(backup);
+        destination
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .map_err(|_| KeyLeaseError::Storage)?;
+        Ok(())
+    }
+
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let connection = Connection::open(path).map_err(|_| KeyLeaseError::Storage)?;
@@ -1162,6 +1182,43 @@ impl NativeStore {
             })?;
         Ok(token)
     }
+    /// Creates or rotates the private local desktop credential and records its
+    /// role separately from session-scoped policy grants.
+    pub fn register_desktop_client(&self, agent_id: &AgentId) -> Result<String> {
+        let mut raw = [0_u8; 32];
+        rand::rng().fill_bytes(&mut raw);
+        let token = format!("kl_client_{}", STANDARD_NO_PAD.encode(raw));
+        let hash = hex_digest(token.as_bytes());
+        let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        transaction
+            .execute(
+                "INSERT INTO clients(agent_id,token_hash,revoked) VALUES(?1,?2,0) ON CONFLICT(agent_id) DO UPDATE SET token_hash=excluded.token_hash,revoked=0",
+                params![agent_id.0, hash],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        transaction
+            .execute(
+                "INSERT OR REPLACE INTO local_client_roles(agent_id,role) VALUES(?1,'desktop_owner')",
+                [&agent_id.0],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        transaction.commit().map_err(|_| KeyLeaseError::Storage)?;
+        Ok(token)
+    }
+
+    pub fn is_desktop_client(&self, agent_id: &AgentId) -> Result<bool> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM local_client_roles WHERE agent_id=?1 AND role='desktop_owner')",
+                [&agent_id.0],
+                |row| row.get(0),
+            )
+            .map_err(|_| KeyLeaseError::Storage)
+    }
     pub fn authenticate_client(&self, agent_id: &AgentId, token: &str) -> Result<()> {
         let hash = hex_digest(token.as_bytes());
         let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
@@ -1738,6 +1795,7 @@ CREATE TABLE IF NOT EXISTS execution_failures(idempotency_key TEXT PRIMARY KEY,r
 CREATE TABLE IF NOT EXISTS task_budget_usage(task_id TEXT NOT NULL,connection_id TEXT NOT NULL,policy_version INTEGER NOT NULL,requests INTEGER NOT NULL,items INTEGER NOT NULL,cells INTEGER NOT NULL,response_bytes INTEGER NOT NULL,rows_changed INTEGER NOT NULL,PRIMARY KEY(task_id,connection_id));
 CREATE TABLE IF NOT EXISTS runtime_flags(name TEXT PRIMARY KEY,value INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS clients(agent_id TEXT PRIMARY KEY,token_hash TEXT NOT NULL,revoked INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS local_client_roles(agent_id TEXT PRIMARY KEY,role TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS policy_rules(rule_id TEXT PRIMARY KEY,record_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS connections(connection_id TEXT PRIMARY KEY,record_json TEXT NOT NULL);
 "#;

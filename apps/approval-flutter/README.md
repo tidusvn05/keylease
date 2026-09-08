@@ -1,4 +1,4 @@
-# LeaseGate approval web
+# Leasegate Approval
 
 Mobile-first Phase 3-6 operator UI for approval and Edge health plus the
 permission matrix, deterministic simulator, policy proposals, connection

@@ -262,6 +262,7 @@ impl KeyLeaseService {
                     .lock()
                     .map_err(|_| KeyLeaseError::Storage)?
                     .remove(&bucket);
+                self.reload_policy_for_client(agent_id, &vault_id)?;
                 Ok(vault_id)
             }
             Err(error) => {
@@ -289,13 +290,29 @@ impl KeyLeaseService {
             *guard = None;
             drop(guard);
             self.revoke_session_authority()?;
-            return Ok(serde_json::json!({"locked":true,"requires_user_action":true}));
+            return Ok(serde_json::json!({
+                "locked":true,
+                "requires_user_action":true,
+                "service_version":env!("CARGO_PKG_VERSION"),
+                "contract_version":CONTRACT_VERSION
+            }));
         }
         Ok(match guard.as_ref() {
             Some(s) => {
-                serde_json::json!({"locked":false,"vault_id":s.vault.vault_id,"idle_expires_at":s.last_activity+s.idle_timeout})
+                serde_json::json!({
+                    "locked":false,
+                    "vault_id":s.vault.vault_id,
+                    "idle_expires_at":s.last_activity+s.idle_timeout,
+                    "service_version":env!("CARGO_PKG_VERSION"),
+                    "contract_version":CONTRACT_VERSION
+                })
             }
-            None => serde_json::json!({"locked":true,"requires_user_action":true}),
+            None => serde_json::json!({
+                "locked":true,
+                "requires_user_action":true,
+                "service_version":env!("CARGO_PKG_VERSION"),
+                "contract_version":CONTRACT_VERSION
+            }),
         })
     }
 
@@ -311,6 +328,15 @@ impl KeyLeaseService {
         }
         let id = AgentId(format!("agent_{name}"));
         let token = self.store.register_client(&id)?;
+        Ok((id, token))
+    }
+    /// Creates or rotates the built-in desktop owner credential. This is
+    /// deliberately distinct from registering an agent: the desktop's broad
+    /// UI authority exists only while the vault is unlocked and is rebuilt
+    /// after every successful desktop unlock.
+    pub fn register_desktop_client(&self) -> Result<(AgentId, String)> {
+        let id = AgentId("agent_desktop".into());
+        let token = self.store.register_desktop_client(&id)?;
         Ok((id, token))
     }
     pub fn list_clients(&self) -> Result<Vec<AgentId>> {
@@ -1124,6 +1150,14 @@ impl KeyLeaseService {
     pub fn reveal_field_for_human(&self, id: &ItemId, key: &str) -> Result<String> {
         self.with_vault(|vault| {
             let item = self.store.get_item(vault, id)?;
+            if key == "notes" {
+                return item
+                    .notes
+                    .filter(|notes| !notes.trim().is_empty())
+                    .ok_or_else(|| KeyLeaseError::NotFound {
+                        resource: format!("{}/notes", id.0),
+                    });
+            }
             item.fields
                 .into_iter()
                 .find(|field| field.key == key)
@@ -1164,21 +1198,24 @@ impl KeyLeaseService {
             let resource = format!("kl://{}/{}", vault.vault_id.0, id.0);
             self.authorize_vault(actor, action, &resource, serde_json::json!({"field":key}))?;
             let item = self.store.get_item(vault, id)?;
-            let value = item
-                .fields
-                .into_iter()
-                .find(|field| field.key == key)
-                .and_then(|field| match field.value {
-                    FieldValue::Text(value)
-                    | FieldValue::Concealed(value)
-                    | FieldValue::Url(value)
-                    | FieldValue::Email(value)
-                    | FieldValue::Phone(value) => Some(value),
-                    _ => None,
-                })
-                .ok_or_else(|| KeyLeaseError::NotFound {
-                    resource: format!("{}/{}", id.0, key),
-                })?;
+            let value = if key == "notes" {
+                item.notes.filter(|notes| !notes.trim().is_empty())
+            } else {
+                item.fields
+                    .into_iter()
+                    .find(|field| field.key == key)
+                    .and_then(|field| match field.value {
+                        FieldValue::Text(value)
+                        | FieldValue::Concealed(value)
+                        | FieldValue::Url(value)
+                        | FieldValue::Email(value)
+                        | FieldValue::Phone(value) => Some(value),
+                        _ => None,
+                    })
+            }
+            .ok_or_else(|| KeyLeaseError::NotFound {
+                resource: format!("{}/{}", id.0, key),
+            })?;
             self.audit_vault(
                 actor,
                 action,
@@ -2712,6 +2749,14 @@ impl KeyLeaseService {
             .clear();
         Ok(())
     }
+    fn reload_policy_for_client(&self, agent_id: &AgentId, vault_id: &VaultId) -> Result<()> {
+        let mut rules = self.store.load_policy_rules()?;
+        if self.store.is_desktop_client(agent_id)? {
+            rules.push(desktop_owner_rule(agent_id.clone(), vault_id));
+        }
+        *self.policy.write().map_err(|_| KeyLeaseError::Storage)? = RulePolicyEngine::new(rules);
+        Ok(())
+    }
     fn authorize_vault(
         &self,
         actor: &ActorContext,
@@ -2907,6 +2952,59 @@ impl KeyLeaseService {
                 .and_then(|r| serde_json::to_vec(&r.body).ok().map(|v| v.len() as u64)),
             changed_fields: vec![],
         }
+    }
+}
+
+fn desktop_owner_rule(agent_id: AgentId, vault_id: &VaultId) -> PolicyRule {
+    PolicyRule {
+        id: "builtin_desktop_owner".into(),
+        version: 1,
+        effect: PolicyEffect::Allow,
+        agent_id: Some(agent_id),
+        connection_id: None,
+        resource_prefix: format!("kl://{}", vault_id.0),
+        actions: [
+            "entry:search",
+            "entry:read_metadata",
+            "entry:read_username",
+            "entry:read_secret",
+            "entry:create",
+            "entry:update_standard_fields",
+            "entry:update_protected_fields",
+            "entry:update_totp",
+            "entry:move",
+            "entry:delete",
+            "group:create",
+            "group:update",
+            "group:delete",
+            "connection:list",
+            "connection:add",
+            "connection:enroll",
+            "connection:unenroll",
+            "connection:test",
+            "connection:refresh",
+            "connection:disconnect",
+            "connection:revoke",
+            "approval:list",
+            "approval:decide",
+            "audit:query",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
+        argument_equals: Default::default(),
+        not_before: None,
+        expires_at: None,
+        max_lease_ttl_seconds: 600,
+        max_uses: 100,
+        budget: DataBudget {
+            max_items: Some(100),
+            max_cells: Some(10_000),
+            max_response_bytes: Some(1_048_576),
+            max_rows_changed: Some(1_000),
+            max_concurrent: Some(1),
+            ..Default::default()
+        },
     }
 }
 
@@ -3587,7 +3685,16 @@ pub fn current_totp(config: &TotpConfig) -> Result<(String, u64)> {
         .map_err(|_| KeyLeaseError::InvalidRequest {
             reason: "invalid TOTP secret".into(),
         })?;
-    let totp = totp_rs::TOTP::new(
+    if secret.is_empty() || !(6..=8).contains(&config.digits) || config.period == 0 {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "invalid TOTP configuration".into(),
+        });
+    }
+    // Some long-lived KeePass and authenticator entries use secrets shorter
+    // than RFC 4226's current 128-bit recommendation. They are already in
+    // active use and generate interoperable codes, so accept them on import
+    // while retaining structural validation above.
+    let totp = totp_rs::TOTP::new_unchecked(
         algorithm,
         config.digits as usize,
         1,
@@ -3595,10 +3702,7 @@ pub fn current_totp(config: &TotpConfig) -> Result<(String, u64)> {
         secret,
         config.issuer.clone(),
         config.account.clone().unwrap_or_default(),
-    )
-    .map_err(|_| KeyLeaseError::InvalidRequest {
-        reason: "invalid TOTP configuration".into(),
-    })?;
+    );
     let now = Utc::now().timestamp() as u64;
     let code = totp.generate(now);
     Ok((code, config.period - (now % config.period)))
@@ -3705,7 +3809,7 @@ mod tests {
             username: Some("bot".into()),
             password: Some("new-secret".into()),
             url: Some("https://github.com".into()),
-            notes: None,
+            notes: Some("Recovery instructions".into()),
             custom_fields: vec![],
             totp: None,
             totp_uri: None,
@@ -3714,6 +3818,13 @@ mod tests {
             .create_entry(&actor, input.clone(), "task-create", false)
             .unwrap();
         assert!(!serde_json::to_string(&item).unwrap().contains("new-secret"));
+        assert!(item.has_password);
+        assert!(item.has_notes);
+        assert!(
+            !serde_json::to_string(&item)
+                .unwrap()
+                .contains("Recovery instructions")
+        );
         assert!(matches!(
             service.reveal_field_authorized(&actor, &item.id, "password"),
             Err(KeyLeaseError::Denied { .. })
@@ -3752,6 +3863,12 @@ mod tests {
                 .reveal_field_authorized(&actor, &item.id, "password")
                 .unwrap(),
             "new-secret"
+        );
+        assert_eq!(
+            service
+                .reveal_field_authorized(&actor, &item.id, "notes")
+                .unwrap(),
+            "Recovery instructions"
         );
         assert!(
             service
@@ -3950,6 +4067,11 @@ mod tests {
         let (code, left) = current_totp(&config).unwrap();
         assert_eq!(code.len(), 6);
         assert!((1..=30).contains(&left));
+        let legacy_short = TotpConfig {
+            secret_base32: "JBSWY3DPEHPK3PXP".into(),
+            ..config.clone()
+        };
+        assert_eq!(current_totp(&legacy_short).unwrap().0.len(), 6);
         let mut parsed = None;
         let mut uri = Some("otpauth://totp/Example:alice?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=Example&algorithm=SHA1&digits=6&period=30".into());
         normalize_totp(&mut parsed, &mut uri).unwrap();
@@ -4291,5 +4413,45 @@ mod tests {
                 .iter()
                 .any(|event| { event.action == "approval:decide" && event.outcome == "approved" })
         );
+    }
+
+    #[test]
+    fn desktop_owner_authority_is_rebuilt_after_every_unlock() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(NativeStore::open(dir.path().join("vault.sqlite")).unwrap());
+        let service = KeyLeaseService::new(store).unwrap();
+        service.initialize(b"password", Duration::hours(1)).unwrap();
+        let (agent, token) = service.register_desktop_client().unwrap();
+        let actor = service
+            .authenticate(&agent, &token, "desktop-session")
+            .unwrap();
+
+        for _ in 0..2 {
+            service.lock().unwrap();
+            service
+                .unlock_for_client(&agent, b"password", Duration::hours(1))
+                .unwrap();
+            assert!(service.list_groups_authorized(&actor).is_ok());
+        }
+    }
+
+    #[test]
+    fn an_ordinary_client_never_receives_desktop_owner_authority() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(NativeStore::open(dir.path().join("vault.sqlite")).unwrap());
+        let service = KeyLeaseService::new(store).unwrap();
+        service.initialize(b"password", Duration::hours(1)).unwrap();
+        let (agent, token) = service.register_client("desktop-lookalike").unwrap();
+        let actor = service
+            .authenticate(&agent, &token, "ordinary-session")
+            .unwrap();
+        service.lock().unwrap();
+        service
+            .unlock_for_client(&agent, b"password", Duration::hours(1))
+            .unwrap();
+        assert!(matches!(
+            service.list_groups_authorized(&actor),
+            Err(KeyLeaseError::Denied { .. })
+        ));
     }
 }

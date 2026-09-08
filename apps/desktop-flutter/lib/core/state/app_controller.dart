@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
 import '../models/models.dart';
+import '../platform/local_runtime_adapter.dart';
 import '../platform/preferences_store.dart';
 import '../platform/security_adapter.dart';
 import '../../ui/tokens/keylease_tokens.dart';
@@ -28,6 +30,7 @@ class AppController extends ChangeNotifier with BusyRegistry {
   AppController({
     required this.adapter,
     required this.preferences,
+    required this.runtime,
     this.clientFactory = _socketClient,
   }) {
     vault = VaultController(clientOf: () => client);
@@ -41,8 +44,21 @@ class AppController extends ChangeNotifier with BusyRegistry {
   static const unlockKey = 'app.unlock';
   static const lockKey = 'app.lock';
 
+  static String agentPromptForEntry(EntrySummary entry) =>
+      '''Use KeyLease entry ${jsonEncode(entry.title)} (`${entry.id}`).
+
+Inspect: `keylease entries get ${entry.id}`
+Reveal a needed field: `keylease entries reveal ${entry.id} --field password`
+Get OTP if needed: `keylease entries totp ${entry.id}`
+
+Keep returned secrets private. If the vault is locked, ask me to unlock KeyLease.''';
+
+  static String cliCommandForEntry(EntrySummary entry) =>
+      'keylease entries get ${entry.id}';
+
   final SecurityAdapter adapter;
   final PreferencesStore preferences;
+  final LocalRuntimeAdapter runtime;
   final ClientFactory clientFactory;
   StreamSubscription<LockTrigger>? _lockSubscription;
 
@@ -54,6 +70,10 @@ class AppController extends ChangeNotifier with BusyRegistry {
   UserMessage? banner;
   double sidebarWidth = KeyLeaseLayout.sidebarWidth;
   double listWidth = KeyLeaseLayout.listWidth;
+  bool legacyAvailable = false;
+  String? legacyDatabase;
+  String? serviceVersion;
+  bool _createFirstItemRequested = false;
 
   late final VaultController vault;
   late final ConnectionsController connections;
@@ -67,18 +87,42 @@ class AppController extends ChangeNotifier with BusyRegistry {
   /// Loads saved, non-secret preferences and probes the local service.
   Future<void> start() async {
     final stored = await preferences.load();
-    settings = ConnectionSettings.fromJson(stored);
+    settings = ConnectionSettings.defaults();
     sidebarWidth =
         (stored['sidebar_width'] as num?)?.toDouble() ??
         KeyLeaseLayout.sidebarWidth;
     listWidth =
         (stored['list_width'] as num?)?.toDouble() ?? KeyLeaseLayout.listWidth;
     notifyListeners();
+    try {
+      final inspection = await runtime.inspect();
+      legacyAvailable = inspection.legacyAvailable;
+      legacyDatabase = inspection.legacyDatabase;
+      serviceVersion = inspection.serviceVersion;
+      switch (inspection.state) {
+        case LocalRuntimeState.needsOnboarding:
+          _enter(AppPhase.onboarding, null);
+          return;
+        case LocalRuntimeState.repairRequired:
+          _enter(AppPhase.repairRequired, null);
+          return;
+        case LocalRuntimeState.ready:
+          await runtime.ensureService();
+          await _waitForService();
+      }
+    } catch (caught) {
+      _enter(
+        caught is BackgroundApprovalRequired
+            ? AppPhase.backgroundApprovalRequired
+            : AppPhase.serviceUnavailable,
+        UserMessage.from(caught),
+      );
+      return;
+    }
     await refresh();
   }
 
   Future<void> persistPreferences() => preferences.save({
-    ...settings.toJson(),
     'sidebar_width': sidebarWidth,
     'list_width': listWidth,
   });
@@ -103,33 +147,11 @@ class AppController extends ChangeNotifier with BusyRegistry {
     notifyListeners();
   }
 
-  Future<void> applySettings(ConnectionSettings value) async {
-    settings = value;
-    _clearSessionData();
-    notifyListeners();
-    await persistPreferences();
-    await refresh();
-  }
-
   /// Recomputes [phase] from the daemon, keeping each failure distinguishable.
   Future<void> refresh() async {
     await track(
       refreshKey,
       () async {
-        if (!settings.isComplete) {
-          _enter(
-            AppPhase.setupRequired,
-            const UserMessage(
-              title: 'Make yourself at home',
-              detail:
-                  'Point KeyLease at the local service socket and choose the '
-                  'client file it issued for this app.',
-              actionLabel: 'Open settings',
-            ),
-          );
-          return;
-        }
-
         final Map<String, dynamic> raw;
         try {
           raw = Map<String, dynamic>.from(
@@ -138,7 +160,7 @@ class AppController extends ChangeNotifier with BusyRegistry {
         } on KeyLeaseException catch (caught) {
           _enter(
             caught.code == KeyLeaseErrorCode.client
-                ? AppPhase.setupRequired
+                ? AppPhase.repairRequired
                 : AppPhase.serviceUnavailable,
             UserMessage.from(caught),
           );
@@ -168,7 +190,7 @@ class AppController extends ChangeNotifier with BusyRegistry {
             KeyLeaseErrorCode.denied => AppPhase.permissionDenied,
             KeyLeaseErrorCode.vaultLocked => AppPhase.locked,
             KeyLeaseErrorCode.transport => AppPhase.serviceUnavailable,
-            KeyLeaseErrorCode.client => AppPhase.setupRequired,
+            KeyLeaseErrorCode.client => AppPhase.repairRequired,
             _ => AppPhase.serviceUnavailable,
           }, UserMessage.from(caught));
           return;
@@ -181,6 +203,70 @@ class AppController extends ChangeNotifier with BusyRegistry {
         _enter(AppPhase.serviceUnavailable, UserMessage.from(caught));
       },
     );
+  }
+
+  Future<String?> chooseVaultSource() => runtime.chooseVaultSource();
+
+  Future<Map<String, dynamic>> inspectSource(String path) =>
+      runtime.inspectSource(path);
+
+  Future<bool> provision(Map<String, dynamic> request) async {
+    var completed = false;
+    _createFirstItemRequested = request['mode'] == 'create';
+    _enter(AppPhase.provisioning, null);
+    await track(
+      'app.provision',
+      () async {
+        await runtime.provision(request);
+        await runtime.ensureService();
+        await _waitForService();
+        completed = true;
+      },
+      onError: (caught) {
+        _createFirstItemRequested = false;
+        banner = UserMessage.from(caught);
+        _enter(
+          caught is BackgroundApprovalRequired
+              ? AppPhase.backgroundApprovalRequired
+              : AppPhase.onboarding,
+          null,
+        );
+      },
+    );
+    if (completed) {
+      final password = request['password'] as String?;
+      if (password != null) await unlock(password);
+    }
+    return completed;
+  }
+
+  bool consumeCreateFirstItemRequest() {
+    if (!_createFirstItemRequested || !isReady) return false;
+    _createFirstItemRequested = false;
+    return true;
+  }
+
+  Future<void> restartService() async {
+    await runtime.restartService();
+    await refresh();
+  }
+
+  Future<void> openLoginItemsSettings() => runtime.openLoginItemsSettings();
+
+  Future<void> openDataFolder() => runtime.openDataFolder();
+
+  Future<void> _waitForService() async {
+    Object? lastError;
+    for (var attempt = 0; attempt < 30; attempt++) {
+      try {
+        await client.unauthenticated({'command': 'status'});
+        return;
+      } catch (caught) {
+        lastError = caught;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+    }
+    throw lastError ?? StateError('KeyLease service did not start');
   }
 
   Future<void> loadSection() async {
@@ -258,9 +344,12 @@ class AppController extends ChangeNotifier with BusyRegistry {
 
   /// Copies a secret through the native adapter so the conditional clipboard
   /// clear stays in force. The UI never writes secrets to the clipboard.
-  Future<bool> copySensitive(String value) async {
+  Future<bool> copySensitive(
+    String value, {
+    Duration clearAfter = const Duration(seconds: 30),
+  }) async {
     try {
-      await adapter.copySensitive(value);
+      await adapter.copySensitive(value, clearAfter: clearAfter);
       banner = null;
       notifyListeners();
       return true;
@@ -270,6 +359,16 @@ class AppController extends ChangeNotifier with BusyRegistry {
       return false;
     }
   }
+
+  Future<bool> copyAgentPrompt(EntrySummary entry) => copySensitive(
+    agentPromptForEntry(entry),
+    clearAfter: const Duration(seconds: 120),
+  );
+
+  Future<bool> copyCliCommand(EntrySummary entry) => copySensitive(
+    cliCommandForEntry(entry),
+    clearAfter: const Duration(seconds: 120),
+  );
 
   @override
   void dispose() {

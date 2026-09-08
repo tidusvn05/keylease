@@ -2,7 +2,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <application
-        android:label="LeaseGate Approval"
+        android:label="Leasegate Approval"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

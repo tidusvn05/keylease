@@ -200,6 +200,15 @@ pub struct ItemMetadata {
     pub title: String,
     pub username: Option<String>,
     pub urls: Vec<String>,
+    /// Whether the item contains a password field. The password remains
+    /// excluded from metadata.
+    pub has_password: bool,
+    /// Whether the encrypted item contains non-empty notes. The note body
+    /// remains excluded from list and metadata responses.
+    pub has_notes: bool,
+    /// Whether the item contains a valid typed TOTP configuration. The secret
+    /// and current code remain excluded from metadata.
+    pub has_totp: bool,
     pub revision: u64,
     pub updated_at: DateTime<Utc>,
 }
@@ -214,6 +223,21 @@ impl VaultItem {
                 FieldValue::Text(v) => Some(v.clone()),
                 _ => None,
             });
+        let has_totp = self
+            .fields
+            .iter()
+            .any(|field| field.key == "otp" && matches!(&field.value, FieldValue::Totp(_)));
+        let has_password = self.fields.iter().any(|field| {
+            field.key == "password"
+                && matches!(
+                    &field.value,
+                    FieldValue::Text(value) | FieldValue::Concealed(value) if !value.is_empty()
+                )
+        });
+        let has_notes = self
+            .notes
+            .as_deref()
+            .is_some_and(|notes| !notes.trim().is_empty());
         ItemMetadata {
             id: self.id.clone(),
             group_id: self.group_id.clone(),
@@ -221,6 +245,9 @@ impl VaultItem {
             title: self.title.clone(),
             username,
             urls: self.urls.iter().map(|u| u.url.clone()).collect(),
+            has_password,
+            has_notes,
+            has_totp,
             revision: self.revision,
             updated_at: self.updated_at,
         }

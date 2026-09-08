@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:keylease_desktop/core/platform/preferences_store.dart';
+import 'package:keylease_desktop/core/platform/local_runtime_adapter.dart';
 import 'package:keylease_desktop/core/platform/security_adapter.dart';
 import 'package:keylease_desktop/core/rpc/keylease_rpc.dart';
 import 'package:keylease_desktop/core/state/app_controller.dart';
@@ -11,6 +12,7 @@ class FakeSecurityAdapter implements SecurityAdapter {
   final _lockRequests = StreamController<LockTrigger>.broadcast();
   final _menuActions = StreamController<MenuAction>.broadcast();
   final copied = <String>[];
+  final openedUrls = <String>[];
 
   int clipboardClears = 0;
   String? tokenToReturn;
@@ -49,10 +51,43 @@ class FakeSecurityAdapter implements SecurityAdapter {
   Future<bool> openGoogleAuthorization(String url) async => browserOpens;
 
   @override
+  Future<bool> openExternalUrl(String url) async {
+    openedUrls.add(url);
+    return browserOpens;
+  }
+
+  @override
   Future<void> dispose() async {
     await _lockRequests.close();
     await _menuActions.close();
   }
+}
+
+class FakeLocalRuntimeAdapter implements LocalRuntimeAdapter {
+  LocalRuntimeInspection inspection = const LocalRuntimeInspection(
+    state: LocalRuntimeState.ready,
+    serviceVersion: 'test',
+  );
+
+  @override
+  Future<LocalRuntimeInspection> inspect() async => inspection;
+  @override
+  Future<String?> chooseVaultSource() async => null;
+  @override
+  Future<Map<String, dynamic>> inspectSource(String path) async => {
+    'kind': 'keylease_database',
+    'path': path,
+  };
+  @override
+  Future<void> provision(Map<String, dynamic> request) async {}
+  @override
+  Future<void> ensureService() async {}
+  @override
+  Future<void> restartService() async {}
+  @override
+  Future<void> openLoginItemsSettings() async {}
+  @override
+  Future<void> openDataFolder() async {}
 }
 
 /// A scripted daemon.
@@ -131,16 +166,23 @@ abstract final class Fixtures {
   static Map<String, dynamic> entry({
     String id = 'entry-github',
     String title = 'GitHub',
+    String kind = 'core.login',
     String username = 'alex@northstar.example',
     List<String> urls = const ['https://github.com'],
+    bool hasPassword = true,
+    bool hasNotes = false,
+    bool hasTotp = false,
     int revision = 3,
   }) => {
     'id': id,
     'group_id': 'group-work',
-    'kind': 'core.login',
+    'kind': kind,
     'title': title,
     'username': username,
     'urls': urls,
+    'has_password': hasPassword,
+    'has_notes': hasNotes,
+    'has_totp': hasTotp,
     'revision': revision,
     'updated_at': '2026-09-05T09:30:00Z',
   };
@@ -187,6 +229,7 @@ abstract final class Fixtures {
 ({AppController app, FakeKeyLeaseClient client, FakeSecurityAdapter adapter})
 buildController({
   Map<String, dynamic>? preferences,
+  LocalRuntimeInspection? runtimeInspection,
   void Function(FakeKeyLeaseClient client)? script,
 }) {
   final client = FakeKeyLeaseClient()
@@ -199,7 +242,12 @@ buildController({
     ..value('entries_create', {'id': 'entry-new'})
     ..value('entries_update', {'id': 'entry-github'})
     ..value('entries_delete', {'deleted': 'entry-github'})
-    ..value('entries_reveal', {'value': 'Demo-only!47-sample'})
+    ..on('entries_reveal', (request) async {
+      final value = request['field'] == 'notes'
+          ? 'Recovery instructions\n\nContact the account owner.'
+          : 'Demo-only!47-sample';
+      return {'value': value};
+    })
     ..value('groups_create', {'id': 'group-new'})
     ..value('groups_update', {'id': 'group-work'})
     ..value('groups_delete', {'deleted': 'group-work'})
@@ -210,8 +258,11 @@ buildController({
     });
   script?.call(client);
   final adapter = FakeSecurityAdapter();
+  final runtime = FakeLocalRuntimeAdapter();
+  if (runtimeInspection != null) runtime.inspection = runtimeInspection;
   final app = AppController(
     adapter: adapter,
+    runtime: runtime,
     preferences: InMemoryPreferencesStore(
       preferences ??
           const ConnectionSettings(

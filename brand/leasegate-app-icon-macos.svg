@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Leasegate macOS app icon</title>
+  <desc id="desc">Leasegate gateway symbol on a midnight rounded square.</desc>
+  <rect x="64" y="64" width="896" height="896" rx="206" fill="#071426"/>
+  <path fill="#2F72FF" d="M278 758V405c0-98 79-177 177-177h209c51 0 92 41 92 92v145H632V352H455c-29 0-53 24-53 53v353H278Z"/>
+  <path fill="#36E3A2" d="m487 435 159 92v175l-159 92V435Z"/>
+</svg>

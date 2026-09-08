@@ -30,7 +30,7 @@ const MAX_LOCAL_JSON_BYTES: usize = 4 * 1024 * 1024;
     about = "Local-first encrypted vault and LeaseGate agent gateway"
 )]
 struct Cli {
-    #[arg(long, global = true, default_value = "keylease.sqlite")]
+    #[arg(long, global = true, default_value_os_t = default_database())]
     db: PathBuf,
     #[arg(long, global = true)]
     socket: Option<PathBuf>,
@@ -107,6 +107,60 @@ enum Command {
         length: usize,
     },
     Contracts,
+    #[command(hide = true)]
+    Desktop {
+        #[command(subcommand)]
+        command: DesktopCommand,
+    },
+}
+#[derive(Subcommand)]
+enum DesktopCommand {
+    Inspect {
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
+    InspectSource {
+        path: PathBuf,
+    },
+    Provision {
+        #[arg(long)]
+        home: Option<PathBuf>,
+        #[arg(long, default_value = "-")]
+        input_json: String,
+    },
+    Serve {
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+enum DesktopProvisionInput {
+    Create {
+        password: SecretValue,
+    },
+    AdoptKeyleaseDatabase {
+        source_path: PathBuf,
+        password: SecretValue,
+    },
+    RestoreKeyleaseBackup {
+        source_path: PathBuf,
+        password: SecretValue,
+    },
+    ImportKdbx {
+        source_path: PathBuf,
+        source_password: SecretValue,
+        password: SecretValue,
+    },
+    ImportOnepux {
+        source_path: PathBuf,
+        password: SecretValue,
+        acknowledge_plaintext: bool,
+    },
+    RepairDesktopClient {
+        password: SecretValue,
+    },
 }
 #[derive(Subcommand)]
 enum VaultCommand {
@@ -653,6 +707,7 @@ async fn run() -> Result<()> {
         Command::GeneratePassword { length } => {
             print_json(&json!({"password":keylease_service::generate_password(length)?}))
         }
+        Command::Desktop { command } => desktop_command(command).await,
         Command::Contracts => print_json(&json!({
             "contract_version":CONTRACT_VERSION,
             "schemas":{
@@ -679,6 +734,296 @@ async fn run() -> Result<()> {
             ]
         })),
     }
+}
+
+struct DesktopPaths {
+    home: PathBuf,
+    database: PathBuf,
+    token: PathBuf,
+    socket: PathBuf,
+}
+
+fn desktop_paths(home: Option<PathBuf>) -> Result<DesktopPaths> {
+    let home = match home {
+        Some(path) => path,
+        None => PathBuf::from(std::env::var_os("HOME").ok_or_else(|| {
+            KeyLeaseError::InvalidRequest {
+                reason: "cannot resolve the current user's home directory".into(),
+            }
+        })?)
+        .join(".keylease"),
+    };
+    if !home.is_absolute() {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "managed KeyLease home must be an absolute path".into(),
+        });
+    }
+    Ok(DesktopPaths {
+        database: home.join("keylease.sqlite"),
+        token: home.join("desktop.token"),
+        socket: home.join("run/keylease.sock"),
+        home,
+    })
+}
+
+fn ensure_desktop_home(paths: &DesktopPaths) -> Result<()> {
+    if paths.home.exists() {
+        let metadata = fs::symlink_metadata(&paths.home).map_err(|_| KeyLeaseError::Storage)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(KeyLeaseError::Denied {
+                reason: "managed KeyLease home must be a real directory".into(),
+            });
+        }
+    } else {
+        fs::create_dir(&paths.home).map_err(|_| KeyLeaseError::Storage)?;
+    }
+    fs::set_permissions(&paths.home, fs::Permissions::from_mode(0o700))
+        .map_err(|_| KeyLeaseError::Storage)?;
+    for directory in [paths.home.join("run"), paths.home.join("backups")] {
+        if directory.exists() {
+            let metadata = fs::symlink_metadata(&directory).map_err(|_| KeyLeaseError::Storage)?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(KeyLeaseError::Denied {
+                    reason: "managed KeyLease subdirectories must not be symlinks".into(),
+                });
+            }
+        } else {
+            fs::create_dir(&directory).map_err(|_| KeyLeaseError::Storage)?;
+        }
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
+            .map_err(|_| KeyLeaseError::Storage)?;
+    }
+    Ok(())
+}
+
+fn validate_regular_source(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| KeyLeaseError::InvalidRequest {
+        reason: "cannot inspect the selected vault file".into(),
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(KeyLeaseError::Denied {
+            reason: "selected vault must be a regular file, not a symlink".into(),
+        });
+    }
+    Ok(())
+}
+
+fn inspect_desktop_source(path: &Path) -> Result<&'static str> {
+    validate_regular_source(path)?;
+    let mut prefix = [0_u8; 64];
+    let mut file = fs::File::open(path).map_err(|_| KeyLeaseError::Storage)?;
+    let count = file.read(&mut prefix).map_err(|_| KeyLeaseError::Storage)?;
+    let prefix = &prefix[..count];
+    if prefix.starts_with(b"SQLite format 3\0") {
+        return Ok("keylease_database");
+    }
+    if prefix.starts_with(&[0x03, 0xd9, 0xa2, 0x9a, 0x67, 0xfb, 0x4b, 0xb5]) {
+        return Ok("kdbx");
+    }
+    if prefix.starts_with(b"PK\x03\x04") {
+        return Ok("onepux");
+    }
+    if prefix.first() == Some(&b'{') {
+        if fs::metadata(path)
+            .map_err(|_| KeyLeaseError::Storage)?
+            .len()
+            > MAX_LOCAL_JSON_BYTES as u64
+        {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "selected JSON backup exceeds the local input limit".into(),
+            });
+        }
+        let bytes = fs::read(path).map_err(|_| KeyLeaseError::Storage)?;
+        let value: Value =
+            serde_json::from_slice(&bytes).map_err(|_| KeyLeaseError::InvalidRequest {
+                reason: "selected JSON file is not a KeyLease backup".into(),
+            })?;
+        if value.get("format").and_then(Value::as_str) == Some("keylease-native-backup") {
+            return Ok("keylease_backup");
+        }
+    }
+    Err(KeyLeaseError::InvalidRequest {
+        reason: "unsupported vault file; choose KeyLease, KDBX, or 1PUX".into(),
+    })
+}
+
+async fn desktop_command(command: DesktopCommand) -> Result<()> {
+    match command {
+        DesktopCommand::Inspect { home } => {
+            let paths = desktop_paths(home)?;
+            let database = paths.database.is_file();
+            let token = paths.token.is_file();
+            let state = match (database, token) {
+                (false, false) => "needs_onboarding",
+                (true, true) => "ready",
+                _ => "repair_required",
+            };
+            let user_home = paths.home.parent().unwrap_or_else(|| Path::new("/"));
+            let legacy_root = user_home.join("Library/Application Support/KeyLease");
+            let legacy_database = legacy_root.join("keylease.sqlite");
+            let legacy_preferences = legacy_root.join("desktop-ui.json");
+            print_json(&json!({
+                "state":state,
+                "legacy_available":legacy_database.is_file() || legacy_preferences.is_file(),
+                "legacy_database":legacy_database.is_file().then(|| legacy_database.display().to_string()),
+                "service_version":env!("CARGO_PKG_VERSION"),
+                "contract_version":CONTRACT_VERSION
+            }))
+        }
+        DesktopCommand::InspectSource { path } => {
+            print_json(&json!({"kind":inspect_desktop_source(&path)?}))
+        }
+        DesktopCommand::Provision { home, input_json } => {
+            let paths = desktop_paths(home)?;
+            ensure_desktop_home(&paths)?;
+            let input = read_json::<DesktopProvisionInput>(&input_json)?;
+            provision_desktop(&paths, input)
+        }
+        DesktopCommand::Serve { home } => {
+            let paths = desktop_paths(home)?;
+            ensure_desktop_home(&paths)?;
+            serve(&paths.database, &paths.socket, 28_800, true).await
+        }
+    }
+}
+
+fn provision_desktop(paths: &DesktopPaths, input: DesktopProvisionInput) -> Result<()> {
+    let input = match input {
+        DesktopProvisionInput::RepairDesktopClient { password } => {
+            if !paths.database.is_file() {
+                return Err(KeyLeaseError::NotFound {
+                    resource: "managed vault".into(),
+                });
+            }
+            let service = service(&paths.database)?;
+            let vault_id = service.unlock(password.0.as_bytes(), Duration::minutes(5))?;
+            let (agent_id, token) = service.register_desktop_client()?;
+            write_atomic(&paths.token, token.as_bytes())?;
+            return print_json(&json!({
+                "state":"ready",
+                "vault_id":vault_id,
+                "agent_id":agent_id,
+                "repaired":true
+            }));
+        }
+        input => input,
+    };
+
+    if paths.database.exists() || paths.token.exists() {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "managed vault already exists; refusing to overwrite it".into(),
+        });
+    }
+
+    let staging = tempfile::Builder::new()
+        .prefix(".provision-")
+        .tempdir_in(&paths.home)
+        .map_err(|_| KeyLeaseError::Storage)?;
+    fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700))
+        .map_err(|_| KeyLeaseError::Storage)?;
+    let staging_database = staging.path().join("keylease.sqlite");
+    let staging_token = staging.path().join("desktop.token");
+    let mut import_result = Value::Null;
+
+    let (service, vault_id) = match input {
+        DesktopProvisionInput::Create { password } => {
+            let service = service(&staging_database)?;
+            let vault_id = service.initialize(password.0.as_bytes(), Duration::minutes(5))?;
+            (service, vault_id)
+        }
+        DesktopProvisionInput::AdoptKeyleaseDatabase {
+            source_path,
+            password,
+        } => {
+            validate_regular_source(&source_path)?;
+            NativeStore::snapshot_database(&source_path, &staging_database)?;
+            let service = service(&staging_database)?;
+            let vault_id = service.unlock(password.0.as_bytes(), Duration::minutes(5))?;
+            (service, vault_id)
+        }
+        DesktopProvisionInput::RestoreKeyleaseBackup {
+            source_path,
+            password,
+        } => {
+            validate_regular_source(&source_path)?;
+            let bytes = fs::read(source_path).map_err(|_| KeyLeaseError::Storage)?;
+            let service = service(&staging_database)?;
+            let vault_id = service.restore_native_backup(
+                password.0.as_bytes(),
+                &bytes,
+                Duration::minutes(5),
+            )?;
+            (service, vault_id)
+        }
+        DesktopProvisionInput::ImportKdbx {
+            source_path,
+            source_password,
+            password,
+        } => {
+            validate_regular_source(&source_path)?;
+            let bytes = fs::read(source_path).map_err(|_| KeyLeaseError::Storage)?;
+            let service = service(&staging_database)?;
+            let vault_id = service.initialize(password.0.as_bytes(), Duration::minutes(5))?;
+            let preview = service.preview_kdbx_import(&bytes, &source_password.0)?;
+            import_result = serde_json::to_value(service.commit_kdbx_import(&preview)?)
+                .map_err(|_| KeyLeaseError::Storage)?;
+            (service, vault_id)
+        }
+        DesktopProvisionInput::ImportOnepux {
+            source_path,
+            password,
+            acknowledge_plaintext,
+        } => {
+            if !acknowledge_plaintext {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "1PUX contains plaintext secrets; acknowledgment is required".into(),
+                });
+            }
+            let bytes = read_onepux_source(&source_path)?;
+            let service = service(&staging_database)?;
+            let vault_id = service.initialize(password.0.as_bytes(), Duration::minutes(5))?;
+            let preview = service.preview_onepux_import(&bytes)?;
+            import_result = serde_json::to_value(service.commit_onepux_import(&preview)?)
+                .map_err(|_| KeyLeaseError::Storage)?;
+            (service, vault_id)
+        }
+        DesktopProvisionInput::RepairDesktopClient { .. } => unreachable!(),
+    };
+
+    if service.list_groups()?.is_empty() {
+        service.create_group("Personal", None)?;
+    }
+    let (agent_id, token) = service.register_desktop_client()?;
+    fs::write(&staging_token, token.as_bytes()).map_err(|_| KeyLeaseError::Storage)?;
+    fs::set_permissions(&staging_token, fs::Permissions::from_mode(0o600))
+        .map_err(|_| KeyLeaseError::Storage)?;
+    drop(service);
+
+    fs::hard_link(&staging_database, &paths.database).map_err(|error| {
+        if error.kind() == io::ErrorKind::AlreadyExists {
+            KeyLeaseError::InvalidRequest {
+                reason: "managed vault already exists; refusing to overwrite it".into(),
+            }
+        } else {
+            KeyLeaseError::Storage
+        }
+    })?;
+    if let Err(error) = fs::hard_link(&staging_token, &paths.token) {
+        let _ = fs::remove_file(&paths.database);
+        return Err(if error.kind() == io::ErrorKind::AlreadyExists {
+            KeyLeaseError::InvalidRequest {
+                reason: "managed desktop token already exists".into(),
+            }
+        } else {
+            KeyLeaseError::Storage
+        });
+    }
+    print_json(&json!({
+        "state":"ready",
+        "vault_id":vault_id,
+        "agent_id":agent_id,
+        "import":import_result
+    }))
 }
 
 fn vault_command(db: &Path, command: VaultCommand) -> Result<()> {
@@ -979,19 +1324,35 @@ async fn entry_command(cli: &Cli, socket: &Path, command: EntryCommand) -> Resul
             .await
         }
         EntryCommand::Reveal { id, field } => {
-            let service = admin_service(&cli.db)?;
-            print_json(
-                &json!({"item_id":id,"field":field,"value":service.reveal_field_for_human(&ItemId(id.clone()),&field)?}),
+            print_rpc(
+                socket,
+                RpcRequest::EntriesReveal {
+                    auth: auth(cli)?,
+                    id: ItemId(id),
+                    field,
+                },
             )
+            .await
         }
         EntryCommand::Totp { id } => {
-            let service = admin_service(&cli.db)?;
-            let (code, expires_in) = service.totp_for_human(&ItemId(id.clone()))?;
-            print_json(&json!({"item_id":id,"code":code,"expires_in":expires_in}))
+            print_rpc(
+                socket,
+                RpcRequest::EntriesTotp {
+                    auth: auth(cli)?,
+                    id: ItemId(id),
+                },
+            )
+            .await
         }
         EntryCommand::History { id } => {
-            let service = admin_service(&cli.db)?;
-            print_json(&service.entry_history_for_human(&ItemId(id))?)
+            print_rpc(
+                socket,
+                RpcRequest::EntriesHistory {
+                    auth: auth(cli)?,
+                    id: ItemId(id),
+                },
+            )
+            .await
         }
     }
 }
@@ -1559,16 +1920,12 @@ fn auth(cli: &Cli) -> Result<RpcAuth> {
     let agent = cli
         .agent_id
         .clone()
-        .ok_or_else(|| KeyLeaseError::InvalidRequest {
-            reason: "--agent-id is required".into(),
-        })?;
+        .unwrap_or_else(|| "agent_desktop".into());
     let path = cli
         .client_token_file
-        .as_ref()
-        .ok_or_else(|| KeyLeaseError::InvalidRequest {
-            reason: "--client-token-file is required".into(),
-        })?;
-    let token = read_secret_file(path, "client token")?;
+        .clone()
+        .unwrap_or_else(default_client_token);
+    let token = read_secret_file(&path, "client token")?;
     Ok(RpcAuth {
         agent_id: AgentId(agent),
         token: SecretValue(token.trim().to_owned()),
@@ -1744,10 +2101,27 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 fn default_socket() -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "keylease-{}.sock",
-        std::env::var("USER").unwrap_or_else(|_| "user".into())
-    ))
+    managed_home()
+        .map(|home| home.join("run/keylease.sock"))
+        .unwrap_or_else(|| {
+            std::env::temp_dir().join(format!(
+                "keylease-{}.sock",
+                std::env::var("USER").unwrap_or_else(|_| "user".into())
+            ))
+        })
+}
+fn default_database() -> PathBuf {
+    managed_home()
+        .map(|home| home.join("keylease.sqlite"))
+        .unwrap_or_else(|| PathBuf::from("keylease.sqlite"))
+}
+fn default_client_token() -> PathBuf {
+    managed_home()
+        .map(|home| home.join("desktop.token"))
+        .unwrap_or_else(|| PathBuf::from("desktop.token"))
+}
+fn managed_home() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".keylease"))
 }
 fn uuid_text() -> String {
     RequestId::new().0.trim_start_matches("req_").to_owned()
@@ -2013,5 +2387,33 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(service.status().unwrap()["locked"], false);
+    }
+
+    #[test]
+    fn desktop_create_provisions_private_managed_files_and_personal_group() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join(".keylease");
+        let paths = desktop_paths(Some(home)).unwrap();
+        ensure_desktop_home(&paths).unwrap();
+        provision_desktop(
+            &paths,
+            DesktopProvisionInput::Create {
+                password: SecretValue("desktop password".into()),
+            },
+        )
+        .unwrap();
+
+        assert!(paths.database.is_file());
+        assert!(paths.token.is_file());
+        assert_eq!(
+            fs::metadata(&paths.token).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let service =
+            KeyLeaseService::new(Arc::new(NativeStore::open(&paths.database).unwrap())).unwrap();
+        service
+            .unlock(b"desktop password", Duration::hours(1))
+            .unwrap();
+        assert_eq!(service.list_groups().unwrap()[0].name, "Personal");
     }
 }

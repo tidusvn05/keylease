@@ -5,6 +5,7 @@ import 'package:forui/forui.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../core/platform/preferences_store.dart';
+import '../core/platform/local_runtime_adapter.dart';
 import '../core/platform/security_adapter.dart';
 import '../core/state/app_controller.dart';
 import '../core/state/app_phase.dart';
@@ -37,6 +38,7 @@ class _KeyLeaseAppState extends State<KeyLeaseApp> {
       widget.controller ??
       AppController(
         adapter: MethodChannelSecurityAdapter(),
+        runtime: const MethodChannelLocalRuntimeAdapter(),
         preferences: FilePreferencesStore(),
       );
   late final bool _ownsController = widget.controller == null;
@@ -45,7 +47,13 @@ class _KeyLeaseAppState extends State<KeyLeaseApp> {
   void initState() {
     super.initState();
     _menuSubscription = controller.adapter.menuActions.listen(_onMenuAction);
+    controller.addListener(_onControllerChanged);
     unawaited(controller.start());
+  }
+
+  void _onControllerChanged() {
+    if (!controller.consumeCreateFirstItemRequest()) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _newItem());
   }
 
   /// The native menu is the only path for shortcuts AppKit already owns, so
@@ -84,6 +92,7 @@ class _KeyLeaseAppState extends State<KeyLeaseApp> {
   @override
   void dispose() {
     unawaited(_menuSubscription?.cancel());
+    controller.removeListener(_onControllerChanged);
     if (_ownsController) controller.dispose();
     super.dispose();
   }

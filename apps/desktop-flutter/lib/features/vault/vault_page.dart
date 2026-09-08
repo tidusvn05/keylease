@@ -29,6 +29,8 @@ class VaultPage extends StatelessWidget {
           controller: vault,
           openOnSelect: !splitView,
           onCreate: () => openEntryEditor(context, app),
+          onRefresh: app.refresh,
+          refreshing: app.isBusy(AppController.refreshKey),
           onActivate: (id) => _openDetail(context, app),
         );
         if (!splitView) return list;

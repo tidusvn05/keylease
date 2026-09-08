@@ -3,20 +3,28 @@ import 'package:material_ui/material_ui.dart';
 
 /// A small uppercase heading above a group of fields.
 class SectionLabel extends StatelessWidget {
-  const SectionLabel(this.text, {super.key});
+  const SectionLabel(this.text, {this.action, super.key});
 
   final String text;
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.only(bottom: 9),
-    child: Text(
-      text.toUpperCase(),
-      style: context.theme.typography.body.xs.copyWith(
-        letterSpacing: 0.7,
-        fontWeight: FontWeight.w600,
-        color: context.theme.colors.mutedForeground,
-      ),
+    child: Row(
+      children: [
+        Expanded(
+          child: Text(
+            text.toUpperCase(),
+            style: context.theme.typography.body.xs.copyWith(
+              letterSpacing: 0.7,
+              fontWeight: FontWeight.w600,
+              color: context.theme.colors.mutedForeground,
+            ),
+          ),
+        ),
+        if (action != null) action!,
+      ],
     ),
   );
 }

@@ -8,6 +8,7 @@ import '../../core/models/models.dart';
 import '../../core/state/vault_controller.dart';
 import '../../ui/components/entry_row.dart';
 import '../../ui/components/message_banner.dart';
+import '../../ui/components/secret_field.dart';
 import '../../ui/components/state_screen.dart';
 import '../../ui/tokens/keylease_tokens.dart';
 
@@ -18,6 +19,8 @@ class EntryList extends StatelessWidget {
     required this.controller,
     required this.onActivate,
     required this.onCreate,
+    required this.onRefresh,
+    required this.refreshing,
     this.openOnSelect = false,
     super.key,
   });
@@ -25,6 +28,8 @@ class EntryList extends StatelessWidget {
   final VaultController controller;
   final ValueChanged<String> onActivate;
   final VoidCallback onCreate;
+  final VoidCallback onRefresh;
+  final bool refreshing;
 
   /// Narrow layouts route straight from the list to the detail view.
   final bool openOnSelect;
@@ -34,6 +39,8 @@ class EntryList extends StatelessWidget {
     final tokens = KeyLeaseTokens.of(context);
     final theme = context.theme;
     final entries = controller.visibleEntries;
+    final showInlineActions =
+        MediaQuery.sizeOf(context).width >= tokens.expandedBreakpoint;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -113,6 +120,20 @@ class EntryList extends StatelessWidget {
                   height: 14,
                   child: FCircularProgress(),
                 ),
+              if (showInlineActions) ...[
+                const SizedBox(width: 6),
+                IconAction(
+                  label: 'Refresh',
+                  icon: FLucideIcons.refreshCw,
+                  onPress: refreshing ? null : onRefresh,
+                ),
+                const SizedBox(width: 4),
+                IconAction(
+                  label: 'New item',
+                  icon: FLucideIcons.plus,
+                  onPress: onCreate,
+                ),
+              ],
             ],
           ),
         ),

@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Leasegate brand sheet</title>
+  <desc id="desc">Leasegate logo, application icon, symbol variants, and core color palette.</desc>
+  <rect width="1600" height="1000" fill="#F5F8FC"/>
+  <text x="100" y="110" fill="#5E6B7C" font-family="Inter, system-ui, sans-serif" font-size="24" font-weight="600" letter-spacing="3">BRAND SYSTEM</text>
+  <g transform="translate(86 150) scale(.25)">
+    <path fill="#2F72FF" d="M226 812V390c0-117 95-212 212-212h250c61 0 110 49 110 110v174H650V326H438c-35 0-64 29-64 64v422H226Z"/>
+    <path fill="#36E3A2" d="m476 426 190 110v210L476 856V426Z"/>
+  </g>
+  <text x="330" y="348" fill="#071426" font-family="Inter, system-ui, sans-serif" font-size="154" font-weight="700" letter-spacing="-6">Leasegate</text>
+  <text x="100" y="430" fill="#5E6B7C" font-family="Inter, system-ui, sans-serif" font-size="30">Controlled access for people and agents.</text>
+
+  <rect x="100" y="520" width="330" height="330" rx="76" fill="#071426"/>
+  <g transform="translate(135 555) scale(.26)">
+    <path fill="#2F72FF" d="M226 812V390c0-117 95-212 212-212h250c61 0 110 49 110 110v174H650V326H438c-35 0-64 29-64 64v422H226Z"/>
+    <path fill="#36E3A2" d="m476 426 190 110v210L476 856V426Z"/>
+  </g>
+  <text x="100" y="900" fill="#071426" font-family="Inter, system-ui, sans-serif" font-size="24" font-weight="650">APP ICON</text>
+
+  <rect x="500" y="520" width="330" height="330" rx="28" fill="#FFFFFF"/>
+  <g transform="translate(535 555) scale(.26)">
+    <path fill="#2F72FF" d="M226 812V390c0-117 95-212 212-212h250c61 0 110 49 110 110v174H650V326H438c-35 0-64 29-64 64v422H226Z"/>
+    <path fill="#36E3A2" d="m476 426 190 110v210L476 856V426Z"/>
+  </g>
+  <text x="500" y="900" fill="#071426" font-family="Inter, system-ui, sans-serif" font-size="24" font-weight="650">PRIMARY MARK</text>
+
+  <rect x="900" y="520" width="600" height="330" rx="28" fill="#071426"/>
+  <g transform="translate(930 585)">
+    <rect width="90" height="90" rx="20" fill="#2F72FF"/>
+    <text x="0" y="132" fill="#F5F8FC" font-family="Inter, system-ui, sans-serif" font-size="20">Gateway Blue</text>
+    <text x="0" y="160" fill="#94A3B8" font-family="SF Mono, monospace" font-size="18">#2F72FF</text>
+  </g>
+  <g transform="translate(1110 585)">
+    <rect width="90" height="90" rx="20" fill="#36E3A2"/>
+    <text x="0" y="132" fill="#F5F8FC" font-family="Inter, system-ui, sans-serif" font-size="20">Access Mint</text>
+    <text x="0" y="160" fill="#94A3B8" font-family="SF Mono, monospace" font-size="18">#36E3A2</text>
+  </g>
+  <g transform="translate(1290 585)">
+    <rect width="90" height="90" rx="20" fill="#F5F8FC"/>
+    <text x="0" y="132" fill="#F5F8FC" font-family="Inter, system-ui, sans-serif" font-size="20">Cloud</text>
+    <text x="0" y="160" fill="#94A3B8" font-family="SF Mono, monospace" font-size="18">#F5F8FC</text>
+  </g>
+  <text x="930" y="810" fill="#F5F8FC" font-family="Inter, system-ui, sans-serif" font-size="24" font-weight="650">CORE PALETTE · MIDNIGHT #071426</text>
+</svg>

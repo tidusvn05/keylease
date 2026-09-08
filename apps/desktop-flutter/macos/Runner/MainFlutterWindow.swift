@@ -1,11 +1,13 @@
 import Cocoa
 import FlutterMacOS
+import ServiceManagement
 
 class MainFlutterWindow: NSWindow {
   private var observerTokens: [NSObjectProtocol] = []
   private var securityScopedURLs: [URL] = []
   private var sensitivePasteboardChangeCount: Int?
   private var menuChannel: FlutterMethodChannel?
+  private var runtimeBridge: AnyObject?
 
   private func clearSensitiveClipboardIfUnchanged() {
     let pasteboard = NSPasteboard.general
@@ -105,6 +107,19 @@ class MainFlutterWindow: NSWindow {
         result(NSWorkspace.shared.open(url))
         return
       }
+      if call.method == "openExternalUrl" {
+        guard
+          let raw = call.arguments as? String,
+          let url = URL(string: raw),
+          ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+          url.host != nil
+        else {
+          result(FlutterError(code: "INVALID_EXTERNAL_URL", message: nil, details: nil))
+          return
+        }
+        result(NSWorkspace.shared.open(url))
+        return
+      }
       if call.method == "copySensitive" {
         guard
           let arguments = call.arguments as? [String: Any],
@@ -176,6 +191,10 @@ class MainFlutterWindow: NSWindow {
 
     wireMenu(channel: channel)
 
+    let runtimeBridge = LocalRuntimeBridge(window: self, messenger: registrar.messenger)
+    runtimeBridge.register()
+    self.runtimeBridge = runtimeBridge
+
     RegisterGeneratedPlugins(registry: flutterViewController)
 
     super.awakeFromNib()
@@ -189,6 +208,127 @@ class MainFlutterWindow: NSWindow {
     }
     for url in securityScopedURLs {
       url.stopAccessingSecurityScopedResource()
+    }
+  }
+}
+
+@available(macOS 13.0, *)
+private final class LocalRuntimeBridge {
+  private weak var window: NSWindow?
+  private let channel: FlutterMethodChannel
+  private let service = SMAppService.agent(plistName: "app.keylease.service.plist")
+
+  init(window: NSWindow, messenger: FlutterBinaryMessenger) {
+    self.window = window
+    channel = FlutterMethodChannel(name: "com.keylease/runtime", binaryMessenger: messenger)
+  }
+
+  func register() {
+    channel.setMethodCallHandler { [weak self] call, result in
+      guard let self else { return result(FlutterError(code: "WINDOW_CLOSED", message: nil, details: nil)) }
+      switch call.method {
+      case "inspect": self.run(arguments: ["desktop", "inspect"], input: nil, result: result)
+      case "inspectSource":
+        guard let values = call.arguments as? [String: Any], let path = values["path"] as? String else {
+          return result(FlutterError(code: "INVALID_REQUEST", message: "Missing vault path", details: nil))
+        }
+        self.run(arguments: ["desktop", "inspect-source", path], input: nil, result: result)
+      case "provision":
+        guard let values = call.arguments as? [String: Any],
+              let data = try? JSONSerialization.data(withJSONObject: values) else {
+          return result(FlutterError(code: "INVALID_REQUEST", message: "Invalid setup request", details: nil))
+        }
+        self.run(arguments: ["desktop", "provision"], input: data, result: result, returnValue: false)
+      case "ensureService": self.ensureService(restart: false, result: result)
+      case "restartService": self.ensureService(restart: true, result: result)
+      case "openLoginItemsSettings":
+        SMAppService.openSystemSettingsLoginItems()
+        result(nil)
+      case "openDataFolder":
+        let folder = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".keylease")
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        result(NSWorkspace.shared.open(folder))
+      case "chooseVaultSource": self.chooseVault(result: result)
+      default: result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
+  private func helperURL() -> URL? {
+    Bundle.main.resourceURL?.appendingPathComponent("keylease")
+  }
+
+  private func run(arguments: [String], input: Data?, result: @escaping FlutterResult, returnValue: Bool = true) {
+    guard let executable = helperURL() else {
+      return result(FlutterError(code: "HELPER_MISSING", message: "KeyLease runtime is missing", details: nil))
+    }
+    DispatchQueue.global(qos: .userInitiated).async {
+      let process = Process()
+      let output = Pipe()
+      process.executableURL = executable
+      process.arguments = arguments
+      process.standardOutput = output
+      process.standardError = FileHandle.nullDevice
+      if let input {
+        let pipe = Pipe()
+        process.standardInput = pipe
+        do {
+          try process.run()
+          pipe.fileHandleForWriting.write(input)
+          try? pipe.fileHandleForWriting.close()
+        } catch {
+          return DispatchQueue.main.async { result(FlutterError(code: "HELPER_FAILED", message: "Could not start KeyLease", details: nil)) }
+        }
+      } else {
+        do { try process.run() }
+        catch { return DispatchQueue.main.async { result(FlutterError(code: "HELPER_FAILED", message: "Could not start KeyLease", details: nil)) } }
+      }
+      process.waitUntilExit()
+      let data = output.fileHandleForReading.readDataToEndOfFile()
+      guard process.terminationStatus == 0 else {
+        return DispatchQueue.main.async { result(FlutterError(code: "HELPER_FAILED", message: "KeyLease could not complete setup", details: nil)) }
+      }
+      if !returnValue { return DispatchQueue.main.async { result(nil) } }
+      guard let object = try? JSONSerialization.jsonObject(with: data) else {
+        return DispatchQueue.main.async { result(FlutterError(code: "INVALID_HELPER_RESPONSE", message: nil, details: nil)) }
+      }
+      DispatchQueue.main.async { result(object) }
+    }
+  }
+
+  private func ensureService(restart: Bool, result: @escaping FlutterResult) {
+    do {
+      if restart && (service.status == .enabled || service.status == .requiresApproval) {
+        try service.unregister()
+      }
+      if service.status == .notRegistered || service.status == .notFound {
+        try service.register()
+      }
+      if service.status == .requiresApproval {
+        return result(FlutterError(code: "BACKGROUND_APPROVAL_REQUIRED", message: "Allow KeyLease in Login Items", details: nil))
+      }
+      if service.status != .enabled {
+        return result(FlutterError(code: "SERVICE_NOT_FOUND", message: "The bundled KeyLease background service was not found", details: nil))
+      }
+      result(nil)
+    } catch {
+      let problem = error as NSError
+      result(FlutterError(
+        code: "SERVICE_REGISTRATION_FAILED",
+        message: "Could not enable KeyLease in the background",
+        details: ["domain": problem.domain, "code": problem.code]
+      ))
+    }
+  }
+
+  private func chooseVault(result: @escaping FlutterResult) {
+    guard let window else { return result(nil) }
+    let panel = NSOpenPanel()
+    panel.canChooseDirectories = false
+    panel.canChooseFiles = true
+    panel.allowsMultipleSelection = false
+    panel.beginSheetModal(for: window) { response in
+      result(response == .OK ? panel.url?.path : nil)
     }
   }
 }

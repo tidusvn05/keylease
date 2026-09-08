@@ -94,6 +94,40 @@ For an Intel Mac (`x86_64`) build and release-acceptance walkthrough, see
 companion `scripts/macos-x86_64-check.sh` runs the automated Rust, Flutter,
 architecture and codesign checks.
 
+For subsequent local macOS app builds, use the faster incremental build and
+installer:
+
+```sh
+./scripts/build-install-macos.sh
+```
+
+It verifies Flutter 3.47.2, builds the release app and safely replaces
+`/Applications/KeyLease.app`, then links its CLI into `~/.local/bin/keylease`.
+Pass `--full` to run the complete Rust and Flutter acceptance suite before
+installing.
+
+On first launch, the macOS app asks only whether to create a vault or use an
+existing KeyLease, KDBX, or 1PUX file. The selected source is left unchanged;
+KeyLease creates its managed vault and private runtime files under
+`~/.keylease/`. Its signed background helper is embedded in `KeyLease.app` and
+registered with macOS Login Items, so users do not configure sockets, client
+IDs, token files, or `PATH`. This desktop runtime requires macOS 13 or newer.
+
+After the desktop setup, the CLI automatically uses the managed runtime under
+`~/.keylease`:
+
+```sh
+keylease status
+keylease entries search "github"
+keylease entries get ITEM_ID
+keylease entries reveal ITEM_ID --field password
+keylease entries totp ITEM_ID
+```
+
+The vault must be unlocked in the app. Every entry has a **Prompt** button that
+copies safe, ready-to-paste instructions scoped to that exact item ID, without
+including a token or secret value.
+
 ## Local flow
 
 ```sh

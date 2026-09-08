@@ -10,9 +10,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:leasegate_approval/main.dart';
 
 void main() {
-  testWidgets('renders the locked LeaseGate control shell', (WidgetTester tester) async {
+  testWidgets('renders the locked Leasegate control shell', (WidgetTester tester) async {
     await tester.pumpWidget(const LeaseGateControlApp());
-    expect(find.text('LeaseGate Control'), findsOneWidget);
+    expect(find.text('Leasegate Control'), findsOneWidget);
     expect(find.text('Direct operator mode'), findsOneWidget);
   });
 }

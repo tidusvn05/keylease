@@ -1,7 +1,7 @@
 # Build và kiểm tra KeyLease trên macOS Intel x86_64
 
 Tài liệu này dành riêng cho Mac Intel 64-bit (`x86_64-apple-darwin`). Project
-đặt deployment target là macOS 12.0. Các bước dưới đây build cả Rust CLI/daemon
+đặt deployment target là macOS 13.0 để dùng Login Items qua `SMAppService`. Các bước dưới đây build cả Rust CLI/daemon
 và Flutter app, sau đó kiểm tra IPC, lock, clipboard, KDBX và connector flow.
 
 > Flutter đã thông báo sẽ ngừng hỗ trợ host Intel trong một bản tương lai. Để
@@ -12,7 +12,7 @@ và Flutter app, sau đó kiểm tra IPC, lock, clipboard, KDBX và connector fl
 
 Yêu cầu:
 
-- Mac Intel chạy macOS 12 trở lên; `uname -m` phải trả `x86_64`.
+- Mac Intel chạy macOS 13 trở lên; `uname -m` phải trả `x86_64`.
 - Xcode bản mới nhất mà phiên bản macOS trên máy hỗ trợ.
 - Flutter 3.47.2 stable bản Intel.
 - Rust 1.98.0; repo tự pin bằng `rust-toolchain.toml`.

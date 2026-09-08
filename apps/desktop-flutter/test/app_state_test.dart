@@ -1,26 +1,24 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:keylease_desktop/core/platform/local_runtime_adapter.dart';
 import 'package:keylease_desktop/core/rpc/keylease_rpc.dart';
 import 'package:keylease_desktop/core/state/app_phase.dart';
-import 'package:keylease_desktop/core/state/connection_settings.dart';
 import 'package:keylease_desktop/core/state/vault_controller.dart';
 
 import 'support/fakes.dart';
 
 void main() {
   group('app phase routing', () {
-    test('an incomplete client registration is setup, not locked', () async {
+    test('a missing managed vault starts onboarding, not locked', () async {
       final harness = buildController(
-        preferences: const ConnectionSettings(
-          socketPath: '/tmp/keylease-test.sock',
-          agentId: 'agent_test',
-          tokenPath: '',
-        ).toJson(),
+        runtimeInspection: const LocalRuntimeInspection(
+          state: LocalRuntimeState.needsOnboarding,
+        ),
       );
       addTearDown(harness.app.dispose);
 
       await harness.app.start();
 
-      expect(harness.app.phase, AppPhase.setupRequired);
+      expect(harness.app.phase, AppPhase.onboarding);
       expect(harness.client.calls, isEmpty);
     });
 
@@ -106,22 +104,6 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 400));
 
       expect(harness.app.vault.listState, VaultListState.searchEmpty);
-    });
-  });
-
-  group('settings', () {
-    test('applying settings clears session data and re-probes', () async {
-      final harness = buildController();
-      addTearDown(harness.app.dispose);
-      await harness.app.start();
-      expect(harness.app.vault.entries, isNotEmpty);
-
-      await harness.app.applySettings(
-        harness.app.settings.copyWith(agentId: 'agent_other'),
-      );
-
-      expect(harness.app.settings.agentId, 'agent_other');
-      expect(harness.app.phase, AppPhase.ready);
     });
   });
 }

@@ -1,9 +1,33 @@
 {
-  "name": "LeaseGate Approval",
-  "short_name": "LeaseGate",
+  "name": "Leasegate Approval",
+  "short_name": "Leasegate",
   "start_url": ".",
   "display": "standalone",
-  "background_color": "#f7faf8",
-  "theme_color": "#315c4a",
-  "description": "Remote exact-request approval and Edge health for KeyLease Cloud"
+  "background_color": "#071426",
+  "theme_color": "#071426",
+  "description": "Remote exact-request approval and Edge health for KeyLease Cloud",
+  "icons": [
+    {
+      "src": "icons/Icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/Icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/Icon-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icons/Icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
 }

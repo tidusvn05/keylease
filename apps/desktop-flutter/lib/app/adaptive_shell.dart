@@ -93,7 +93,9 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => FHeader(
-    title: Text(app.section.label),
+    title: app.section == AppSection.vault
+        ? const SizedBox.shrink()
+        : Text(app.section.label),
     suffixes: [
       if (app.section == AppSection.vault && app.isReady)
         FHeaderAction(
@@ -125,8 +127,8 @@ class _DesktopShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = KeyLeaseTokens.of(context);
-    // The sidebar spans the full window height and the toolbar sits over the
-    // content area, matching the prototype's information architecture.
+    // Vault actions live beside the content they affect, so the vault does not
+    // spend an entire row on a mostly-empty global toolbar.
     return SplitPane(
       width: app.sidebarWidth,
       minWidth: tokens.sidebarMinWidth,
@@ -136,7 +138,7 @@ class _DesktopShell extends StatelessWidget {
       leading: _Sidebar(app: app),
       trailing: FScaffold(
         childPad: false,
-        header: _Header(app: app),
+        header: app.section == AppSection.vault ? null : _Header(app: app),
         child: body,
       ),
     );
@@ -282,6 +284,12 @@ class _Sidebar extends StatelessWidget {
                   ],
                 ),
               ),
+              if (app.isReady)
+                IconAction(
+                  label: 'Lock vault',
+                  icon: FLucideIcons.lock,
+                  onPress: app.isBusy(AppController.lockKey) ? null : app.lock,
+                ),
             ],
           ),
         ),
@@ -477,7 +485,13 @@ class _ConnectionFooter extends StatelessWidget {
     final tokens = KeyLeaseTokens.of(context);
     final (label, color) = switch (app.phase) {
       AppPhase.checking => ('Checking the local service', tokens.warning),
-      AppPhase.setupRequired => ('Setup needed', tokens.warning),
+      AppPhase.onboarding => ('Setup needed', tokens.warning),
+      AppPhase.provisioning => ('Preparing vault', tokens.warning),
+      AppPhase.repairRequired => ('Repair needed', tokens.danger),
+      AppPhase.backgroundApprovalRequired => (
+        'Background access needed',
+        tokens.warning,
+      ),
       AppPhase.serviceUnavailable => ('Service unavailable', tokens.danger),
       AppPhase.locked => ('Connected · Vault locked', tokens.warning),
       AppPhase.permissionDenied => ('Connected · Not permitted', tokens.danger),

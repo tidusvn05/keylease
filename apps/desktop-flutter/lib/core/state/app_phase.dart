@@ -7,8 +7,17 @@ enum AppPhase {
   /// The first status probe has not answered yet.
   checking,
 
-  /// The app has no complete, usable client registration.
-  setupRequired,
+  /// No managed vault exists yet. The user chooses create or import.
+  onboarding,
+
+  /// Provisioning is running in the bundled helper.
+  provisioning,
+
+  /// Managed files exist but the desktop credential needs repair.
+  repairRequired,
+
+  /// macOS requires the user to enable the background item.
+  backgroundApprovalRequired,
 
   /// The local service could not be reached.
   serviceUnavailable,
