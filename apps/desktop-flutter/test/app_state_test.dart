@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:keylease_desktop/core/platform/local_runtime_adapter.dart';
 import 'package:keylease_desktop/core/rpc/keylease_rpc.dart';
 import 'package:keylease_desktop/core/state/app_phase.dart';
+import 'package:keylease_desktop/core/state/password_generator_settings.dart';
 import 'package:keylease_desktop/core/state/vault_controller.dart';
 
 import 'support/fakes.dart';
@@ -89,6 +90,32 @@ void main() {
       expect(harness.app.phase, AppPhase.ready);
       expect(harness.app.vault.listState, VaultListState.empty);
     });
+
+    test(
+      'password generator settings persist as non-secret UI preferences',
+      () async {
+        final harness = buildController();
+        addTearDown(harness.app.dispose);
+        await harness.app.start();
+
+        await harness.app.updatePasswordGeneratorSettings(
+          const PasswordGeneratorSettings(
+            pattern: PasswordPattern.pin,
+            pinLength: 10,
+          ),
+        );
+
+        final stored = await harness.app.preferences.load();
+        expect(stored['password_generator'], isA<Map>());
+        expect((stored['password_generator'] as Map)['pattern'], 'pin');
+        expect((stored['password_generator'] as Map)['pin_length'], 10);
+        expect(
+          PasswordGeneratorSettings.fromJson(stored['password_generator'])
+              .recipe,
+          {'type': 'pin', 'length': 10},
+        );
+      },
+    );
 
     test('a search with no results is distinct from an empty vault', () async {
       final harness = buildController(

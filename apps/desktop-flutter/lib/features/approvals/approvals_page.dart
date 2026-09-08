@@ -7,6 +7,7 @@ import '../../core/state/section_controllers.dart';
 import '../../ui/components/keylease_dialog.dart';
 import '../../ui/components/message_banner.dart';
 import '../../ui/components/request_summary.dart';
+import '../../ui/components/scroll_area.dart';
 import '../../ui/components/state_screen.dart';
 import '../../ui/tokens/keylease_tokens.dart';
 import '../vault/totp_dialog.dart';
@@ -42,7 +43,7 @@ class ApprovalsPage extends StatelessWidget {
                       title: 'Nothing waiting for you',
                       message: 'Requests that need your decision appear here.',
                     )
-                  : ListView.builder(
+                  : KeyLeaseScrollArea.builder(
                       padding: EdgeInsets.all(tokens.gutter),
                       itemCount: controller.items.length,
                       itemBuilder: (context, index) => _ApprovalCard(

@@ -7,6 +7,7 @@ mod domain;
 mod error;
 mod identity;
 mod policy;
+mod template;
 
 pub use action::*;
 pub use audit::*;
@@ -15,6 +16,7 @@ pub use domain::*;
 pub use error::*;
 pub use identity::*;
 pub use policy::*;
+pub use template::*;
 
 pub const CONTRACT_VERSION: u32 = 1;
 

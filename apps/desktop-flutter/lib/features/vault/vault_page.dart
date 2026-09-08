@@ -2,11 +2,13 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../app/app_scope.dart';
 import '../../core/state/app_controller.dart';
+import '../../core/state/vault_controller.dart';
 import '../../ui/components/split_pane.dart';
 import '../../ui/tokens/keylease_tokens.dart';
 import 'entry_detail.dart';
 import 'entry_editor.dart';
 import 'entry_list.dart';
+import 'password_generator.dart';
 
 /// Vault list/detail.
 ///
@@ -29,6 +31,7 @@ class VaultPage extends StatelessWidget {
           controller: vault,
           openOnSelect: !splitView,
           onCreate: () => openEntryEditor(context, app),
+          onGeneratePassword: () => openPasswordGenerator(context, app),
           onRefresh: app.refresh,
           refreshing: app.isBusy(AppController.refreshKey),
           onActivate: (id) => _openDetail(context, app),
@@ -41,7 +44,16 @@ class VaultPage extends StatelessWidget {
           semanticsLabel: 'Resize the item list',
           onWidthChanged: (value) => app.setPaneWidths(list: value),
           leading: list,
-          trailing: EntryDetail(app: app, entry: vault.selectedEntry),
+          trailing: switch (vault.workspaceMode) {
+            EntryWorkspaceMode.detail => EntryDetail(
+              app: app,
+              entry: vault.selectedEntry,
+            ),
+            EntryWorkspaceMode.passwordGenerator => PasswordGeneratorPane(
+              app: app,
+            ),
+            _ => EntryEditorPane(app: app),
+          },
         );
       },
     );

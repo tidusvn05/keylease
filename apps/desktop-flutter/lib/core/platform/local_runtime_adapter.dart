@@ -12,6 +12,7 @@ class LocalRuntimeInspection {
     this.legacyAvailable = false,
     this.legacyDatabase,
     this.serviceVersion,
+    this.tokenPath,
   });
 
   factory LocalRuntimeInspection.fromJson(Map<String, dynamic> json) {
@@ -25,6 +26,7 @@ class LocalRuntimeInspection {
       legacyAvailable: json['legacy_available'] == true,
       legacyDatabase: json['legacy_database'] as String?,
       serviceVersion: json['service_version'] as String?,
+      tokenPath: json['token_path'] as String?,
     );
   }
 
@@ -32,6 +34,28 @@ class LocalRuntimeInspection {
   final bool legacyAvailable;
   final String? legacyDatabase;
   final String? serviceVersion;
+  final String? tokenPath;
+}
+
+class LocalVaultProfile {
+  const LocalVaultProfile({
+    required this.id,
+    required this.name,
+    required this.active,
+  });
+
+  factory LocalVaultProfile.fromJson(
+    Map<String, dynamic> json,
+    String activeId,
+  ) => LocalVaultProfile(
+    id: '${json['id']}',
+    name: '${json['name']}',
+    active: '${json['id']}' == activeId,
+  );
+
+  final String id;
+  final String name;
+  final bool active;
 }
 
 abstract class LocalRuntimeAdapter {
@@ -43,6 +67,10 @@ abstract class LocalRuntimeAdapter {
   Future<void> restartService();
   Future<void> openLoginItemsSettings();
   Future<void> openDataFolder();
+  Future<List<LocalVaultProfile>> listVaults();
+  Future<void> createVault(String name, Map<String, dynamic> request);
+  Future<void> switchVault(String id);
+  Future<void> renameVault(String id, String name);
 }
 
 class MethodChannelLocalRuntimeAdapter implements LocalRuntimeAdapter {
@@ -105,4 +133,32 @@ class MethodChannelLocalRuntimeAdapter implements LocalRuntimeAdapter {
 
   @override
   Future<void> openDataFolder() => channel.invokeMethod<void>('openDataFolder');
+
+  @override
+  Future<List<LocalVaultProfile>> listVaults() async {
+    final raw = Map<String, dynamic>.from(
+      (await channel.invokeMethod<Object?>('listVaults')) as Map,
+    );
+    final active = '${raw['active_id']}';
+    return (raw['profiles'] as List? ?? const [])
+        .map(
+          (value) => LocalVaultProfile.fromJson(
+            Map<String, dynamic>.from(value as Map),
+            active,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  @override
+  Future<void> createVault(String name, Map<String, dynamic> request) => channel
+      .invokeMethod<void>('createVault', {'name': name, 'request': request});
+
+  @override
+  Future<void> switchVault(String id) =>
+      channel.invokeMethod<void>('switchVault', {'id': id});
+
+  @override
+  Future<void> renameVault(String id, String name) =>
+      channel.invokeMethod<void>('renameVault', {'id': id, 'name': name});
 }

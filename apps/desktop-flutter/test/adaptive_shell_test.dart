@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keylease_desktop/app/keylease_app.dart';
@@ -41,12 +42,77 @@ void main() {
   group('cross-platform shell', crossPlatform);
 
   group('responsive shell', () {
+    testWidgets('group drag handle reorders without covering row actions', (
+      tester,
+    ) async {
+      var groups = <Map<String, dynamic>>[
+        {
+          'id': 'group-alpha',
+          'vault_id': 'vault-1',
+          'parent_id': null,
+          'name': 'Alpha',
+          'sort_order': 0,
+          'revision': 1,
+          'created_at': '2026-09-01T10:00:00Z',
+          'updated_at': '2026-09-01T10:00:00Z',
+        },
+        {
+          'id': 'group-bravo',
+          'vault_id': 'vault-1',
+          'parent_id': null,
+          'name': 'Bravo',
+          'sort_order': 1,
+          'revision': 1,
+          'created_at': '2026-09-01T10:00:00Z',
+          'updated_at': '2026-09-01T10:00:00Z',
+        },
+      ];
+      List<dynamic>? reorderedIds;
+      final harness = buildController(
+        script: (client) => client
+          ..on('groups_list', (_) async => groups)
+          ..on('groups_reorder', (request) async {
+            reorderedIds = request['ordered_ids'] as List<dynamic>;
+            groups = [
+              for (final (index, id) in reorderedIds!.indexed)
+                {
+                  ...groups.firstWhere((group) => group['id'] == id),
+                  'sort_order': index,
+                  'revision': 2,
+                },
+            ];
+            return groups;
+          }),
+      );
+      addTearDown(harness.app.dispose);
+      await pumpApp(tester, controller: harness.app);
+
+      await tester.tap(find.byKey(const ValueKey('group-manage')));
+      await tester.pumpAndSettle();
+
+      final handle = find.byKey(const ValueKey('manage-drag-group-alpha'));
+      final delete = find.byKey(const ValueKey('action-Delete Alpha'));
+      expect(handle, findsOneWidget);
+      expect(delete, findsOneWidget);
+      expect(tester.getRect(handle).overlaps(tester.getRect(delete)), isFalse);
+
+      final gesture = await tester.startGesture(tester.getCenter(handle));
+      await tester.pump(kPressTimeout);
+      await gesture.moveBy(const Offset(0, 160));
+      await tester.pump();
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      expect(reorderedIds, ['group-bravo', 'group-alpha']);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('1280x800 shows sidebar, list and detail together', (
       tester,
     ) async {
       await pumpApp(tester);
 
-      expect(find.byKey(const ValueKey('nav-vault')), findsOneWidget);
+      expect(find.byKey(const ValueKey('group-all')), findsOneWidget);
       expect(find.byKey(const ValueKey('vault-search')), findsOneWidget);
       expect(find.byKey(const ValueKey('entry-entry-github')), findsOneWidget);
       // The detail pane is present without opening a dialog.
@@ -213,9 +279,9 @@ void main() {
     ) async {
       final app = await pumpApp(tester);
       // Move focus into the shell, then leave the vault section.
-      await tester.tap(find.byKey(const ValueKey('nav-activity')));
+      await tester.tap(find.byKey(const ValueKey('nav-approvals')));
       await tester.pumpAndSettle();
-      expect(app.section, AppSection.activity);
+      expect(app.section, AppSection.approvals);
 
       await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
       await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
@@ -230,7 +296,7 @@ void main() {
       final harness = buildController();
       addTearDown(harness.app.dispose);
       final app = await pumpApp(tester, controller: harness.app);
-      app.selectSection(AppSection.activity);
+      app.selectSection(AppSection.approvals);
       await tester.pumpAndSettle();
 
       harness.adapter.selectMenu(MenuAction.search);

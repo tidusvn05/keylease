@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 import '../../app/app_scope.dart';
 import '../../core/models/models.dart';
 import '../../ui/components/message_banner.dart';
+import '../../ui/components/scroll_area.dart';
 import '../../ui/components/state_screen.dart';
 import '../../ui/tokens/keylease_tokens.dart';
 
@@ -76,7 +77,7 @@ class ActivityPage extends StatelessWidget {
                           ? 'No request was denied or failed in this window.'
                           : 'Actions taken through KeyLease show up here.',
                     )
-                  : ListView.builder(
+                  : KeyLeaseScrollArea.builder(
                       padding: EdgeInsets.fromLTRB(
                         tokens.gutter,
                         0,

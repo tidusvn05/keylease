@@ -71,6 +71,35 @@ void main() {
     expect(vault.selectedEntry?.id, 'a');
   });
 
+  test('favorites and parent groups filter from contract data', () async {
+    final harness = buildController(
+      script: (client) {
+        client.value('groups_list', [
+          {...Fixtures.groups.first, 'sort_order': 1},
+          {
+            ...Fixtures.groups.first,
+            'id': 'group-child',
+            'name': 'Child',
+            'parent_id': 'group-work',
+            'sort_order': 0,
+          },
+        ]);
+        client.value('entries_search', [
+          Fixtures.entry(id: 'root'),
+          Fixtures.entry(id: 'favorite', favorite: true),
+          {...Fixtures.entry(id: 'child'), 'group_id': 'group-child'},
+        ]);
+      },
+    );
+    addTearDown(harness.app.dispose);
+    await harness.app.start();
+
+    harness.app.vault.selectGroup('group-work');
+    expect(harness.app.vault.visibleEntries, hasLength(3));
+    harness.app.vault.selectFavorites();
+    expect(harness.app.vault.visibleEntries.single.id, 'favorite');
+  });
+
   test(
     'a failed search reports itself and keeps the previous results',
     () async {

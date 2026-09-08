@@ -6,8 +6,9 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use chrono::{DateTime, Utc};
 use keylease_core::{
-    FieldId, FieldValue, GroupId, ItemField, ItemStatus, ItemUrl, KeyLeaseError, Result,
-    Sensitivity, TotpAlgorithm, TotpConfig, VaultGroup, VaultId, VaultItem,
+    AddressValue, AgentAccess, FieldId, FieldValue, GroupId, GroupPurpose, ItemField, ItemStatus,
+    ItemUrl, KeyLeaseError, Result, Sensitivity, TotpAlgorithm, TotpConfig, VaultGroup, VaultId,
+    VaultItem, semantic_role_for,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -221,6 +222,8 @@ fn convert_export(
             name: text_at(attrs, "accountName")
                 .or_else(|| text_at(attrs, "name"))
                 .unwrap_or_else(|| "1Password Account".into()),
+            purpose: GroupPurpose::User,
+            sort_order: Some(account_index as u32),
             revision: 1,
             created_at: now,
             updated_at: now,
@@ -239,6 +242,8 @@ fn convert_export(
                 vault_id: vault_id.clone(),
                 parent_id: Some(account_group_id.clone()),
                 name: text_at(vault_attrs, "name").unwrap_or_else(|| "1Password Vault".into()),
+                purpose: GroupPurpose::User,
+                sort_order: Some(vault_index as u32),
                 revision: 1,
                 created_at: now,
                 updated_at: now,
@@ -315,6 +320,7 @@ fn convert_item(
                 value,
                 sensitivity,
                 protected,
+                semantic_role: None,
             });
         }
         if !field_ids.is_empty() {
@@ -350,6 +356,7 @@ fn convert_item(
                         value,
                         sensitivity,
                         protected,
+                        semantic_role: None,
                     });
                     if source_type == "unsupported" {
                         report.unsupported_fields.push(context);
@@ -391,15 +398,17 @@ fn convert_item(
         );
     }
 
+    let kind = onepux_kind(&category);
+    for field in &mut fields {
+        field.semantic_role = semantic_role_for(&kind, &field.key, &field.label);
+        harden_semantic_field(field);
+    }
+
     Ok(VaultItem {
         id: item_id,
         vault_id: vault_id.clone(),
         group_id: group_id.clone(),
-        kind: if category == "001" {
-            "core.login".into()
-        } else {
-            format!("onepassword.category_{category}")
-        },
+        kind,
         title: text_at(overview, "title").unwrap_or_else(|| "Untitled".into()),
         sections,
         fields,
@@ -414,8 +423,16 @@ fn convert_item(
                     .collect()
             })
             .unwrap_or_default(),
+        favorite: source
+            .get("favIndex")
+            .and_then(Value::as_i64)
+            .is_some_and(|index| index > 0),
         attachments: attachment_names,
         notes: text_at(details, "notesPlain"),
+        template_version: 1,
+        project_id: None,
+        agent_access: AgentAccess::None,
+        content_metadata: None,
         schema_version: 1,
         revision: 1,
         created_at,
@@ -433,6 +450,65 @@ fn convert_item(
         },
         extensions,
     })
+}
+
+fn onepux_kind(category: &str) -> String {
+    match category {
+        "001" => "core.login",
+        "002" => "core.credit_card",
+        "003" => "core.secure_note",
+        "004" => "core.identity",
+        "005" => "core.password",
+        "006" => "core.document",
+        "100" => "core.software_license",
+        "101" => "core.bank_account",
+        "102" => "core.database",
+        "103" => "core.driver_license",
+        "104" => "core.outdoor_license",
+        "105" => "core.membership",
+        "106" => "core.passport",
+        "107" => "core.reward_program",
+        "108" => "core.social_security_number",
+        "109" => "core.wireless_router",
+        "110" => "core.server",
+        "111" => "core.email_account",
+        "112" => "core.api_credential",
+        "113" => "core.medical_record",
+        "114" => "core.ssh_key",
+        other => return format!("onepassword.category_{other}"),
+    }
+    .into()
+}
+
+fn harden_semantic_field(field: &mut ItemField) {
+    if matches!(
+        field.semantic_role.as_deref(),
+        Some(
+            "password"
+                | "credential"
+                | "client_secret"
+                | "card_number"
+                | "card_verification"
+                | "pin"
+                | "account_number"
+                | "routing_number"
+                | "iban"
+                | "swift"
+                | "identity_number"
+                | "private_key"
+                | "passphrase"
+                | "recovery_phrase"
+                | "license_key"
+                | "connection_string"
+                | "wifi_password"
+        )
+    ) {
+        field.sensitivity = Sensitivity::HighlySensitive;
+        field.protected = true;
+        if let FieldValue::Text(value) = &field.value {
+            field.value = FieldValue::Concealed(value.clone());
+        }
+    }
 }
 
 fn login_value(
@@ -548,11 +624,33 @@ fn typed_value(
             false,
             "phone",
         ),
-        "date" | "monthyear" => (
+        "date" => (
             FieldValue::Date(text),
             Sensitivity::PrivateMetadata,
             false,
             "date",
+        ),
+        "monthyear" => parse_month_year(value).map_or_else(
+            || unsupported_value(raw, context, report),
+            |(month, year)| {
+                (
+                    FieldValue::MonthYear { month, year },
+                    Sensitivity::PrivateMetadata,
+                    false,
+                    "month_year",
+                )
+            },
+        ),
+        "address" => parse_address(value).map_or_else(
+            || unsupported_value(raw, context, report),
+            |address| {
+                (
+                    FieldValue::Address(address),
+                    Sensitivity::PrivateMetadata,
+                    false,
+                    "address",
+                )
+            },
         ),
         "reference" => (
             FieldValue::Reference(text),
@@ -561,7 +659,7 @@ fn typed_value(
             "reference",
         ),
         "onetimepassword" | "totp" => (parse_totp(&text), Sensitivity::Secret, true, "totp"),
-        "string" | "address" | "creditcardtype" | "gender" | "menu" => (
+        "string" | "creditcardtype" | "gender" | "menu" => (
             FieldValue::Text(text),
             Sensitivity::PrivateMetadata,
             false,
@@ -577,14 +675,76 @@ fn unsupported_value(
     report: &mut MigrationReport,
 ) -> (FieldValue, Sensitivity, bool, &'static str) {
     report.warnings.push(format!(
-        "{context}: unsupported typed value retained as JSON text"
+        "{context}: unsupported typed value retained as protected JSON"
     ));
     (
-        FieldValue::Text(raw.to_string()),
-        Sensitivity::PrivateMetadata,
-        false,
+        FieldValue::OpaqueJson(raw.clone()),
+        Sensitivity::Secret,
+        true,
         "unsupported",
     )
+}
+
+fn parse_month_year(value: &Value) -> Option<(u8, u16)> {
+    if let Some(object) = value.as_object() {
+        let month = object.get("month")?.as_u64()? as u8;
+        let year = object.get("year")?.as_u64()? as u16;
+        return (month > 0 && month <= 12).then_some((month, year));
+    }
+    if let Some(packed) = value.as_u64() {
+        let month = (packed % 100) as u8;
+        let year = (packed / 100) as u16;
+        return (month > 0 && month <= 12 && year >= 1900).then_some((month, year));
+    }
+    let raw = value.as_str()?.trim();
+    if raw.len() == 6 && raw.chars().all(|character| character.is_ascii_digit()) {
+        let packed = raw.parse::<u64>().ok()?;
+        let month = (packed % 100) as u8;
+        let year = (packed / 100) as u16;
+        return (month > 0 && month <= 12 && year >= 1900).then_some((month, year));
+    }
+    let (left, right) = raw.split_once(['/', '-'])?;
+    let (month, mut year) = if left.len() == 4 {
+        (right.parse::<u8>().ok()?, left.parse::<u16>().ok()?)
+    } else {
+        (left.parse::<u8>().ok()?, right.parse::<u16>().ok()?)
+    };
+    if year < 100 {
+        year += 2000;
+    }
+    (month > 0 && month <= 12).then_some((month, year))
+}
+
+fn parse_address(value: &Value) -> Option<AddressValue> {
+    let object = value.as_object()?;
+    Some(AddressValue {
+        street: object
+            .get("street")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .into(),
+        city: object
+            .get("city")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .into(),
+        state: object
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .into(),
+        postal_code: object
+            .get("zip")
+            .or_else(|| object.get("postalCode"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .into(),
+        country: object
+            .get("country")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .into(),
+    })
 }
 
 fn parse_totp(raw: &str) -> FieldValue {
@@ -837,5 +997,13 @@ mod tests {
             .preview_import(&mut output.into_inner().as_slice(), &VaultId::new())
             .unwrap_err();
         assert_eq!(error, KeyLeaseError::UnsupportedVersion { version: 99 });
+    }
+
+    #[test]
+    fn month_year_accepts_onepassword_packed_and_display_forms() {
+        assert_eq!(parse_month_year(&json!(202709)), Some((9, 2027)));
+        assert_eq!(parse_month_year(&json!("2027-09")), Some((9, 2027)));
+        assert_eq!(parse_month_year(&json!("09/27")), Some((9, 2027)));
+        assert_eq!(parse_month_year(&json!(202713)), None);
     }
 }

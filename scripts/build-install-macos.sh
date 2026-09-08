@@ -67,7 +67,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
-for command in cargo rustup lipo codesign plutil ditto osascript pgrep pkill; do
+for command in cargo rustup lipo codesign plutil ditto osascript pgrep pkill launchctl; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "error: missing required command: $command" >&2
     exit 1
@@ -158,6 +158,26 @@ fi
 
 ditto "$APP_PATH" "$INSTALLED_APP"
 codesign --verify --deep --strict --verbose=2 "$INSTALLED_APP"
+
+# SMAppService keeps the already-running executable mapped after its containing
+# app bundle is replaced. Restart the registered job so an updated UI never
+# talks to an older IPC contract. A vault restart is intentionally locked.
+SERVICE_LABEL="gui/$(id -u)/app.keylease.service"
+if launchctl print "$SERVICE_LABEL" >/dev/null 2>&1; then
+  OLD_SERVICE_PID="$(launchctl print "$SERVICE_LABEL" | sed -n 's/^[[:space:]]*pid = \([0-9][0-9]*\)$/\1/p' | head -n 1)"
+  launchctl kill SIGTERM "$SERVICE_LABEL"
+  for _ in {1..20}; do
+    NEW_SERVICE_PID="$(launchctl print "$SERVICE_LABEL" 2>/dev/null | sed -n 's/^[[:space:]]*pid = \([0-9][0-9]*\)$/\1/p' | head -n 1)"
+    if [[ -n "$NEW_SERVICE_PID" && "$NEW_SERVICE_PID" != "$OLD_SERVICE_PID" ]]; then
+      break
+    fi
+    sleep 0.25
+  done
+  if [[ -z "${NEW_SERVICE_PID:-}" || "$NEW_SERVICE_PID" == "$OLD_SERVICE_PID" ]]; then
+    echo "error: installed background service did not restart" >&2
+    exit 1
+  fi
+fi
 
 mkdir -p "$CLI_INSTALL_DIR"
 ln -sfn "$CLI_TARGET" "$CLI_LINK"

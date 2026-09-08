@@ -11,6 +11,8 @@ import 'user_message.dart';
 /// What the entry list is showing right now.
 enum VaultListState { loading, content, empty, searchEmpty }
 
+enum EntryWorkspaceMode { detail, create, edit, passwordGenerator }
+
 /// Vault list/detail state: groups, the debounced search, the selection and
 /// the on-demand secret reveals.
 class VaultController extends ChangeNotifier with BusyRegistry {
@@ -31,9 +33,15 @@ class VaultController extends ChangeNotifier with BusyRegistry {
 
   List<VaultGroup> groups = const [];
   List<EntrySummary> entries = const [];
+  List<TemplateDefinition> templates = const [];
+  List<VaultProjectModel> projects = const [];
+  MigrationStatusModel? migrationStatus;
   String query = '';
   String? selectedGroupId;
+  bool favoritesOnly = false;
   String? selectedEntryId;
+  EntryWorkspaceMode workspaceMode = EntryWorkspaceMode.detail;
+  EntryDraft? activeDraft;
   UserMessage? error;
   Object? lastFailure;
   bool _loaded = false;
@@ -45,20 +53,48 @@ class VaultController extends ChangeNotifier with BusyRegistry {
   int _applied = 0;
 
   final Map<String, String> _revealed = <String, String>{};
+  final Map<String, EntryDetailView> _entryViews = <String, EntryDetailView>{};
 
   /// Owned here so the query and the caret survive a list -> detail route on
   /// narrow windows and a desktop/touch shell swap on resize.
   final TextEditingController searchController = TextEditingController();
   final FocusNode searchFocus = FocusNode(debugLabel: 'vault.search');
 
-  /// Entries filtered by the selected group. Ordering is whatever the daemon
-  /// returned; `ItemMetadata` carries no "recently used" or favourite signal,
-  /// so the UI does not invent one.
-  List<EntrySummary> get visibleEntries => selectedGroupId == null
-      ? entries
-      : entries
-            .where((entry) => entry.groupId == selectedGroupId)
-            .toList(growable: false);
+  List<VaultGroup> get orderedGroups {
+    final result = [...groups];
+    result.sort((a, b) {
+      final order = (a.sortOrder ?? 0x7fffffff).compareTo(
+        b.sortOrder ?? 0x7fffffff,
+      );
+      if (order != 0) return order;
+      final name = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      return name != 0 ? name : a.id.compareTo(b.id);
+    });
+    return result;
+  }
+
+  List<EntrySummary> get visibleEntries {
+    if (favoritesOnly) {
+      return entries.where((entry) => entry.favorite).toList(growable: false);
+    }
+    final root = selectedGroupId;
+    if (root == null) return entries;
+    final ids = <String>{root};
+    var changed = true;
+    while (changed) {
+      changed = false;
+      for (final group in groups) {
+        if (group.parentId != null &&
+            ids.contains(group.parentId) &&
+            ids.add(group.id)) {
+          changed = true;
+        }
+      }
+    }
+    return entries
+        .where((entry) => ids.contains(entry.groupId))
+        .toList(growable: false);
+  }
 
   VaultListState get listState {
     if (!_loaded || _searching) return VaultListState.loading;
@@ -80,12 +116,64 @@ class VaultController extends ChangeNotifier with BusyRegistry {
   String? revealedValue(String entryId, String field) =>
       _revealed['$entryId/$field'];
 
+  EntryDetailView? entryView(String entryId) => _entryViews[entryId];
+
+  String kindLabel(String kind) {
+    for (final template in templates) {
+      if (template.kind == kind) return template.label;
+    }
+    return kind;
+  }
+
+  String? projectName(String? id) {
+    if (id == null) return null;
+    for (final project in projects) {
+      if (project.id == id) return project.name;
+    }
+    return id;
+  }
+
   bool get hasRevealedSecrets => _revealed.isNotEmpty;
 
   void select(String entryId) {
     if (selectedEntryId == entryId) return;
     selectedEntryId = entryId;
     hideSecrets();
+    notifyListeners();
+    unawaited(loadEntryView(entryId));
+  }
+
+  void beginCreate({String initialPassword = ''}) {
+    activeDraft = EntryDraft.create(
+      groupId:
+          selectedGroupId ??
+          (orderedGroups.isEmpty ? null : orderedGroups.first.id),
+      initialPassword: initialPassword,
+    );
+    workspaceMode = EntryWorkspaceMode.create;
+    hideSecrets();
+    notifyListeners();
+  }
+
+  void openPasswordGenerator() {
+    activeDraft?.wipeSecrets();
+    activeDraft = null;
+    workspaceMode = EntryWorkspaceMode.passwordGenerator;
+    hideSecrets();
+    notifyListeners();
+  }
+
+  void beginEdit(EntrySummary entry) {
+    activeDraft = EntryDraft.edit(entry);
+    workspaceMode = EntryWorkspaceMode.edit;
+    hideSecrets();
+    notifyListeners();
+  }
+
+  void closeEditor() {
+    activeDraft?.wipeSecrets();
+    activeDraft = null;
+    workspaceMode = EntryWorkspaceMode.detail;
     notifyListeners();
   }
 
@@ -103,7 +191,19 @@ class VaultController extends ChangeNotifier with BusyRegistry {
 
   void selectGroup(String? groupId) {
     selectedGroupId = groupId;
+    favoritesOnly = false;
+    workspaceMode = EntryWorkspaceMode.detail;
     hideSecrets();
+    _normalizeSelection();
+    notifyListeners();
+  }
+
+  void selectFavorites() {
+    selectedGroupId = null;
+    favoritesOnly = true;
+    workspaceMode = EntryWorkspaceMode.detail;
+    hideSecrets();
+    _normalizeSelection();
     notifyListeners();
   }
 
@@ -123,6 +223,45 @@ class VaultController extends ChangeNotifier with BusyRegistry {
     await _search(withGroups: true);
   }
 
+  Future<void> loadMigrations() async {
+    try {
+      final result = await clientOf().authorized({
+        'command': 'migrations_status',
+      });
+      if (result is Map) {
+        migrationStatus = MigrationStatusModel.fromJson(
+          Map<String, dynamic>.from(result),
+        );
+        notifyListeners();
+      }
+    } catch (_) {
+      // Migration discovery must not make an otherwise readable vault
+      // unavailable. The normal error surface remains reserved for its
+      // explicit preview/apply operations.
+    }
+  }
+
+  Future<void> applyMigration(MigrationPreviewModel preview) async {
+    await clientOf().authorized({
+      'command': 'migrations_apply',
+      'migration_id': preview.id,
+      'preview_digest': preview.digest,
+    });
+    _entryViews.clear();
+    await _search();
+    await loadMigrations();
+  }
+
+  Future<void> rollbackMigration(String migrationId) async {
+    await clientOf().authorized({
+      'command': 'migrations_rollback',
+      'migration_id': migrationId,
+    });
+    _entryViews.clear();
+    await _search();
+    await loadMigrations();
+  }
+
   Future<void> _search({bool withGroups = false}) async {
     final sequence = ++_issued;
     _searching = true;
@@ -135,6 +274,26 @@ class VaultController extends ChangeNotifier with BusyRegistry {
               VaultGroup.fromJson,
             )
           : null;
+      List<TemplateDefinition>? nextTemplates;
+      List<VaultProjectModel>? nextProjects;
+      if (withGroups) {
+        // Template/project discovery was added after the first desktop
+        // contract. Keep startup compatible with an older daemon while the
+        // normal entry list remains available.
+        try {
+          nextTemplates = parseList(
+            await client.authorized({'command': 'templates_list'}),
+            TemplateDefinition.fromJson,
+          );
+          nextProjects = parseList(
+            await client.authorized({'command': 'projects_list'}),
+            VaultProjectModel.fromJson,
+          );
+        } catch (_) {
+          nextTemplates = null;
+          nextProjects = null;
+        }
+      }
       final result = await client.authorized({
         'command': 'entries_search',
         'query': query,
@@ -143,11 +302,15 @@ class VaultController extends ChangeNotifier with BusyRegistry {
       if (sequence <= _applied) return;
       _applied = sequence;
       if (nextGroups != null) groups = nextGroups;
+      if (nextTemplates != null) templates = nextTemplates;
+      if (nextProjects != null) projects = nextProjects;
       entries = parseList(result, EntrySummary.fromJson);
       error = null;
       lastFailure = null;
       _loaded = true;
       _normalizeSelection();
+      final selected = selectedEntryId;
+      if (selected != null) unawaited(loadEntryView(selected));
     } catch (caught) {
       if (sequence <= _applied) return;
       _applied = sequence;
@@ -156,6 +319,26 @@ class VaultController extends ChangeNotifier with BusyRegistry {
     } finally {
       if (sequence >= _issued) _searching = false;
       notifyListeners();
+    }
+  }
+
+  Future<void> loadEntryView(String entryId) async {
+    try {
+      final result = await clientOf().authorized({
+        'command': 'entries_view',
+        'id': entryId,
+      });
+      if (result is Map) {
+        _entryViews[entryId] = EntryDetailView.fromJson(
+          Map<String, dynamic>.from(result),
+        );
+        error = null;
+        notifyListeners();
+      }
+    } catch (caught) {
+      // An older daemon has no field-oriented view. The legacy login detail
+      // remains usable; surface other failures without clearing list data.
+      lastFailure = caught;
     }
   }
 
@@ -196,6 +379,27 @@ class VaultController extends ChangeNotifier with BusyRegistry {
     return value;
   }
 
+  Future<String?> fetchField(EntrySummary entry, EntryFieldView field) =>
+      track<String?>('reveal.${entry.id}/${field.id}', () async {
+        final response = await clientOf().authorized({
+          'command': 'entries_reveal_by_id',
+          'id': entry.id,
+          'field_id': field.id,
+        });
+        final raw = response is Map ? response['value'] : null;
+        return field.withValue(raw).displayValue;
+      }, onError: (caught) => error = UserMessage.from(caught));
+
+  Future<String?> revealField(EntrySummary entry, EntryFieldView field) async {
+    final value = await fetchField(entry, field);
+    if (value != null) {
+      _revealed['${entry.id}/${field.id}'] = value;
+      _restartRevealTimer();
+      notifyListeners();
+    }
+    return value;
+  }
+
   void hideSecret(String entryId, String field) {
     _revealed.remove('$entryId/$field');
     if (_revealed.isEmpty) {
@@ -225,10 +429,18 @@ class VaultController extends ChangeNotifier with BusyRegistry {
     hideSecrets();
     groups = const [];
     entries = const [];
+    templates = const [];
+    projects = const [];
+    migrationStatus = null;
+    _entryViews.clear();
     query = '';
     searchController.clear();
     selectedEntryId = null;
     selectedGroupId = null;
+    favoritesOnly = false;
+    activeDraft?.wipeSecrets();
+    activeDraft = null;
+    workspaceMode = EntryWorkspaceMode.detail;
     error = null;
     lastFailure = null;
     _loaded = false;
@@ -252,10 +464,22 @@ class VaultController extends ChangeNotifier with BusyRegistry {
     return Map<String, dynamic>.from(result as Map);
   }
 
-  Future<String?> generatePassword({int length = 32}) async {
+  Future<String?> fetchContentBody(EntrySummary entry) async {
+    final result = await clientOf().authorized({
+      'command': 'content_get',
+      'id': entry.id,
+    });
+    return result is Map ? result['body']?.toString() : null;
+  }
+
+  Future<String?> generatePassword({
+    int length = 32,
+    Map<String, dynamic>? recipe,
+  }) async {
     final result = await clientOf().authorized({
       'command': 'generate_password',
       'length': length,
+      if (recipe != null) 'recipe': recipe,
     });
     return result is Map ? result['password']?.toString() : null;
   }
@@ -267,11 +491,39 @@ class VaultController extends ChangeNotifier with BusyRegistry {
   Future<void> save(EntryDraft draft) async {
     final client = clientOf();
     if (draft.isNew) {
+      if (draft.isAgentContent) {
+        final created = await client.authorized({
+          'command': 'content_create',
+          'input': draft.toContentCreateInput(),
+          'idempotency_key': _idempotencyKey(),
+        });
+        if (draft.agentAccess != 'none' && created is Map) {
+          final summary = created['summary'];
+          if (summary is Map) {
+            await client.authorized({
+              'command': 'content_set_access',
+              'id': summary['id'],
+              'access': draft.agentAccess,
+              'if_revision': summary['revision'],
+              'idempotency_key': _idempotencyKey(),
+            });
+          }
+        }
+      } else {
+        await client.authorized({
+          'command': 'entries_create',
+          'input': draft.toCreateInput(),
+          'idempotency_key': _idempotencyKey(),
+          'dry_run': false,
+        });
+      }
+    } else if (draft.isAgentContent) {
       await client.authorized({
-        'command': 'entries_create',
-        'input': draft.toCreateInput(),
+        'command': 'content_update',
+        'id': draft.entryId,
+        'patch': draft.toContentPatch(),
+        'if_revision': draft.revision,
         'idempotency_key': _idempotencyKey(),
-        'dry_run': false,
       });
     } else {
       await client.authorized({
@@ -284,6 +536,53 @@ class VaultController extends ChangeNotifier with BusyRegistry {
       });
     }
     await _search();
+  }
+
+  Future<void> toggleFavorite(EntrySummary entry) async {
+    final favorite = !entry.favorite;
+    if (const {
+      'core.prompt',
+      'core.runbook',
+      'core.note',
+    }.contains(entry.kind)) {
+      await clientOf().authorized({
+        'command': 'content_update',
+        'id': entry.id,
+        'patch': {
+          'favorite': favorite,
+          'add_tags': <String>[],
+          'remove_tags': <String>[],
+          'clear_project': false,
+        },
+        'if_revision': entry.revision,
+        'idempotency_key': _idempotencyKey(),
+      });
+    } else {
+      await clientOf().authorized({
+        'command': 'entries_update',
+        'id': entry.id,
+        'patch': {'favorite': favorite},
+        'if_revision': entry.revision,
+        'idempotency_key': _idempotencyKey(),
+        'dry_run': false,
+      });
+    }
+    selectedEntryId = entry.id;
+    await _search();
+  }
+
+  Future<void> reorderGroups(String? parentId, List<VaultGroup> ordered) async {
+    await clientOf().authorized({
+      'command': 'groups_reorder',
+      'parent_id': parentId,
+      'ordered_ids': ordered.map((group) => group.id).toList(growable: false),
+      'expected_revisions': {
+        for (final group in ordered) group.id: group.revision,
+      },
+      'idempotency_key': _idempotencyKey(),
+      'dry_run': false,
+    });
+    await load();
   }
 
   Future<void> deleteEntry(EntrySummary entry) async {

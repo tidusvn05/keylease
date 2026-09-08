@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::{FieldId, GroupId, ItemId, VaultId};
+use crate::{AgentId, FieldId, GroupId, ItemId, ProjectId, VaultId};
 
 #[derive(Clone, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]
@@ -35,12 +35,15 @@ pub enum FieldValue {
     Phone(String),
     Number(f64),
     Date(String),
+    MonthYear { month: u8, year: u16 },
+    Address(AddressValue),
     Boolean(bool),
     Totp(TotpConfig),
     KeyPair { public: String, private: String },
     Certificate(String),
     AttachmentRef(String),
     Reference(String),
+    OpaqueJson(serde_json::Value),
 }
 
 impl std::fmt::Debug for FieldValue {
@@ -53,15 +56,28 @@ impl std::fmt::Debug for FieldValue {
             Self::Phone(_) => "Phone",
             Self::Number(_) => "Number",
             Self::Date(_) => "Date",
+            Self::MonthYear { .. } => "MonthYear",
+            Self::Address(_) => "Address",
             Self::Boolean(_) => "Boolean",
             Self::Totp(_) => "Totp",
             Self::KeyPair { .. } => "KeyPair",
             Self::Certificate(_) => "Certificate",
             Self::AttachmentRef(_) => "AttachmentRef",
             Self::Reference(_) => "Reference",
+            Self::OpaqueJson(_) => "OpaqueJson",
         };
         write!(formatter, "{kind}([REDACTED])")
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct AddressValue {
+    pub street: String,
+    pub city: String,
+    pub state: String,
+    pub postal_code: String,
+    pub country: String,
 }
 
 #[derive(Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -110,6 +126,8 @@ pub struct ItemField {
     pub value: FieldValue,
     pub sensitivity: Sensitivity,
     pub protected: bool,
+    #[serde(default)]
+    pub semantic_role: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -139,8 +157,18 @@ pub struct VaultItem {
     pub fields: Vec<ItemField>,
     pub urls: Vec<ItemUrl>,
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub favorite: bool,
     pub attachments: Vec<String>,
     pub notes: Option<String>,
+    #[serde(default = "default_template_version")]
+    pub template_version: u32,
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
+    #[serde(default)]
+    pub agent_access: AgentAccess,
+    #[serde(default)]
+    pub content_metadata: Option<ContentMetadata>,
     pub schema_version: u32,
     pub revision: u64,
     pub created_at: DateTime<Utc>,
@@ -154,6 +182,36 @@ pub struct VaultItem {
     pub status: ItemStatus,
     #[serde(default)]
     pub extensions: BTreeMap<String, serde_json::Value>,
+}
+
+const fn default_template_version() -> u32 {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentAccess {
+    #[default]
+    None,
+    Read,
+    ReadWrite,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentReviewState {
+    Unreviewed,
+    HumanReviewed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ContentMetadata {
+    pub created_by: AgentId,
+    pub last_modified_by: AgentId,
+    pub review_state: ContentReviewState,
+    pub reviewed_by: Option<String>,
+    pub reviewed_at: Option<DateTime<Utc>>,
 }
 
 impl std::fmt::Debug for VaultItem {
@@ -186,9 +244,38 @@ pub struct VaultGroup {
     pub vault_id: VaultId,
     pub parent_id: Option<GroupId>,
     pub name: String,
+    #[serde(default)]
+    pub purpose: GroupPurpose,
+    /// User-defined order among groups with the same parent. Older vaults do
+    /// not have an explicit order and are sorted deterministically by clients.
+    #[serde(default)]
+    pub sort_order: Option<u32>,
     pub revision: u64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupPurpose {
+    #[default]
+    User,
+    Knowledge,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct VaultProject {
+    pub id: ProjectId,
+    pub vault_id: VaultId,
+    pub slug: String,
+    pub name: String,
+    pub revision: u64,
+    pub created_by: AgentId,
+    pub updated_by: AgentId,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub archived_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -209,12 +296,19 @@ pub struct ItemMetadata {
     /// Whether the item contains a valid typed TOTP configuration. The secret
     /// and current code remain excluded from metadata.
     pub has_totp: bool,
+    pub favorite: bool,
     pub revision: u64,
     pub updated_at: DateTime<Utc>,
 }
 
 impl VaultItem {
     pub fn metadata(&self) -> ItemMetadata {
+        let favorite = self.favorite
+            || self
+                .extensions
+                .get("onepux.favorite_index")
+                .and_then(serde_json::Value::as_i64)
+                .is_some_and(|index| index > 0);
         let username = self
             .fields
             .iter()
@@ -248,6 +342,7 @@ impl VaultItem {
             has_password,
             has_notes,
             has_totp,
+            favorite,
             revision: self.revision,
             updated_at: self.updated_at,
         }

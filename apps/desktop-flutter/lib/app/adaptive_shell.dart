@@ -4,18 +4,21 @@ import 'package:material_ui/material_ui.dart';
 import '../core/models/models.dart';
 import '../core/state/app_controller.dart';
 import '../core/state/app_phase.dart';
-import '../features/activity/activity_page.dart';
+import '../core/state/user_message.dart';
+import '../core/state/vault_controller.dart';
 import '../features/approvals/approvals_page.dart';
-import '../features/connections/connections_page.dart';
+import '../features/migrations/migration_center.dart';
 import '../features/onboarding/phase_screens.dart';
 import '../features/settings/settings_page.dart';
 import '../features/vault/entry_editor.dart';
+import '../features/vault/password_generator.dart';
 import '../features/vault/totp_dialog.dart';
 import '../features/vault/vault_page.dart';
 import '../ui/components/keylease_dialog.dart';
 import '../ui/components/keylease_mark.dart';
 import '../ui/components/message_banner.dart';
 import '../ui/components/secret_field.dart';
+import '../ui/components/scroll_area.dart';
 import '../ui/components/split_pane.dart';
 import '../ui/tokens/keylease_tokens.dart';
 import 'app_scope.dart';
@@ -64,6 +67,17 @@ class _ShellBody extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (app.isReady &&
+            (app.vault.migrationStatus?.pending.isNotEmpty ?? false))
+          MessageBanner(
+            message: UserMessage(
+              title: 'Vault migration available',
+              detail:
+                  '${app.vault.migrationStatus!.pending.first.proposals.length} legacy items can be safely reclassified.',
+              actionLabel: 'Review migration',
+            ),
+            onAction: () => openMigrationCenter(context, app),
+          ),
         if (app.banner != null)
           MessageBanner(
             message: app.banner!,
@@ -75,9 +89,7 @@ class _ShellBody extends StatelessWidget {
               ? PhaseScreen(phase: app.phase)
               : switch (section) {
                   AppSection.vault => VaultPage(splitView: splitView),
-                  AppSection.connections => const ConnectionsPage(),
                   AppSection.approvals => const ApprovalsPage(),
-                  AppSection.activity => const ActivityPage(),
                   AppSection.settings => const SettingsPage(),
                 },
         ),
@@ -97,6 +109,12 @@ class _Header extends StatelessWidget {
         ? const SizedBox.shrink()
         : Text(app.section.label),
     suffixes: [
+      if (app.section == AppSection.vault && app.isReady)
+        FHeaderAction(
+          semanticsLabel: 'Password generator',
+          icon: const Icon(FLucideIcons.sparkles),
+          onPress: () => openPasswordGenerator(context, app),
+        ),
       if (app.section == AppSection.vault && app.isReady)
         FHeaderAction(
           semanticsLabel: 'New item',
@@ -187,16 +205,8 @@ class _CompactShell extends StatelessWidget {
           label: Text('Vault'),
         ),
         FBottomNavigationBarItem(
-          icon: Icon(FLucideIcons.link),
-          label: Text('Links'),
-        ),
-        FBottomNavigationBarItem(
           icon: Icon(FLucideIcons.shieldCheck),
           label: Text('Approvals'),
-        ),
-        FBottomNavigationBarItem(
-          icon: Icon(FLucideIcons.clock),
-          label: Text('Activity'),
         ),
         FBottomNavigationBarItem(
           icon: Icon(FLucideIcons.settings),
@@ -215,9 +225,7 @@ class _Rail extends StatelessWidget {
 
   static const _icons = {
     AppSection.vault: FLucideIcons.keyRound,
-    AppSection.connections: FLucideIcons.link,
     AppSection.approvals: FLucideIcons.shieldCheck,
-    AppSection.activity: FLucideIcons.clock,
     AppSection.settings: FLucideIcons.settings,
   };
 
@@ -256,7 +264,10 @@ class _Sidebar extends StatelessWidget {
     final theme = context.theme;
     return Observe(
       listenable: app.vault,
-      builder: (context, vault) => FSidebar(
+      builder: (context, vault) => FSidebar.raw(
+        style: const FSidebarStyleDelta.delta(
+          contentPadding: EdgeInsetsGeometryDelta.value(EdgeInsets.zero),
+        ),
         header: Padding(
           padding: const EdgeInsets.fromLTRB(6, 6, 6, 15),
           child: Row(
@@ -272,9 +283,11 @@ class _Sidebar extends StatelessWidget {
                       style: TextStyle(fontWeight: FontWeight.w600),
                     ),
                     Text(
-                      app.status?.vaultId == null
-                          ? 'Local vault'
-                          : 'Vault ${app.status!.vaultId}',
+                      app.vaultProfiles
+                              .where((profile) => profile.active)
+                              .map((profile) => profile.name)
+                              .firstOrNull ??
+                          'Local vault',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: theme.typography.body.xs.copyWith(
@@ -294,50 +307,134 @@ class _Sidebar extends StatelessWidget {
           ),
         ),
         footer: _ConnectionFooter(app: app),
-        children: [
-          FSidebarGroup(
-            children: [
-              for (final section in AppSection.values)
-                FSidebarItem(
-                  key: ValueKey('nav-${section.name}'),
-                  icon: Icon(_Rail._icons[section]),
-                  label: Text(section.label),
-                  selected: app.section == section,
-                  onPress: () => app.selectSection(section),
-                ),
-            ],
-          ),
-          if (app.section == AppSection.vault && app.isReady)
-            FSidebarGroup(
-              label: const Text('Groups'),
-              action: const Icon(FLucideIcons.folderPlus, size: 15),
-              onActionPress: () => _createGroup(context),
-              children: [
-                FSidebarItem(
-                  key: const ValueKey('group-all'),
-                  icon: const Icon(FLucideIcons.layoutGrid),
-                  label: const Text('All items'),
-                  selected: vault.selectedGroupId == null,
-                  onPress: () => vault.selectGroup(null),
-                ),
-                for (final group in vault.groups)
+        child: KeyLeaseScrollArea(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          children: [
+            if (app.isReady)
+              FSidebarGroup(
+                label: const Text('Groups'),
+                action: const Icon(FLucideIcons.folderPlus, size: 15),
+                onActionPress: () => _createGroup(context),
+                children: [
                   FSidebarItem(
-                    key: ValueKey('group-${group.id}'),
-                    icon: const Icon(FLucideIcons.folder),
-                    label: Text(group.name),
-                    selected: vault.selectedGroupId == group.id,
-                    onPress: () => vault.selectGroup(group.id),
+                    key: const ValueKey('group-all'),
+                    icon: const Icon(FLucideIcons.layoutGrid),
+                    label: const Text('All items'),
+                    selected:
+                        app.section == AppSection.vault &&
+                        vault.selectedGroupId == null &&
+                        !vault.favoritesOnly,
+                    onPress: () async {
+                      if (!await confirmCloseEntryEditor(context, app)) return;
+                      app.selectSection(AppSection.vault);
+                      vault.selectGroup(null);
+                    },
                   ),
-                if (vault.groups.isNotEmpty)
                   FSidebarItem(
-                    key: const ValueKey('group-manage'),
-                    icon: const Icon(FLucideIcons.settings2),
-                    label: const Text('Manage groups'),
-                    onPress: () => _manageGroups(context),
+                    key: const ValueKey('group-favorites'),
+                    icon: const Icon(FLucideIcons.star),
+                    label: const Text('Favorites'),
+                    selected:
+                        app.section == AppSection.vault && vault.favoritesOnly,
+                    onPress: () async {
+                      if (!await confirmCloseEntryEditor(context, app)) return;
+                      app.selectSection(AppSection.vault);
+                      vault.selectFavorites();
+                    },
+                  ),
+                  for (final group in vault.orderedGroups.where(
+                    (group) => group.parentId == null,
+                  )) ...[
+                    FSidebarItem(
+                      key: ValueKey('group-${group.id}'),
+                      icon: const Icon(FLucideIcons.folder),
+                      label: Text(group.name),
+                      selected:
+                          app.section == AppSection.vault &&
+                          vault.selectedGroupId == group.id,
+                      onPress: () async {
+                        if (!await confirmCloseEntryEditor(context, app)) {
+                          return;
+                        }
+                        app.selectSection(AppSection.vault);
+                        vault.selectGroup(group.id);
+                      },
+                    ),
+                    for (final child in vault.orderedGroups.where(
+                      (candidate) => candidate.parentId == group.id,
+                    ))
+                      FSidebarItem(
+                        key: ValueKey('group-${child.id}'),
+                        icon: const Icon(
+                          FLucideIcons.cornerDownRight,
+                          size: 15,
+                        ),
+                        label: Padding(
+                          padding: const EdgeInsets.only(left: 8),
+                          child: Text(child.name),
+                        ),
+                        selected:
+                            app.section == AppSection.vault &&
+                            vault.selectedGroupId == child.id,
+                        onPress: () async {
+                          if (!await confirmCloseEntryEditor(context, app)) {
+                            return;
+                          }
+                          app.selectSection(AppSection.vault);
+                          vault.selectGroup(child.id);
+                        },
+                      ),
+                  ],
+                  if (vault.groups.isNotEmpty)
+                    FSidebarItem(
+                      key: const ValueKey('group-manage'),
+                      icon: const Icon(FLucideIcons.settings2),
+                      label: const Text('Manage groups'),
+                      onPress: () => _manageGroups(context),
+                    ),
+                ],
+              ),
+            FSidebarGroup(
+              label: const Text('Tools'),
+              children: [
+                if (app.isReady)
+                  FSidebarItem(
+                    key: const ValueKey('tool-password-generator'),
+                    icon: const Icon(FLucideIcons.sparkles),
+                    label: const Text('Password generator'),
+                    selected:
+                        app.section == AppSection.vault &&
+                        vault.workspaceMode ==
+                            EntryWorkspaceMode.passwordGenerator,
+                    onPress: () async {
+                      if (!await confirmCloseEntryEditor(context, app)) return;
+                      if (!context.mounted) return;
+                      app.selectSection(AppSection.vault);
+                      await openPasswordGenerator(context, app);
+                    },
                   ),
               ],
             ),
-        ],
+            FSidebarGroup(
+              children: [
+                for (final section in const [
+                  AppSection.approvals,
+                  AppSection.settings,
+                ])
+                  FSidebarItem(
+                    key: ValueKey('nav-${section.name}'),
+                    icon: Icon(_Rail._icons[section]),
+                    label: Text(section.label),
+                    selected: app.section == section,
+                    onPress: () async {
+                      if (!await confirmCloseEntryEditor(context, app)) return;
+                      app.selectSection(section);
+                    },
+                  ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -378,16 +475,8 @@ class _Sidebar extends StatelessWidget {
   Future<void> _manageGroups(BuildContext context) => showKeyLeaseDialog<void>(
     context: context,
     title: 'Manage groups',
-    description: 'Rename a group, or delete one that is already empty.',
-    bodyBuilder: (context) => Observe(
-      listenable: app.vault,
-      builder: (context, vault) => Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          for (final group in vault.groups) _GroupRow(app: app, group: group),
-        ],
-      ),
-    ),
+    description: 'Drag groups or use the arrow buttons to choose their order.',
+    bodyBuilder: (context) => _GroupManager(app: app),
     actionsBuilder: (context) => [
       FButton(
         onPress: () => Navigator.of(context).pop(),
@@ -397,18 +486,139 @@ class _Sidebar extends StatelessWidget {
   );
 }
 
+class _GroupManager extends StatelessWidget {
+  const _GroupManager({required this.app});
+
+  final AppController app;
+
+  @override
+  Widget build(BuildContext context) => Observe(
+    listenable: app.vault,
+    builder: (context, vault) {
+      final roots = vault.orderedGroups
+          .where((group) => group.parentId == null)
+          .toList(growable: false);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _ReorderableGroupLevel(app: app, groups: roots),
+          for (final root in roots)
+            if (vault.orderedGroups.any(
+              (group) => group.parentId == root.id,
+            )) ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 0, 4),
+                child: Text('${root.name} subgroups'),
+              ),
+              _ReorderableGroupLevel(
+                app: app,
+                groups: vault.orderedGroups
+                    .where((group) => group.parentId == root.id)
+                    .toList(growable: false),
+                indent: 12,
+              ),
+            ],
+        ],
+      );
+    },
+  );
+}
+
+class _ReorderableGroupLevel extends StatelessWidget {
+  const _ReorderableGroupLevel({
+    required this.app,
+    required this.groups,
+    this.indent = 0,
+  });
+
+  final AppController app;
+  final List<VaultGroup> groups;
+  final double indent;
+
+  Future<void> _move(BuildContext context, int from, int to) async {
+    if (from == to || to < 0 || to >= groups.length) return;
+    final ordered = [...groups];
+    ordered.insert(to, ordered.removeAt(from));
+    try {
+      await app.vault.reorderGroups(groups.first.parentId, ordered);
+    } catch (caught) {
+      if (context.mounted) showFailure(context, caught);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: EdgeInsets.only(left: indent),
+    child: ReorderableListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      // Flutter's default desktop handle is overlaid at the trailing edge.
+      // That position collides with this row's delete action, making both
+      // controls unreliable. Each row owns an explicit leading handle below.
+      buildDefaultDragHandles: false,
+      itemCount: groups.length,
+      onReorderItem: (from, to) => _move(context, from, to),
+      itemBuilder: (context, index) => _GroupRow(
+        key: ValueKey('manage-${groups[index].id}'),
+        app: app,
+        group: groups[index],
+        reorderIndex: index,
+        onMoveUp: index == 0 ? null : () => _move(context, index, index - 1),
+        onMoveDown: index == groups.length - 1
+            ? null
+            : () => _move(context, index, index + 1),
+      ),
+    ),
+  );
+}
+
 class _GroupRow extends StatelessWidget {
-  const _GroupRow({required this.app, required this.group});
+  const _GroupRow({
+    required this.app,
+    required this.group,
+    required this.reorderIndex,
+    this.onMoveUp,
+    this.onMoveDown,
+    super.key,
+  });
 
   final AppController app;
   final VaultGroup group;
+  final int reorderIndex;
+  final VoidCallback? onMoveUp;
+  final VoidCallback? onMoveDown;
 
   @override
   Widget build(BuildContext context) => FItem(
+    prefix: ReorderableDragStartListener(
+      key: ValueKey('manage-drag-${group.id}'),
+      index: reorderIndex,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.grab,
+        child: Semantics(
+          button: true,
+          label: 'Drag ${group.name} to reorder',
+          child: const SizedBox.square(
+            dimension: 32,
+            child: Center(child: Icon(FLucideIcons.gripVertical, size: 18)),
+          ),
+        ),
+      ),
+    ),
     title: Text(group.name),
     suffix: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        IconAction(
+          label: 'Move ${group.name} up',
+          icon: FLucideIcons.arrowUp,
+          onPress: onMoveUp,
+        ),
+        IconAction(
+          label: 'Move ${group.name} down',
+          icon: FLucideIcons.arrowDown,
+          onPress: onMoveDown,
+        ),
         IconAction(
           label: 'Rename ${group.name}',
           icon: FLucideIcons.squarePen,

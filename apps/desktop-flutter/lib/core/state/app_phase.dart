@@ -33,14 +33,12 @@ enum AppPhase {
 }
 
 /// Top-level navigation destinations, shared by every form factor.
-enum AppSection { vault, connections, approvals, activity, settings }
+enum AppSection { vault, approvals, settings }
 
 extension AppSectionLabel on AppSection {
   String get label => switch (this) {
     AppSection.vault => 'Vault',
-    AppSection.connections => 'Connections',
     AppSection.approvals => 'Approvals',
-    AppSection.activity => 'Activity',
     AppSection.settings => 'Settings',
   };
 

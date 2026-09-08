@@ -16,6 +16,7 @@ class FakeSecurityAdapter implements SecurityAdapter {
 
   int clipboardClears = 0;
   String? tokenToReturn;
+  String? qrCodeToReturn;
   bool clipboardSupported = true;
   bool browserOpens = true;
 
@@ -46,6 +47,9 @@ class FakeSecurityAdapter implements SecurityAdapter {
 
   @override
   Future<String?> selectClientToken() async => tokenToReturn;
+
+  @override
+  Future<String?> scanTotpQrCode() async => qrCodeToReturn;
 
   @override
   Future<bool> openGoogleAuthorization(String url) async => browserOpens;
@@ -88,6 +92,16 @@ class FakeLocalRuntimeAdapter implements LocalRuntimeAdapter {
   Future<void> openLoginItemsSettings() async {}
   @override
   Future<void> openDataFolder() async {}
+  @override
+  Future<List<LocalVaultProfile>> listVaults() async => const [
+    LocalVaultProfile(id: 'primary', name: 'Primary Vault', active: true),
+  ];
+  @override
+  Future<void> createVault(String name, Map<String, dynamic> request) async {}
+  @override
+  Future<void> switchVault(String id) async {}
+  @override
+  Future<void> renameVault(String id, String name) async {}
 }
 
 /// A scripted daemon.
@@ -172,6 +186,7 @@ abstract final class Fixtures {
     bool hasPassword = true,
     bool hasNotes = false,
     bool hasTotp = false,
+    bool favorite = false,
     int revision = 3,
   }) => {
     'id': id,
@@ -183,6 +198,7 @@ abstract final class Fixtures {
     'has_password': hasPassword,
     'has_notes': hasNotes,
     'has_totp': hasTotp,
+    'favorite': favorite,
     'revision': revision,
     'updated_at': '2026-09-05T09:30:00Z',
   };
@@ -235,7 +251,27 @@ buildController({
   final client = FakeKeyLeaseClient()
     ..value('status', Fixtures.unlockedStatus)
     ..value('groups_list', Fixtures.groups)
+    ..value('templates_list', <Map<String, dynamic>>[])
+    ..value('projects_list', <Map<String, dynamic>>[])
+    ..value('migrations_status', {
+      'framework_version': 1,
+      'pending': <Map<String, dynamic>>[],
+      'history': <Map<String, dynamic>>[],
+    })
     ..value('entries_search', [Fixtures.entry()])
+    ..on('entries_view', (request) async {
+      final entry = Fixtures.entry(id: '${request['id']}');
+      return {
+        'metadata': entry,
+        'template_version': 1,
+        'project_id': null,
+        'tags': <String>[],
+        'sections': <Map<String, dynamic>>[],
+        'fields': <Map<String, dynamic>>[],
+        'attachments': <String>[],
+        'has_notes': entry['has_notes'],
+      };
+    })
     ..value('connections_list', <Map<String, dynamic>>[])
     ..value('approvals_list', <Map<String, dynamic>>[])
     ..value('audit_query', <Map<String, dynamic>>[])

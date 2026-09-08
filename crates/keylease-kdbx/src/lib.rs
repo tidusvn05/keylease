@@ -6,8 +6,9 @@ use keepass::{
     db::{GroupRef, fields},
 };
 use keylease_core::{
-    FieldId, FieldValue, GroupId, ItemField, ItemStatus, ItemUrl, KeyLeaseError, Result,
-    Sensitivity, TotpAlgorithm, TotpConfig, VaultGroup, VaultId, VaultItem,
+    AddressValue, AgentAccess, FieldId, FieldValue, GroupId, GroupPurpose, ItemField, ItemStatus,
+    ItemUrl, KeyLeaseError, Result, Sensitivity, TotpAlgorithm, TotpConfig, VaultGroup, VaultId,
+    VaultItem, normalize_field_alias, semantic_role_for,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -164,6 +165,7 @@ impl KdbxAdapter for KeepassRsAdapter {
             }
             entry.set_protected("KeyLease.Kind", &item.kind);
             entry.set_protected("KeyLease.SchemaVersion", item.schema_version.to_string());
+            entry.tags = item.tags.clone();
             for field in &item.fields {
                 let key = match field.key.as_str() {
                     "username" => fields::USERNAME,
@@ -218,6 +220,8 @@ fn walk_group(
         } else {
             group.name.clone()
         },
+        purpose: GroupPurpose::User,
+        sort_order: None,
         revision: 1,
         created_at: now,
         updated_at: now,
@@ -253,8 +257,13 @@ fn walk_group(
                 })
                 .unwrap_or_default(),
             tags: entry.tags.clone(),
+            favorite: false,
             attachments: vec![],
             notes: entry.get(fields::NOTES).map(str::to_owned),
+            template_version: 1,
+            project_id: None,
+            agent_access: AgentAccess::None,
+            content_metadata: None,
             schema_version: entry
                 .get("KeyLease.SchemaVersion")
                 .and_then(|v| v.parse().ok())
@@ -271,6 +280,8 @@ fn walk_group(
             status: ItemStatus::Active,
             extensions: BTreeMap::new(),
         };
+        item.extensions
+            .insert("kdbx.source".into(), serde_json::json!(true));
         let has_otp = entry.get(fields::OTP).is_some();
         if !has_otp && let Some(secret) = entry.get("TimeOtp-Secret-Base32") {
             let algorithm = match entry
@@ -306,6 +317,7 @@ fn walk_group(
                 }),
                 sensitivity: Sensitivity::Secret,
                 protected: true,
+                semantic_role: Some("otp".into()),
             });
             item.extensions.insert(
                 "kdbx.totp_representation".into(),
@@ -362,7 +374,15 @@ fn walk_group(
                 value: field_value,
                 sensitivity,
                 protected: value.is_protected(),
+                semantic_role: None,
             });
+        }
+        if entry.get("KeyLease.Kind").is_none() {
+            item.kind = infer_kdbx_kind(&item);
+        }
+        for field in &mut item.fields {
+            field.semantic_role = semantic_role_for(&item.kind, &field.key, &field.label);
+            harden_semantic_field(field);
         }
         for (name, attachment) in entry.attachments_named() {
             item.attachments.push(name.into());
@@ -435,6 +455,20 @@ fn field_to_string(value: &FieldValue) -> String {
         | FieldValue::Certificate(v)
         | FieldValue::AttachmentRef(v)
         | FieldValue::Reference(v) => v.clone(),
+        FieldValue::MonthYear { month, year } => format!("{month:02}/{year}"),
+        FieldValue::Address(AddressValue {
+            street,
+            city,
+            state,
+            postal_code,
+            country,
+        }) => [street, city, state, postal_code, country]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", "),
+        FieldValue::OpaqueJson(value) => value.to_string(),
         FieldValue::Number(v) => v.to_string(),
         FieldValue::Boolean(v) => v.to_string(),
         FieldValue::Totp(v) => v.source_representation.clone().unwrap_or_else(|| {
@@ -448,6 +482,76 @@ fn field_to_string(value: &FieldValue) -> String {
             )
         }),
         FieldValue::KeyPair { public, private } => format!("{public}\n{private}"),
+    }
+}
+
+fn infer_kdbx_kind(item: &VaultItem) -> String {
+    let names = item
+        .fields
+        .iter()
+        .flat_map(|field| [&field.key, &field.label])
+        .map(|value| normalize_field_alias(value))
+        .collect::<Vec<_>>();
+    let has = |aliases: &[&str]| {
+        names.iter().any(|name| {
+            aliases
+                .iter()
+                .any(|alias| name == &normalize_field_alias(alias))
+        })
+    };
+    if has(&["card number", "credit card number", "cc number"])
+        && has(&["expiry", "expiry date", "expiration"])
+    {
+        "core.credit_card".into()
+    } else if has(&["private key", "ssh private key"])
+        || has(&["public key", "ssh public key"]) && has(&["fingerprint"])
+    {
+        "core.ssh_key".into()
+    } else if has(&["password", "pass", "passwd"])
+        && (has(&["username", "user", "login"]) || !item.urls.is_empty())
+    {
+        "core.login".into()
+    } else if item.fields.is_empty()
+        && item.urls.is_empty()
+        && item
+            .notes
+            .as_deref()
+            .is_some_and(|notes| !notes.trim().is_empty())
+    {
+        "core.secure_note".into()
+    } else {
+        "core.generic".into()
+    }
+}
+
+fn harden_semantic_field(field: &mut ItemField) {
+    if matches!(
+        field.semantic_role.as_deref(),
+        Some(
+            "password"
+                | "credential"
+                | "client_secret"
+                | "card_number"
+                | "card_verification"
+                | "pin"
+                | "account_number"
+                | "routing_number"
+                | "iban"
+                | "swift"
+                | "identity_number"
+                | "private_key"
+                | "passphrase"
+                | "recovery_phrase"
+                | "license_key"
+                | "connection_string"
+                | "wifi_password"
+        )
+    ) {
+        field.sensitivity = Sensitivity::HighlySensitive;
+        field.protected = true;
+        if let FieldValue::Text(value) = &field.value {
+            field.value = FieldValue::Concealed(value.clone());
+        }
     }
 }
 fn uuid_from_prefixed(value: &str) -> Option<Uuid> {
@@ -469,6 +573,8 @@ mod tests {
             vault_id: vault.clone(),
             parent_id: None,
             name: "Development".into(),
+            purpose: GroupPurpose::User,
+            sort_order: None,
             revision: 1,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -488,6 +594,7 @@ mod tests {
                     value: FieldValue::Concealed("ghp_secret".into()),
                     sensitivity: Sensitivity::Secret,
                     protected: true,
+                    semantic_role: Some("credential".into()),
                 },
                 ItemField {
                     id: FieldId::new(),
@@ -496,12 +603,18 @@ mod tests {
                     value: parse_totp("otpauth://totp/acme?secret=JBSWY3DPEHPK3PXP&issuer=Acme"),
                     sensitivity: Sensitivity::Secret,
                     protected: true,
+                    semantic_role: Some("otp".into()),
                 },
             ],
             urls: vec![],
             tags: vec![],
+            favorite: false,
             attachments: vec![],
             notes: None,
+            template_version: 1,
+            project_id: None,
+            agent_access: AgentAccess::None,
+            content_metadata: None,
             schema_version: 1,
             revision: 1,
             created_at: Utc::now(),

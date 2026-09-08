@@ -1,13 +1,18 @@
 use chrono::{Duration, Utc};
 use clap::{Args, Parser, Subcommand};
 use keylease_core::*;
-use keylease_service::{EntryPatch, KeyLeaseService, NewEntryInput};
+use keylease_service::{
+    ContentCreateInput, ContentDocument, ContentPatch, ContentSummary, EntryPatch, EntryView,
+    FieldView, KeyLeaseService, MigrationApplyResult, MigrationPreview, MigrationStatus,
+    NewEntryInput,
+};
 use keylease_store::NativeStore;
 use leasegate_connectors::Connector;
 use leasegate_policy::{PolicyTemplateInput, PolicyTemplateKind, materialize_provider_template};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     fs,
     io::{self, Read, Write},
     os::unix::fs::MetadataExt,
@@ -73,6 +78,22 @@ enum Command {
         #[command(subcommand)]
         command: GroupCommand,
     },
+    Templates {
+        #[command(subcommand)]
+        command: TemplateCommand,
+    },
+    Migrations {
+        #[command(subcommand)]
+        command: MigrationCommand,
+    },
+    Projects {
+        #[command(subcommand)]
+        command: ProjectCommand,
+    },
+    Content {
+        #[command(subcommand)]
+        command: ContentCommand,
+    },
     Entries {
         #[command(subcommand)]
         command: EntryCommand,
@@ -132,6 +153,38 @@ enum DesktopCommand {
         #[arg(long)]
         home: Option<PathBuf>,
     },
+    VaultsList,
+    VaultCreate {
+        #[arg(long, default_value = "-")]
+        input_json: String,
+    },
+    VaultSwitch {
+        id: String,
+    },
+    VaultRename {
+        id: String,
+        name: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DesktopVaultProfile {
+    id: String,
+    name: String,
+    path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DesktopVaultRegistry {
+    version: u32,
+    active_id: String,
+    profiles: Vec<DesktopVaultProfile>,
+}
+
+#[derive(Deserialize)]
+struct DesktopVaultCreateInput {
+    name: String,
+    request: DesktopProvisionInput,
 }
 
 #[derive(Deserialize)]
@@ -300,12 +353,119 @@ enum GroupCommand {
         dry_run: bool,
     },
 }
+
+#[derive(Subcommand)]
+enum TemplateCommand {
+    List,
+    Get { kind: String },
+}
+
+#[derive(Subcommand)]
+enum MigrationCommand {
+    Status,
+    Preview {
+        migration_id: String,
+    },
+    Apply {
+        migration_id: String,
+        #[arg(long)]
+        preview_digest: String,
+    },
+    Rollback {
+        migration_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProjectCommand {
+    List,
+    Create {
+        slug: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        idempotency_key: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ContentCommand {
+    Search {
+        #[arg(default_value = "")]
+        query: String,
+        #[arg(long, value_parser = ["prompt", "runbook", "note"])]
+        r#type: Option<String>,
+        #[arg(long)]
+        tag: Option<String>,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        reviewed_only: bool,
+    },
+    Get {
+        id: String,
+        #[arg(long)]
+        raw: bool,
+    },
+    Create {
+        #[arg(long, value_parser = ["prompt", "runbook", "note"])]
+        r#type: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long, default_value = "-")]
+        body_file: PathBuf,
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        idempotency_key: String,
+    },
+    Update {
+        id: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        body_file: Option<PathBuf>,
+        #[arg(long = "add-tag")]
+        add_tags: Vec<String>,
+        #[arg(long = "remove-tag")]
+        remove_tags: Vec<String>,
+        #[arg(long, conflicts_with = "clear_project")]
+        project: Option<String>,
+        #[arg(long)]
+        clear_project: bool,
+        #[arg(long)]
+        if_revision: u64,
+        #[arg(long)]
+        idempotency_key: String,
+    },
+    Access {
+        id: String,
+        #[arg(value_parser = ["none", "read", "read-write"])]
+        access: String,
+        #[arg(long)]
+        if_revision: u64,
+        #[arg(long)]
+        idempotency_key: String,
+    },
+    Review {
+        id: String,
+        #[arg(long)]
+        if_revision: u64,
+        #[arg(long)]
+        idempotency_key: String,
+    },
+}
 #[derive(Subcommand)]
 enum EntryCommand {
     Search {
         query: String,
     },
     Get {
+        id: String,
+    },
+    View {
         id: String,
     },
     Create {
@@ -338,8 +498,14 @@ enum EntryCommand {
     },
     Reveal {
         id: String,
-        #[arg(long)]
-        field: String,
+        #[arg(
+            long,
+            conflicts_with = "field_id",
+            required_unless_present = "field_id"
+        )]
+        field: Option<String>,
+        #[arg(long, conflicts_with = "field", required_unless_present = "field")]
+        field_id: Option<String>,
     },
     Totp {
         id: String,
@@ -458,6 +624,14 @@ enum RpcRequest {
         idempotency_key: String,
         dry_run: bool,
     },
+    GroupsReorder {
+        auth: RpcAuth,
+        parent_id: Option<GroupId>,
+        ordered_ids: Vec<GroupId>,
+        expected_revisions: BTreeMap<String, u64>,
+        idempotency_key: String,
+        dry_run: bool,
+    },
     GroupsDelete {
         auth: RpcAuth,
         id: GroupId,
@@ -465,11 +639,84 @@ enum RpcRequest {
         idempotency_key: String,
         dry_run: bool,
     },
+    TemplatesList {
+        auth: RpcAuth,
+    },
+    TemplatesGet {
+        auth: RpcAuth,
+        kind: String,
+    },
+    MigrationsStatus {
+        auth: RpcAuth,
+    },
+    MigrationsPreview {
+        auth: RpcAuth,
+        migration_id: String,
+    },
+    MigrationsApply {
+        auth: RpcAuth,
+        migration_id: String,
+        preview_digest: String,
+    },
+    MigrationsRollback {
+        auth: RpcAuth,
+        migration_id: String,
+    },
+    ProjectsList {
+        auth: RpcAuth,
+    },
+    ProjectsCreate {
+        auth: RpcAuth,
+        slug: String,
+        name: Option<String>,
+        idempotency_key: String,
+    },
+    ContentSearch {
+        auth: RpcAuth,
+        query: String,
+        kind: Option<String>,
+        tag: Option<String>,
+        project_slug: Option<String>,
+        reviewed_only: bool,
+    },
+    ContentGet {
+        auth: RpcAuth,
+        id: ItemId,
+    },
+    ContentCreate {
+        auth: RpcAuth,
+        input: ContentCreateInput,
+        idempotency_key: String,
+    },
+    ContentUpdate {
+        auth: RpcAuth,
+        id: ItemId,
+        patch: ContentPatch,
+        if_revision: u64,
+        idempotency_key: String,
+    },
+    ContentSetAccess {
+        auth: RpcAuth,
+        id: ItemId,
+        access: AgentAccess,
+        if_revision: u64,
+        idempotency_key: String,
+    },
+    ContentReview {
+        auth: RpcAuth,
+        id: ItemId,
+        if_revision: u64,
+        idempotency_key: String,
+    },
     EntriesSearch {
         auth: RpcAuth,
         query: String,
     },
     EntriesGet {
+        auth: RpcAuth,
+        id: ItemId,
+    },
+    EntriesView {
         auth: RpcAuth,
         id: ItemId,
     },
@@ -499,6 +746,11 @@ enum RpcRequest {
         id: ItemId,
         field: String,
     },
+    EntriesRevealById {
+        auth: RpcAuth,
+        id: ItemId,
+        field_id: FieldId,
+    },
     EntriesTotp {
         auth: RpcAuth,
         id: ItemId,
@@ -510,6 +762,8 @@ enum RpcRequest {
     GeneratePassword {
         auth: RpcAuth,
         length: usize,
+        #[serde(default)]
+        recipe: Option<keylease_service::PasswordRecipe>,
     },
     ConnectionsList {
         auth: RpcAuth,
@@ -684,6 +938,82 @@ async fn run() -> Result<()> {
                 .await
             }
         },
+        Command::Templates { command } => match command {
+            TemplateCommand::List => {
+                print_rpc(&socket, RpcRequest::TemplatesList { auth: auth(&cli)? }).await
+            }
+            TemplateCommand::Get { kind } => {
+                print_rpc(
+                    &socket,
+                    RpcRequest::TemplatesGet {
+                        auth: auth(&cli)?,
+                        kind,
+                    },
+                )
+                .await
+            }
+        },
+        Command::Migrations { command } => match command {
+            MigrationCommand::Status => {
+                print_rpc(&socket, RpcRequest::MigrationsStatus { auth: auth(&cli)? }).await
+            }
+            MigrationCommand::Preview { migration_id } => {
+                print_rpc(
+                    &socket,
+                    RpcRequest::MigrationsPreview {
+                        auth: auth(&cli)?,
+                        migration_id,
+                    },
+                )
+                .await
+            }
+            MigrationCommand::Apply {
+                migration_id,
+                preview_digest,
+            } => {
+                print_rpc(
+                    &socket,
+                    RpcRequest::MigrationsApply {
+                        auth: auth(&cli)?,
+                        migration_id,
+                        preview_digest,
+                    },
+                )
+                .await
+            }
+            MigrationCommand::Rollback { migration_id } => {
+                print_rpc(
+                    &socket,
+                    RpcRequest::MigrationsRollback {
+                        auth: auth(&cli)?,
+                        migration_id,
+                    },
+                )
+                .await
+            }
+        },
+        Command::Projects { command } => match command {
+            ProjectCommand::List => {
+                print_rpc(&socket, RpcRequest::ProjectsList { auth: auth(&cli)? }).await
+            }
+            ProjectCommand::Create {
+                slug,
+                name,
+                idempotency_key,
+            } => {
+                print_rpc(
+                    &socket,
+                    RpcRequest::ProjectsCreate {
+                        auth: auth(&cli)?,
+                        slug,
+                        name,
+                        idempotency_key,
+                    },
+                )
+                .await
+            }
+        },
+        Command::Content { command } => content_command(&cli, &socket, command).await,
         Command::Entries { command } => entry_command(&cli, &socket, command).await,
         Command::Connection { command } => connection_command(&cli, &socket, command).await,
         Command::Lease { command } => lease_command(&cli, &socket, command).await,
@@ -716,7 +1046,18 @@ async fn run() -> Result<()> {
                 "entry_patch":schemars::schema_for!(EntryPatch),
                 "actor_context":schemars::schema_for!(ActorContext),
                 "item_metadata":schemars::schema_for!(ItemMetadata),
+                "entry_view":schemars::schema_for!(EntryView),
+                "field_view":schemars::schema_for!(FieldView),
+                "item_kind_definition":schemars::schema_for!(ItemKindDefinition),
                 "vault_group":schemars::schema_for!(VaultGroup),
+                "vault_project":schemars::schema_for!(VaultProject),
+                "content_create_input":schemars::schema_for!(ContentCreateInput),
+                "content_patch":schemars::schema_for!(ContentPatch),
+                "content_summary":schemars::schema_for!(ContentSummary),
+                "content_document":schemars::schema_for!(ContentDocument),
+                "migration_status":schemars::schema_for!(MigrationStatus),
+                "migration_preview":schemars::schema_for!(MigrationPreview),
+                "migration_apply_result":schemars::schema_for!(MigrationApplyResult),
                 "policy_rule":schemars::schema_for!(PolicyRule),
                 "policy_decision":schemars::schema_for!(PolicyDecision),
                 "audit_event":schemars::schema_for!(AuditEvent),
@@ -737,10 +1078,80 @@ async fn run() -> Result<()> {
 }
 
 struct DesktopPaths {
+    root: PathBuf,
     home: PathBuf,
     database: PathBuf,
     token: PathBuf,
     socket: PathBuf,
+}
+
+fn registry_path(root: &Path) -> PathBuf {
+    root.join("vaults.json")
+}
+
+fn initial_registry() -> DesktopVaultRegistry {
+    DesktopVaultRegistry {
+        version: 1,
+        active_id: "primary".into(),
+        profiles: vec![DesktopVaultProfile {
+            id: "primary".into(),
+            name: "Primary Vault".into(),
+            path: ".".into(),
+        }],
+    }
+}
+
+fn load_registry(root: &Path) -> Result<DesktopVaultRegistry> {
+    let path = registry_path(root);
+    if !path.exists() {
+        return Ok(initial_registry());
+    }
+    let metadata = fs::symlink_metadata(&path).map_err(|_| KeyLeaseError::Storage)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(KeyLeaseError::Denied {
+            reason: "vault registry must be a regular file".into(),
+        });
+    }
+    serde_json::from_slice(&fs::read(path).map_err(|_| KeyLeaseError::Storage)?).map_err(|_| {
+        KeyLeaseError::InvalidRequest {
+            reason: "vault registry is invalid".into(),
+        }
+    })
+}
+
+fn save_registry(root: &Path, registry: &DesktopVaultRegistry) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(registry).map_err(|_| KeyLeaseError::Storage)?;
+    write_atomic(&registry_path(root), &bytes)
+}
+
+fn profile_home(root: &Path, profile: &DesktopVaultProfile) -> Result<PathBuf> {
+    let relative = Path::new(&profile.path);
+    if relative == Path::new(".") {
+        return Ok(root.to_path_buf());
+    }
+    if relative.is_absolute()
+        || relative.components().any(|part| {
+            !matches!(
+                part,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        })
+    {
+        return Err(KeyLeaseError::Denied {
+            reason: "vault profile path must stay inside the managed home".into(),
+        });
+    }
+    let home = root.join(relative);
+    if root.exists() && home.exists() {
+        let canonical_root = fs::canonicalize(root).map_err(|_| KeyLeaseError::Storage)?;
+        let canonical_home = fs::canonicalize(&home).map_err(|_| KeyLeaseError::Storage)?;
+        if !canonical_home.starts_with(canonical_root) {
+            return Err(KeyLeaseError::Denied {
+                reason: "vault profile path escapes the managed home".into(),
+            });
+        }
+    }
+    Ok(home)
 }
 
 fn desktop_paths(home: Option<PathBuf>) -> Result<DesktopPaths> {
@@ -758,10 +1169,21 @@ fn desktop_paths(home: Option<PathBuf>) -> Result<DesktopPaths> {
             reason: "managed KeyLease home must be an absolute path".into(),
         });
     }
+    let root = home;
+    let registry = load_registry(&root)?;
+    let profile = registry
+        .profiles
+        .iter()
+        .find(|profile| profile.id == registry.active_id)
+        .ok_or_else(|| KeyLeaseError::InvalidRequest {
+            reason: "active vault profile does not exist".into(),
+        })?;
+    let home = profile_home(&root, profile)?;
     Ok(DesktopPaths {
+        root: root.clone(),
         database: home.join("keylease.sqlite"),
         token: home.join("desktop.token"),
-        socket: home.join("run/keylease.sock"),
+        socket: root.join("run/keylease.sock"),
         home,
     })
 }
@@ -779,7 +1201,16 @@ fn ensure_desktop_home(paths: &DesktopPaths) -> Result<()> {
     }
     fs::set_permissions(&paths.home, fs::Permissions::from_mode(0o700))
         .map_err(|_| KeyLeaseError::Storage)?;
-    for directory in [paths.home.join("run"), paths.home.join("backups")] {
+    let socket_parent = paths
+        .socket
+        .parent()
+        .ok_or(KeyLeaseError::Storage)?
+        .to_path_buf();
+    for directory in [
+        paths.home.join("run"),
+        paths.home.join("backups"),
+        socket_parent,
+    ] {
         if directory.exists() {
             let metadata = fs::symlink_metadata(&directory).map_err(|_| KeyLeaseError::Storage)?;
             if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -858,7 +1289,7 @@ async fn desktop_command(command: DesktopCommand) -> Result<()> {
                 (true, true) => "ready",
                 _ => "repair_required",
             };
-            let user_home = paths.home.parent().unwrap_or_else(|| Path::new("/"));
+            let user_home = paths.root.parent().unwrap_or_else(|| Path::new("/"));
             let legacy_root = user_home.join("Library/Application Support/KeyLease");
             let legacy_database = legacy_root.join("keylease.sqlite");
             let legacy_preferences = legacy_root.join("desktop-ui.json");
@@ -867,7 +1298,8 @@ async fn desktop_command(command: DesktopCommand) -> Result<()> {
                 "legacy_available":legacy_database.is_file() || legacy_preferences.is_file(),
                 "legacy_database":legacy_database.is_file().then(|| legacy_database.display().to_string()),
                 "service_version":env!("CARGO_PKG_VERSION"),
-                "contract_version":CONTRACT_VERSION
+                "contract_version":CONTRACT_VERSION,
+                "token_path":paths.token.display().to_string()
             }))
         }
         DesktopCommand::InspectSource { path } => {
@@ -883,6 +1315,88 @@ async fn desktop_command(command: DesktopCommand) -> Result<()> {
             let paths = desktop_paths(home)?;
             ensure_desktop_home(&paths)?;
             serve(&paths.database, &paths.socket, 28_800, true).await
+        }
+        DesktopCommand::VaultsList => {
+            let root = managed_home().ok_or_else(|| KeyLeaseError::InvalidRequest {
+                reason: "cannot resolve the managed KeyLease home".into(),
+            })?;
+            let registry = load_registry(&root)?;
+            print_json(&registry)
+        }
+        DesktopCommand::VaultCreate { input_json } => {
+            let root = managed_home().ok_or_else(|| KeyLeaseError::InvalidRequest {
+                reason: "cannot resolve the managed KeyLease home".into(),
+            })?;
+            fs::create_dir_all(root.join("vaults")).map_err(|_| KeyLeaseError::Storage)?;
+            fs::set_permissions(root.join("vaults"), fs::Permissions::from_mode(0o700))
+                .map_err(|_| KeyLeaseError::Storage)?;
+            let input = read_json::<DesktopVaultCreateInput>(&input_json)?;
+            let name = input.name.trim();
+            if name.is_empty() {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "vault name must not be empty".into(),
+                });
+            }
+            let id = format!("vault_{}", uuid_text());
+            let relative = format!("vaults/{id}");
+            let profile = DesktopVaultProfile {
+                id: id.clone(),
+                name: name.into(),
+                path: relative,
+            };
+            let home = profile_home(&root, &profile)?;
+            let paths = DesktopPaths {
+                root: root.clone(),
+                database: home.join("keylease.sqlite"),
+                token: home.join("desktop.token"),
+                socket: root.join("run/keylease.sock"),
+                home,
+            };
+            ensure_desktop_home(&paths)?;
+            provision_desktop(&paths, input.request)?;
+            let mut registry = load_registry(&root)?;
+            registry.profiles.push(profile);
+            save_registry(&root, &registry)
+        }
+        DesktopCommand::VaultSwitch { id } => {
+            let root = managed_home().ok_or_else(|| KeyLeaseError::InvalidRequest {
+                reason: "cannot resolve the managed KeyLease home".into(),
+            })?;
+            let mut registry = load_registry(&root)?;
+            let profile = registry
+                .profiles
+                .iter()
+                .find(|profile| profile.id == id)
+                .ok_or_else(|| KeyLeaseError::NotFound {
+                    resource: id.clone(),
+                })?;
+            let home = profile_home(&root, profile)?;
+            if !home.join("keylease.sqlite").is_file() || !home.join("desktop.token").is_file() {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "selected vault profile is incomplete".into(),
+                });
+            }
+            registry.active_id = id.clone();
+            save_registry(&root, &registry)?;
+            print_json(&json!({"active_id":id,"token_path":home.join("desktop.token")}))
+        }
+        DesktopCommand::VaultRename { id, name } => {
+            let root = managed_home().ok_or_else(|| KeyLeaseError::InvalidRequest {
+                reason: "cannot resolve the managed KeyLease home".into(),
+            })?;
+            if name.trim().is_empty() {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "vault name must not be empty".into(),
+                });
+            }
+            let mut registry = load_registry(&root)?;
+            let profile = registry
+                .profiles
+                .iter_mut()
+                .find(|profile| profile.id == id)
+                .ok_or_else(|| KeyLeaseError::NotFound { resource: id })?;
+            profile.name = name.trim().into();
+            save_registry(&root, &registry)
         }
     }
 }
@@ -1245,6 +1759,192 @@ fn grant_command(db: &Path, command: GrantCommand) -> Result<()> {
     }
 }
 
+async fn content_command(cli: &Cli, socket: &Path, command: ContentCommand) -> Result<()> {
+    match command {
+        ContentCommand::Search {
+            query,
+            r#type,
+            tag,
+            project,
+            reviewed_only,
+        } => {
+            print_rpc(
+                socket,
+                RpcRequest::ContentSearch {
+                    auth: auth(cli)?,
+                    query,
+                    kind: r#type,
+                    tag,
+                    project_slug: project,
+                    reviewed_only,
+                },
+            )
+            .await
+        }
+        ContentCommand::Get { id, raw } => {
+            let value = rpc(
+                socket,
+                RpcRequest::ContentGet {
+                    auth: auth(cli)?,
+                    id: content_item_id(&id),
+                },
+            )
+            .await?;
+            if raw {
+                let body = value
+                    .get("body")
+                    .and_then(Value::as_str)
+                    .ok_or(KeyLeaseError::Storage)?;
+                println!("{body}");
+                Ok(())
+            } else {
+                print_json(&value)
+            }
+        }
+        ContentCommand::Create {
+            r#type,
+            title,
+            body_file,
+            tags,
+            project,
+            idempotency_key,
+        } => {
+            let body = read_bounded_text(&body_file, 1024 * 1024)?;
+            print_rpc(
+                socket,
+                RpcRequest::ContentCreate {
+                    auth: auth(cli)?,
+                    input: ContentCreateInput {
+                        kind: format!("core.{type}", type = r#type),
+                        title,
+                        favorite: false,
+                        body,
+                        tags,
+                        project_slug: project,
+                    },
+                    idempotency_key,
+                },
+            )
+            .await
+        }
+        ContentCommand::Update {
+            id,
+            title,
+            body_file,
+            add_tags,
+            remove_tags,
+            project,
+            clear_project,
+            if_revision,
+            idempotency_key,
+        } => {
+            let body = body_file
+                .as_ref()
+                .map(|path| read_bounded_text(path, 1024 * 1024))
+                .transpose()?;
+            print_rpc(
+                socket,
+                RpcRequest::ContentUpdate {
+                    auth: auth(cli)?,
+                    id: content_item_id(&id),
+                    patch: ContentPatch {
+                        title,
+                        body,
+                        tags: None,
+                        add_tags,
+                        remove_tags,
+                        project_slug: project,
+                        clear_project,
+                        favorite: None,
+                    },
+                    if_revision,
+                    idempotency_key,
+                },
+            )
+            .await
+        }
+        ContentCommand::Access {
+            id,
+            access,
+            if_revision,
+            idempotency_key,
+        } => {
+            let access = match access.as_str() {
+                "none" => AgentAccess::None,
+                "read" => AgentAccess::Read,
+                "read-write" => AgentAccess::ReadWrite,
+                _ => unreachable!("clap validates agent access"),
+            };
+            print_rpc(
+                socket,
+                RpcRequest::ContentSetAccess {
+                    auth: auth(cli)?,
+                    id: content_item_id(&id),
+                    access,
+                    if_revision,
+                    idempotency_key,
+                },
+            )
+            .await
+        }
+        ContentCommand::Review {
+            id,
+            if_revision,
+            idempotency_key,
+        } => {
+            print_rpc(
+                socket,
+                RpcRequest::ContentReview {
+                    auth: auth(cli)?,
+                    id: content_item_id(&id),
+                    if_revision,
+                    idempotency_key,
+                },
+            )
+            .await
+        }
+    }
+}
+
+fn content_item_id(value: &str) -> ItemId {
+    if let Some((_, id)) = value.rsplit_once('/')
+        && value.starts_with("kl://")
+    {
+        return ItemId(id.into());
+    }
+    ItemId(value.into())
+}
+
+fn read_bounded_text(path: &Path, maximum: usize) -> Result<String> {
+    let mut bytes = Vec::new();
+    if path == Path::new("-") {
+        io::stdin()
+            .take((maximum + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|_| KeyLeaseError::Storage)?;
+    } else {
+        let metadata = fs::metadata(path).map_err(|_| KeyLeaseError::Storage)?;
+        if metadata.len() > maximum as u64 {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "content body exceeds 1 MiB".into(),
+            });
+        }
+        fs::File::open(path)
+            .map_err(|_| KeyLeaseError::Storage)?
+            .take((maximum + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|_| KeyLeaseError::Storage)?;
+    }
+    if bytes.len() > maximum {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "content body exceeds 1 MiB".into(),
+        });
+    }
+    String::from_utf8(bytes).map_err(|_| KeyLeaseError::InvalidRequest {
+        reason: "content body must be UTF-8".into(),
+    })
+}
+
 async fn entry_command(cli: &Cli, socket: &Path, command: EntryCommand) -> Result<()> {
     match command {
         EntryCommand::Search { query } => {
@@ -1261,6 +1961,16 @@ async fn entry_command(cli: &Cli, socket: &Path, command: EntryCommand) -> Resul
             print_rpc(
                 socket,
                 RpcRequest::EntriesGet {
+                    auth: auth(cli)?,
+                    id: ItemId(id),
+                },
+            )
+            .await
+        }
+        EntryCommand::View { id } => {
+            print_rpc(
+                socket,
+                RpcRequest::EntriesView {
                     auth: auth(cli)?,
                     id: ItemId(id),
                 },
@@ -1323,16 +2033,32 @@ async fn entry_command(cli: &Cli, socket: &Path, command: EntryCommand) -> Resul
             )
             .await
         }
-        EntryCommand::Reveal { id, field } => {
-            print_rpc(
-                socket,
-                RpcRequest::EntriesReveal {
-                    auth: auth(cli)?,
-                    id: ItemId(id),
-                    field,
-                },
-            )
-            .await
+        EntryCommand::Reveal {
+            id,
+            field,
+            field_id,
+        } => {
+            let auth = auth(cli)?;
+            let id = ItemId(id);
+            match (field, field_id) {
+                (Some(field), None) => {
+                    print_rpc(socket, RpcRequest::EntriesReveal { auth, id, field }).await
+                }
+                (None, Some(field_id)) => {
+                    print_rpc(
+                        socket,
+                        RpcRequest::EntriesRevealById {
+                            auth,
+                            id,
+                            field_id: FieldId(field_id),
+                        },
+                    )
+                    .await
+                }
+                _ => Err(KeyLeaseError::InvalidRequest {
+                    reason: "choose exactly one of --field or --field-id".into(),
+                }),
+            }
         }
         EntryCommand::Totp { id } => {
             print_rpc(
@@ -1690,6 +2416,25 @@ async fn handle_rpc(service: &KeyLeaseService, request: RpcRequest) -> Result<Va
             )?)
             .map_err(|_| KeyLeaseError::Storage)
         }
+        RpcRequest::GroupsReorder {
+            auth,
+            parent_id,
+            ordered_ids,
+            expected_revisions,
+            idempotency_key,
+            dry_run,
+        } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.reorder_groups_authorized(
+                &actor,
+                parent_id,
+                &ordered_ids,
+                &expected_revisions,
+                &idempotency_key,
+                dry_run,
+            )?)
+            .map_err(|_| KeyLeaseError::Storage)
+        }
         RpcRequest::GroupsDelete {
             auth,
             id,
@@ -1701,6 +2446,143 @@ async fn handle_rpc(service: &KeyLeaseService, request: RpcRequest) -> Result<Va
             service.delete_group_authorized(&actor, &id, if_revision, &idempotency_key, dry_run)?;
             Ok(json!({"deleted":id}))
         }
+        RpcRequest::TemplatesList { auth } => {
+            let _actor = actor(service, &auth)?;
+            serde_json::to_value(builtin_item_kinds()).map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::TemplatesGet { auth, kind } => {
+            let _actor = actor(service, &auth)?;
+            serde_json::to_value(
+                item_kind(&kind).ok_or(KeyLeaseError::NotFound { resource: kind })?,
+            )
+            .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::MigrationsStatus { auth } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.migration_status(&actor)?)
+                .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::MigrationsPreview { auth, migration_id } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.preview_migration(&actor, &migration_id)?)
+                .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::MigrationsApply {
+            auth,
+            migration_id,
+            preview_digest,
+        } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.apply_migration(&actor, &migration_id, &preview_digest)?)
+                .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::MigrationsRollback { auth, migration_id } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.rollback_migration(&actor, &migration_id)?)
+                .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::ProjectsList { auth } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.list_projects_agent(&actor)?)
+                .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::ProjectsCreate {
+            auth,
+            slug,
+            name,
+            idempotency_key,
+        } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.create_project_agent(
+                &actor,
+                &slug,
+                name.as_deref(),
+                &idempotency_key,
+            )?)
+            .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::ContentSearch {
+            auth,
+            query,
+            kind,
+            tag,
+            project_slug,
+            reviewed_only,
+        } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.search_content(
+                &actor,
+                &query,
+                kind.as_deref(),
+                tag.as_deref(),
+                project_slug.as_deref(),
+                reviewed_only,
+            )?)
+            .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::ContentGet { auth, id } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.get_content(&actor, &id)?)
+                .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::ContentCreate {
+            auth,
+            input,
+            idempotency_key,
+        } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.create_content(&actor, input, &idempotency_key)?)
+                .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::ContentUpdate {
+            auth,
+            id,
+            patch,
+            if_revision,
+            idempotency_key,
+        } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.update_content(
+                &actor,
+                &id,
+                patch,
+                if_revision,
+                &idempotency_key,
+            )?)
+            .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::ContentSetAccess {
+            auth,
+            id,
+            access,
+            if_revision,
+            idempotency_key,
+        } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.set_content_access(
+                &actor,
+                &id,
+                access,
+                if_revision,
+                &idempotency_key,
+            )?)
+            .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::ContentReview {
+            auth,
+            id,
+            if_revision,
+            idempotency_key,
+        } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.review_content(
+                &actor,
+                &id,
+                if_revision,
+                &idempotency_key,
+            )?)
+            .map_err(|_| KeyLeaseError::Storage)
+        }
         RpcRequest::EntriesSearch { auth, query } => {
             let actor = actor(service, &auth)?;
             serde_json::to_value(service.search_entries(&actor, &query)?)
@@ -1709,6 +2591,11 @@ async fn handle_rpc(service: &KeyLeaseService, request: RpcRequest) -> Result<Va
         RpcRequest::EntriesGet { auth, id } => {
             let actor = actor(service, &auth)?;
             serde_json::to_value(service.get_entry_metadata(&actor, &id)?)
+                .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::EntriesView { auth, id } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.get_entry_view(&actor, &id)?)
                 .map_err(|_| KeyLeaseError::Storage)
         }
         RpcRequest::EntriesCreate {
@@ -1759,6 +2646,14 @@ async fn handle_rpc(service: &KeyLeaseService, request: RpcRequest) -> Result<Va
                 "value":service.reveal_field_authorized(&actor, &id, &field)?,
             }))
         }
+        RpcRequest::EntriesRevealById { auth, id, field_id } => {
+            let actor = actor(service, &auth)?;
+            Ok(json!({
+                "item_id":id,
+                "field_id":field_id,
+                "value":service.reveal_field_by_id_authorized(&actor, &id, &field_id)?,
+            }))
+        }
         RpcRequest::EntriesTotp { auth, id } => {
             let actor = actor(service, &auth)?;
             let (code, expires_in) = service.totp_authorized(&actor, &id)?;
@@ -1769,9 +2664,17 @@ async fn handle_rpc(service: &KeyLeaseService, request: RpcRequest) -> Result<Va
             serde_json::to_value(service.entry_history_authorized(&actor, &id)?)
                 .map_err(|_| KeyLeaseError::Storage)
         }
-        RpcRequest::GeneratePassword { auth, length } => {
+        RpcRequest::GeneratePassword {
+            auth,
+            length,
+            recipe,
+        } => {
             actor(service, &auth)?;
-            Ok(json!({"password":keylease_service::generate_password(length)?}))
+            let password = match recipe {
+                Some(recipe) => keylease_service::generate_password_with_recipe(&recipe)?,
+                None => keylease_service::generate_password(length)?,
+            };
+            Ok(json!({"password":password}))
         }
         RpcRequest::ConnectionsList { auth } => {
             let actor = actor(service, &auth)?;
@@ -2036,6 +2939,10 @@ fn read_json<T: serde::de::DeserializeOwned>(source: &str) -> Result<T> {
     })
 }
 async fn print_rpc(socket: &Path, request: RpcRequest) -> Result<()> {
+    print_json(&rpc(socket, request).await?)
+}
+
+async fn rpc(socket: &Path, request: RpcRequest) -> Result<Value> {
     let mut stream = UnixStream::connect(socket)
         .await
         .map_err(|_| KeyLeaseError::ConnectorUnavailable { retryable: true })?;
@@ -2059,12 +2966,7 @@ async fn print_rpc(socket: &Path, request: RpcRequest) -> Result<()> {
     }
     let response: Value = serde_json::from_str(&line).map_err(|_| KeyLeaseError::Storage)?;
     if response.get("ok").and_then(Value::as_bool) == Some(true) {
-        let result = response.get("result").cloned().unwrap_or(Value::Null);
-        println!(
-            "{}",
-            serde_json::to_string(&result).map_err(|_| KeyLeaseError::Storage)?
-        );
-        Ok(())
+        Ok(response.get("result").cloned().unwrap_or(Value::Null))
     } else {
         let error = response
             .get("error")
@@ -2112,12 +3014,12 @@ fn default_socket() -> PathBuf {
 }
 fn default_database() -> PathBuf {
     managed_home()
-        .map(|home| home.join("keylease.sqlite"))
+        .and_then(|home| desktop_paths(Some(home)).ok().map(|paths| paths.database))
         .unwrap_or_else(|| PathBuf::from("keylease.sqlite"))
 }
 fn default_client_token() -> PathBuf {
     managed_home()
-        .map(|home| home.join("desktop.token"))
+        .and_then(|home| desktop_paths(Some(home)).ok().map(|paths| paths.token))
         .unwrap_or_else(|| PathBuf::from("desktop.token"))
 }
 fn managed_home() -> Option<PathBuf> {
@@ -2415,5 +3317,36 @@ mod tests {
             .unlock(b"desktop password", Duration::hours(1))
             .unwrap();
         assert_eq!(service.list_groups().unwrap()[0].name, "Personal");
+    }
+
+    #[test]
+    fn desktop_registry_preserves_primary_and_resolves_the_active_profile() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join(".keylease");
+        fs::create_dir_all(root.join("vaults/team")).unwrap();
+        let registry = DesktopVaultRegistry {
+            version: 1,
+            active_id: "team".into(),
+            profiles: vec![
+                initial_registry().profiles.remove(0),
+                DesktopVaultProfile {
+                    id: "team".into(),
+                    name: "Team".into(),
+                    path: "vaults/team".into(),
+                },
+            ],
+        };
+        save_registry(&root, &registry).unwrap();
+        let paths = desktop_paths(Some(root.clone())).unwrap();
+        assert_eq!(paths.database, root.join("vaults/team/keylease.sqlite"));
+        assert_eq!(paths.socket, root.join("run/keylease.sock"));
+        assert_eq!(
+            fs::metadata(registry_path(&root))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
     }
 }

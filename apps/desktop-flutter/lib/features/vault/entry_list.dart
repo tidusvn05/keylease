@@ -3,14 +3,17 @@ import 'package:forui/forui.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../app/shortcuts.dart';
+import '../../app/app_scope.dart';
 
 import '../../core/models/models.dart';
 import '../../core/state/vault_controller.dart';
 import '../../ui/components/entry_row.dart';
 import '../../ui/components/message_banner.dart';
+import '../../ui/components/scroll_area.dart';
 import '../../ui/components/secret_field.dart';
 import '../../ui/components/state_screen.dart';
 import '../../ui/tokens/keylease_tokens.dart';
+import 'entry_editor.dart';
 
 /// Search + result list. Loading is shown inside the list area only, so the
 /// search field stays usable while a query is in flight.
@@ -19,6 +22,7 @@ class EntryList extends StatelessWidget {
     required this.controller,
     required this.onActivate,
     required this.onCreate,
+    required this.onGeneratePassword,
     required this.onRefresh,
     required this.refreshing,
     this.openOnSelect = false,
@@ -28,6 +32,7 @@ class EntryList extends StatelessWidget {
   final VaultController controller;
   final ValueChanged<String> onActivate;
   final VoidCallback onCreate;
+  final VoidCallback onGeneratePassword;
   final VoidCallback onRefresh;
   final bool refreshing;
 
@@ -129,6 +134,12 @@ class EntryList extends StatelessWidget {
                 ),
                 const SizedBox(width: 4),
                 IconAction(
+                  label: 'Password generator',
+                  icon: FLucideIcons.sparkles,
+                  onPress: onGeneratePassword,
+                ),
+                const SizedBox(width: 4),
+                IconAction(
                   label: 'New item',
                   icon: FLucideIcons.plus,
                   onPress: onCreate,
@@ -173,7 +184,7 @@ class EntryList extends StatelessWidget {
             FButton(onPress: onCreate, child: const Text('New item')),
           ],
         ),
-        _ => ListView.builder(
+        _ => KeyLeaseScrollArea.builder(
           padding: const EdgeInsets.only(bottom: 12),
           itemCount: controller.visibleEntries.length,
           itemBuilder: (context, index) {
@@ -181,7 +192,9 @@ class EntryList extends StatelessWidget {
             return EntryRow(
               entry: entry,
               selected: controller.selectedEntry?.id == entry.id,
-              onSelect: () {
+              onSelect: () async {
+                final app = AppScope.of(context);
+                if (!await confirmCloseEntryEditor(context, app)) return;
                 controller.select(entry.id);
                 if (openOnSelect) onActivate(entry.id);
               },

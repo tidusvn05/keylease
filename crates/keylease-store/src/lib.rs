@@ -4,8 +4,8 @@ use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
 use chrono::{DateTime, Utc};
 use keylease_core::{
     AccessLease, AccountId, AgentId, ApprovalRecord, ApprovalState, AuditEvent, ConnectionId,
-    ConnectionRecord, DataBudget, DataUsage, GroupId, ItemId, KeyLeaseError, PolicyRule, Result,
-    VaultGroup, VaultId, VaultItem,
+    ConnectionRecord, DataBudget, DataUsage, GroupId, ItemId, KeyLeaseError, PolicyRule, ProjectId,
+    Result, VaultGroup, VaultId, VaultItem, VaultProject,
 };
 use keylease_crypto::{
     EncryptedItem, PasswordSlot, SecretKey, WrappedKey, create_password_slot, decrypt_item,
@@ -56,6 +56,17 @@ pub struct MutationContext<'a> {
     pub audit_event: Option<&'a AuditEvent>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MigrationRecord {
+    pub migration_id: String,
+    pub version: u32,
+    pub state: String,
+    pub preview_digest: String,
+    pub item_count: u64,
+    pub applied_at: DateTime<Utc>,
+    pub rolled_back_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct TaskBudgetContext {
     pub task_id: String,
@@ -87,6 +98,8 @@ pub struct NativeBackup {
     pub wrapped_vault_key: String,
     pub items: Vec<BackupObject>,
     pub groups: Vec<BackupObject>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<BackupObject>,
     pub history: Vec<BackupHistory>,
     pub tombstones: Vec<BackupObject>,
     pub connections: Vec<String>,
@@ -216,6 +229,7 @@ impl NativeStore {
     pub fn export_native_backup(&self, unlocked: &UnlockedVault) -> Result<Vec<u8>> {
         let _ = self.list_items(unlocked)?;
         let _ = self.list_groups(unlocked)?;
+        let _ = self.list_projects(unlocked)?;
         let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
         let (account_id, vault_id, password_slot, wrapped_vault_key): (String, String, String, String) = connection
             .query_row("SELECT account_id,vault_id,password_slot,wrapped_vault_key FROM vault_meta LIMIT 1", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
@@ -224,6 +238,10 @@ impl NativeStore {
             read_backup_objects(&connection, "SELECT item_id,revision,envelope FROM items")?;
         let groups =
             read_backup_objects(&connection, "SELECT group_id,revision,envelope FROM groups")?;
+        let projects = read_backup_objects(
+            &connection,
+            "SELECT project_id,revision,envelope FROM projects",
+        )?;
         let tombstones = read_backup_objects(
             &connection,
             "SELECT item_id,revision,envelope FROM tombstones",
@@ -253,7 +271,7 @@ impl NativeStore {
             .collect::<Result<Vec<_>>>()?;
         let mut backup = NativeBackup {
             format: "keylease-native-backup".into(),
-            format_version: 2,
+            format_version: 3,
             created_at: Utc::now(),
             account_id,
             vault_id,
@@ -261,6 +279,7 @@ impl NativeStore {
             wrapped_vault_key,
             items,
             groups,
+            projects,
             history,
             tombstones,
             connections,
@@ -275,7 +294,7 @@ impl NativeStore {
             serde_json::from_slice(bytes).map_err(|_| KeyLeaseError::InvalidRequest {
                 reason: "invalid native backup".into(),
             })?;
-        if backup.format != "keylease-native-backup" || backup.format_version != 2 {
+        if backup.format != "keylease-native-backup" || !matches!(backup.format_version, 2 | 3) {
             return Err(KeyLeaseError::UnsupportedVersion {
                 version: backup.format_version,
             });
@@ -304,6 +323,9 @@ impl NativeStore {
             validate_backup_tombstone(object, &vault_key)?;
         }
         for object in &backup.groups {
+            validate_backup_envelope(object, &vault_key)?;
+        }
+        for object in &backup.projects {
             validate_backup_envelope(object, &vault_key)?;
         }
         for object in &backup.history {
@@ -337,6 +359,13 @@ impl NativeStore {
             tx.execute(
                 "INSERT INTO groups(group_id,revision,envelope) VALUES(?1,?2,?3)",
                 params![object.id, object.revision, object.envelope],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        }
+        for object in backup.projects {
+            tx.execute(
+                "INSERT INTO projects(project_id,revision,envelope,updated_at) VALUES(?1,?2,?3,?4)",
+                params![object.id, object.revision, object.envelope, restored_at],
             )
             .map_err(|_| KeyLeaseError::Storage)?;
         }
@@ -587,6 +616,247 @@ impl NativeStore {
         .collect()
     }
 
+    pub fn list_migration_records(&self) -> Result<Vec<MigrationRecord>> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let mut statement = connection
+            .prepare("SELECT migration_id,version,state,preview_digest,item_count,applied_at,rolled_back_at FROM migration_runs ORDER BY applied_at DESC")
+            .map_err(|_| KeyLeaseError::Storage)?;
+        statement
+            .query_map([], |row| {
+                let applied_at: String = row.get(5)?;
+                let rolled_back_at: Option<String> = row.get(6)?;
+                Ok(MigrationRecord {
+                    migration_id: row.get(0)?,
+                    version: row.get(1)?,
+                    state: row.get(2)?,
+                    preview_digest: row.get(3)?,
+                    item_count: row.get(4)?,
+                    applied_at: DateTime::parse_from_rfc3339(&applied_at)
+                        .map(|value| value.with_timezone(&Utc))
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    rolled_back_at: rolled_back_at
+                        .map(|value| {
+                            DateTime::parse_from_rfc3339(&value)
+                                .map(|parsed| parsed.with_timezone(&Utc))
+                                .map_err(|_| rusqlite::Error::InvalidQuery)
+                        })
+                        .transpose()?,
+                })
+            })
+            .map_err(|_| KeyLeaseError::Storage)?
+            .map(|row| row.map_err(|_| KeyLeaseError::Storage))
+            .collect()
+    }
+
+    pub fn apply_item_migration(
+        &self,
+        unlocked: &UnlockedVault,
+        migration_id: &str,
+        version: u32,
+        preview_digest: &str,
+        items: &[VaultItem],
+        audit_event: &AuditEvent,
+    ) -> Result<u64> {
+        let mut encrypted = Vec::with_capacity(items.len());
+        for item in items {
+            if item.vault_id != unlocked.vault_id || item.revision < 2 {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "migration items must belong to the open vault and advance a revision"
+                        .into(),
+                });
+            }
+            let plaintext =
+                Zeroizing::new(serde_json::to_vec(item).map_err(|_| KeyLeaseError::Storage)?);
+            encrypted.push((
+                item,
+                json(&encrypt_item(
+                    &unlocked.account_id,
+                    &unlocked.vault_id,
+                    &item.id,
+                    item.revision,
+                    item.schema_version,
+                    &unlocked.vault_key,
+                    &plaintext,
+                )?)?,
+            ));
+        }
+        let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let existing: Option<(String, String, u64)> = transaction
+            .query_row(
+                "SELECT state,preview_digest,item_count FROM migration_runs WHERE migration_id=?1",
+                [migration_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(|_| KeyLeaseError::Storage)?;
+        if let Some((state, digest, count)) = existing {
+            return if state == "applied" && digest == preview_digest {
+                Ok(count)
+            } else {
+                Err(KeyLeaseError::IdempotencyConflict)
+            };
+        }
+        for (item, envelope) in encrypted {
+            let (actual, old_envelope): (u64, String) = transaction
+                .query_row(
+                    "SELECT revision,envelope FROM items WHERE item_id=?1",
+                    [&item.id.0],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(|_| KeyLeaseError::NotFound {
+                    resource: item.id.0.clone(),
+                })?;
+            let expected = item.revision - 1;
+            if actual != expected {
+                return Err(KeyLeaseError::RevisionConflict {
+                    expected,
+                    actual,
+                    retryable: false,
+                });
+            }
+            transaction
+                .execute(
+                    "INSERT INTO migration_checkpoints(migration_id,item_id,original_revision,applied_revision,envelope) VALUES(?1,?2,?3,?4,?5)",
+                    params![migration_id, item.id.0, actual, item.revision, old_envelope],
+                )
+                .map_err(|_| KeyLeaseError::Storage)?;
+            transaction
+                .execute(
+                    "INSERT INTO item_history(item_id,revision,envelope,created_at) VALUES(?1,?2,?3,?4)",
+                    params![item.id.0, actual, old_envelope, Utc::now().to_rfc3339()],
+                )
+                .map_err(|_| KeyLeaseError::Storage)?;
+            transaction
+                .execute(
+                    "UPDATE items SET revision=?1,envelope=?2,updated_at=?3 WHERE item_id=?4",
+                    params![item.revision, envelope, Utc::now().to_rfc3339(), item.id.0],
+                )
+                .map_err(|_| KeyLeaseError::Storage)?;
+        }
+        let now = Utc::now();
+        transaction
+            .execute(
+                "INSERT INTO migration_runs(migration_id,version,state,preview_digest,item_count,applied_at,rolled_back_at) VALUES(?1,?2,'applied',?3,?4,?5,NULL)",
+                params![migration_id, version, preview_digest, items.len() as u64, now.to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        transaction
+            .execute(
+                "INSERT INTO audit_events(timestamp,event_json) VALUES(?1,?2)",
+                params![audit_event.timestamp.to_rfc3339(), json(audit_event)?],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        transaction.commit().map_err(|_| KeyLeaseError::Storage)?;
+        Ok(items.len() as u64)
+    }
+
+    pub fn rollback_item_migration(
+        &self,
+        unlocked: &UnlockedVault,
+        migration_id: &str,
+        audit_event: &AuditEvent,
+    ) -> Result<u64> {
+        let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let state: String = transaction
+            .query_row(
+                "SELECT state FROM migration_runs WHERE migration_id=?1",
+                [migration_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| KeyLeaseError::NotFound {
+                resource: migration_id.into(),
+            })?;
+        if state != "applied" {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "only an applied migration can be rolled back".into(),
+            });
+        }
+        let checkpoints = {
+            let mut statement = transaction
+                .prepare("SELECT item_id,original_revision,applied_revision,envelope FROM migration_checkpoints WHERE migration_id=?1 ORDER BY item_id")
+                .map_err(|_| KeyLeaseError::Storage)?;
+            statement
+                .query_map([migration_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, u64>(1)?,
+                        row.get::<_, u64>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })
+                .map_err(|_| KeyLeaseError::Storage)?
+                .map(|row| row.map_err(|_| KeyLeaseError::Storage))
+                .collect::<Result<Vec<_>>>()?
+        };
+        for (item_id, _original_revision, applied_revision, old_envelope) in &checkpoints {
+            let (actual, current_envelope): (u64, String) = transaction
+                .query_row(
+                    "SELECT revision,envelope FROM items WHERE item_id=?1",
+                    [item_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(|_| KeyLeaseError::Storage)?;
+            if actual != *applied_revision {
+                return Err(KeyLeaseError::RevisionConflict {
+                    expected: *applied_revision,
+                    actual,
+                    retryable: false,
+                });
+            }
+            let mut original = decrypt_stored_item(&unlocked.vault_key, old_envelope)?;
+            original.revision = actual + 1;
+            original.updated_at = Utc::now();
+            let plaintext =
+                Zeroizing::new(serde_json::to_vec(&original).map_err(|_| KeyLeaseError::Storage)?);
+            let restored_envelope = json(&encrypt_item(
+                &unlocked.account_id,
+                &unlocked.vault_id,
+                &original.id,
+                original.revision,
+                original.schema_version,
+                &unlocked.vault_key,
+                &plaintext,
+            )?)?;
+            transaction
+                .execute(
+                    "INSERT INTO item_history(item_id,revision,envelope,created_at) VALUES(?1,?2,?3,?4)",
+                    params![item_id, actual, current_envelope, Utc::now().to_rfc3339()],
+                )
+                .map_err(|_| KeyLeaseError::Storage)?;
+            transaction
+                .execute(
+                    "UPDATE items SET revision=?1,envelope=?2,updated_at=?3 WHERE item_id=?4",
+                    params![
+                        original.revision,
+                        restored_envelope,
+                        original.updated_at.to_rfc3339(),
+                        item_id
+                    ],
+                )
+                .map_err(|_| KeyLeaseError::Storage)?;
+        }
+        transaction
+            .execute(
+                "UPDATE migration_runs SET state='rolled_back',rolled_back_at=?1 WHERE migration_id=?2",
+                params![Utc::now().to_rfc3339(), migration_id],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        transaction
+            .execute(
+                "INSERT INTO audit_events(timestamp,event_json) VALUES(?1,?2)",
+                params![audit_event.timestamp.to_rfc3339(), json(audit_event)?],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        transaction.commit().map_err(|_| KeyLeaseError::Storage)?;
+        Ok(checkpoints.len() as u64)
+    }
+
     pub fn put_group(
         &self,
         unlocked: &UnlockedVault,
@@ -700,6 +970,137 @@ impl NativeStore {
             .map_err(|_| KeyLeaseError::Storage)?;
         let rows = statement
             .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|_| KeyLeaseError::Storage)?;
+        rows.map(|row| {
+            let envelope: EncryptedItem = from_json(&row.map_err(|_| KeyLeaseError::Storage)?)?;
+            let bytes = Zeroizing::new(decrypt_item(&envelope, &unlocked.vault_key)?);
+            serde_json::from_slice(&bytes).map_err(|_| KeyLeaseError::Crypto)
+        })
+        .collect()
+    }
+
+    pub fn put_project(
+        &self,
+        unlocked: &UnlockedVault,
+        project: &VaultProject,
+        expected_revision: Option<u64>,
+        context: MutationContext<'_>,
+    ) -> Result<u64> {
+        if project.vault_id != unlocked.vault_id {
+            return Err(KeyLeaseError::Denied {
+                reason: "project belongs to another vault".into(),
+            });
+        }
+        let object_id = ItemId(project.id.0.replacen("project_", "projectitem_", 1));
+        let plaintext =
+            Zeroizing::new(serde_json::to_vec(project).map_err(|_| KeyLeaseError::Storage)?);
+        let envelope = encrypt_item(
+            &unlocked.account_id,
+            &unlocked.vault_id,
+            &object_id,
+            project.revision,
+            1,
+            &unlocked.vault_key,
+            &plaintext,
+        )?;
+        let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let request_digest = hex_digest(&keyed_digest(
+            &unlocked.vault_key,
+            "keylease-mutation-journal-v1",
+            context.request_material,
+        ));
+        if let Some((previous_digest, result_revision)) = tx
+            .query_row(
+                "SELECT request_digest,result_revision FROM mutation_journal WHERE idempotency_key=?1",
+                [context.idempotency_key],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)),
+            )
+            .optional()
+            .map_err(|_| KeyLeaseError::Storage)?
+        {
+            return if previous_digest == request_digest {
+                Ok(result_revision)
+            } else {
+                Err(KeyLeaseError::IdempotencyConflict)
+            };
+        }
+        let current: Option<(u64, String)> = tx
+            .query_row(
+                "SELECT revision,envelope FROM projects WHERE project_id=?1",
+                [&project.id.0],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let actual = current.as_ref().map_or(0, |value| value.0);
+        if expected_revision.is_some_and(|expected| expected != actual) {
+            return Err(KeyLeaseError::RevisionConflict {
+                expected: expected_revision.unwrap_or(0),
+                actual,
+                retryable: false,
+            });
+        }
+        if project.revision != actual + 1 {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: format!("project revision must be {}", actual + 1),
+            });
+        }
+        if let Some((revision, old_envelope)) = current {
+            tx.execute(
+                "INSERT INTO project_history(project_id,revision,envelope,created_at) VALUES(?1,?2,?3,?4)",
+                params![project.id.0, revision, old_envelope, Utc::now().to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        }
+        tx.execute(
+            "INSERT INTO projects(project_id,revision,envelope,updated_at) VALUES(?1,?2,?3,?4) ON CONFLICT(project_id) DO UPDATE SET revision=excluded.revision,envelope=excluded.envelope,updated_at=excluded.updated_at",
+            params![project.id.0, project.revision, json(&envelope)?, Utc::now().to_rfc3339()],
+        )
+        .map_err(|_| KeyLeaseError::Storage)?;
+        tx.execute(
+            "INSERT INTO mutation_journal(idempotency_key,request_digest,actor,item_id,base_revision,result_revision,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            params![context.idempotency_key, request_digest, context.actor, project.id.0, actual, project.revision, Utc::now().to_rfc3339()],
+        )
+        .map_err(|_| KeyLeaseError::Storage)?;
+        if let Some(event) = context.audit_event {
+            tx.execute(
+                "INSERT INTO audit_events(timestamp,event_json) VALUES(?1,?2)",
+                params![event.timestamp.to_rfc3339(), json(event)?],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        }
+        tx.commit().map_err(|_| KeyLeaseError::Storage)?;
+        Ok(project.revision)
+    }
+
+    pub fn get_project(&self, unlocked: &UnlockedVault, id: &ProjectId) -> Result<VaultProject> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let envelope: String = connection
+            .query_row(
+                "SELECT envelope FROM projects WHERE project_id=?1",
+                [&id.0],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| KeyLeaseError::Storage)?
+            .ok_or_else(|| KeyLeaseError::NotFound {
+                resource: id.0.clone(),
+            })?;
+        let envelope: EncryptedItem = from_json(&envelope)?;
+        let bytes = Zeroizing::new(decrypt_item(&envelope, &unlocked.vault_key)?);
+        serde_json::from_slice(&bytes).map_err(|_| KeyLeaseError::Crypto)
+    }
+
+    pub fn list_projects(&self, unlocked: &UnlockedVault) -> Result<Vec<VaultProject>> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let mut statement = connection
+            .prepare("SELECT envelope FROM projects ORDER BY updated_at DESC")
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
             .map_err(|_| KeyLeaseError::Storage)?;
         rows.map(|row| {
             let envelope: EncryptedItem = from_json(&row.map_err(|_| KeyLeaseError::Storage)?)?;
@@ -1383,6 +1784,17 @@ impl NativeStore {
         Ok(())
     }
 
+    pub fn kill_switch_enabled(&self) -> Result<bool> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .query_row(
+                "SELECT COALESCE((SELECT value FROM runtime_flags WHERE name='kill_switch'),0)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|_| KeyLeaseError::Storage)
+    }
+
     /// Atomically reserves a lease use and an idempotency key before connector dispatch.
     pub fn consume_lease(
         &self,
@@ -1708,7 +2120,11 @@ fn native_backup_mac(backup: &NativeBackup, vault_key: &SecretKey) -> Result<Str
     let material = serde_json::to_vec(&authenticated).map_err(|_| KeyLeaseError::Storage)?;
     Ok(hex_digest(&keyed_digest(
         vault_key,
-        "keylease-native-backup-v2",
+        if backup.format_version == 2 {
+            "keylease-native-backup-v2"
+        } else {
+            "keylease-native-backup-v3"
+        },
         &material,
     )))
 }
@@ -1784,6 +2200,8 @@ const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS vault_meta(account_id TEXT PRIMARY KEY,vault_id TEXT NOT NULL,password_slot TEXT NOT NULL,wrapped_vault_key TEXT NOT NULL,schema_version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS items(item_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,envelope TEXT NOT NULL,updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS groups(group_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,envelope TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS projects(project_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,envelope TEXT NOT NULL,updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS project_history(project_id TEXT NOT NULL,revision INTEGER NOT NULL,envelope TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(project_id,revision));
 CREATE TABLE IF NOT EXISTS item_history(item_id TEXT NOT NULL,revision INTEGER NOT NULL,envelope TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(item_id,revision));
 CREATE TABLE IF NOT EXISTS tombstones(item_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,envelope TEXT NOT NULL,deleted_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS mutation_journal(idempotency_key TEXT PRIMARY KEY,request_digest TEXT NOT NULL,actor TEXT NOT NULL,item_id TEXT NOT NULL,base_revision INTEGER NOT NULL,result_revision INTEGER NOT NULL,created_at TEXT NOT NULL);
@@ -1794,6 +2212,8 @@ CREATE TABLE IF NOT EXISTS execution_journal(idempotency_key TEXT PRIMARY KEY,re
 CREATE TABLE IF NOT EXISTS execution_failures(idempotency_key TEXT PRIMARY KEY,record_json TEXT NOT NULL,reconciliation_required INTEGER NOT NULL,created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS task_budget_usage(task_id TEXT NOT NULL,connection_id TEXT NOT NULL,policy_version INTEGER NOT NULL,requests INTEGER NOT NULL,items INTEGER NOT NULL,cells INTEGER NOT NULL,response_bytes INTEGER NOT NULL,rows_changed INTEGER NOT NULL,PRIMARY KEY(task_id,connection_id));
 CREATE TABLE IF NOT EXISTS runtime_flags(name TEXT PRIMARY KEY,value INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS migration_runs(migration_id TEXT PRIMARY KEY,version INTEGER NOT NULL,state TEXT NOT NULL,preview_digest TEXT NOT NULL,item_count INTEGER NOT NULL,applied_at TEXT NOT NULL,rolled_back_at TEXT);
+CREATE TABLE IF NOT EXISTS migration_checkpoints(migration_id TEXT NOT NULL,item_id TEXT NOT NULL,original_revision INTEGER NOT NULL,applied_revision INTEGER NOT NULL,envelope TEXT NOT NULL,PRIMARY KEY(migration_id,item_id));
 CREATE TABLE IF NOT EXISTS clients(agent_id TEXT PRIMARY KEY,token_hash TEXT NOT NULL,revoked INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS local_client_roles(agent_id TEXT PRIMARY KEY,role TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS policy_rules(rule_id TEXT PRIMARY KEY,record_json TEXT NOT NULL);
@@ -1818,8 +2238,13 @@ mod tests {
             fields: vec![],
             urls: vec![],
             tags: vec![],
+            favorite: false,
             attachments: vec![],
             notes: Some("plaintext marker".into()),
+            template_version: 1,
+            project_id: None,
+            agent_access: keylease_core::AgentAccess::None,
+            content_metadata: None,
             schema_version: 1,
             revision: 1,
             created_at: now,
@@ -2163,6 +2588,32 @@ mod tests {
                 },
             )
             .unwrap();
+        let now = Utc::now();
+        let project = VaultProject {
+            id: ProjectId::new(),
+            vault_id: unlocked.vault_id.clone(),
+            slug: "backup-project".into(),
+            name: "Backup Project".into(),
+            revision: 1,
+            created_by: AgentId("agent_backup".into()),
+            updated_by: AgentId("agent_backup".into()),
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+        };
+        source
+            .put_project(
+                &unlocked,
+                &project,
+                Some(0),
+                MutationContext {
+                    actor: "agent_backup",
+                    idempotency_key: "backup-project",
+                    request_material: b"backup-project-digest",
+                    audit_event: None,
+                },
+            )
+            .unwrap();
         let agent = AgentId("agent_backup".into());
         let token = source.register_client(&agent).unwrap();
         source
@@ -2198,6 +2649,10 @@ mod tests {
                 .notes
                 .as_deref(),
             Some("plaintext marker")
+        );
+        assert_eq!(
+            restored.get_project(&session, &project.id).unwrap(),
+            project
         );
         assert_eq!(
             restored
@@ -2297,6 +2752,8 @@ mod tests {
             vault_id: unlocked.vault_id.clone(),
             parent_id: None,
             name: "one".into(),
+            purpose: keylease_core::GroupPurpose::User,
+            sort_order: None,
             revision: 1,
             created_at: now,
             updated_at: now,

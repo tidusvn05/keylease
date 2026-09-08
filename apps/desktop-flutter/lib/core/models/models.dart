@@ -1,9 +1,7 @@
 /// Typed views over the local IPC payloads.
 ///
-/// Every field here exists in the daemon contract. Fields the prototype
-/// suggested but the contract does not carry (entry favourites, "recently
-/// used" ordering, a human display name for a client, and a free-text approval
-/// reason) are deliberately absent; see `docs/forui-migration-decisions.md`.
+/// Every field here exists in the daemon contract; UI-only guesses never enter
+/// these models.
 library;
 
 import 'package:flutter/foundation.dart';
@@ -48,6 +46,7 @@ class VaultGroup {
     required this.name,
     required this.revision,
     this.parentId,
+    this.sortOrder,
   });
 
   factory VaultGroup.fromJson(Map<String, dynamic> json) => VaultGroup(
@@ -55,12 +54,14 @@ class VaultGroup {
     name: _string<String>(json['name']) ?? 'Group',
     revision: (json['revision'] as num?)?.toInt() ?? 0,
     parentId: _string<String>(json['parent_id']),
+    sortOrder: (json['sort_order'] as num?)?.toInt(),
   );
 
   final String id;
   final String name;
   final int revision;
   final String? parentId;
+  final int? sortOrder;
 }
 
 /// `entries_search` / `entries_get` element. See `ItemMetadata`.
@@ -77,6 +78,7 @@ class EntrySummary {
     this.hasPassword = false,
     this.hasNotes = false,
     this.hasTotp = false,
+    this.favorite = false,
     this.updatedAt,
   });
 
@@ -91,6 +93,7 @@ class EntrySummary {
     hasPassword: json['has_password'] == true,
     hasNotes: json['has_notes'] == true,
     hasTotp: json['has_totp'] == true,
+    favorite: json['favorite'] == true,
     updatedAt: _time(json['updated_at']),
   );
 
@@ -104,6 +107,7 @@ class EntrySummary {
   final bool hasPassword;
   final bool hasNotes;
   final bool hasTotp;
+  final bool favorite;
   final DateTime? updatedAt;
 
   String? get primaryUrl => urls.isEmpty ? null : urls.first;
@@ -124,6 +128,312 @@ class EntrySummary {
     if (username != null && username!.isNotEmpty) username!,
     ...urls,
   ].join(' · ');
+}
+
+/// A field from `entries_view`. Protected values are intentionally absent
+/// until the user explicitly reveals or copies the field.
+@immutable
+class EntryFieldView {
+  const EntryFieldView({
+    required this.id,
+    required this.key,
+    required this.label,
+    required this.valueType,
+    required this.sensitivity,
+    required this.protected,
+    required this.hasValue,
+    this.semanticRole,
+    this.value,
+    this.displayHint,
+  });
+
+  factory EntryFieldView.fromJson(Map<String, dynamic> json) => EntryFieldView(
+    id: '${json['id']}',
+    key: _string<String>(json['key']) ?? '',
+    label:
+        _string<String>(json['label']) ??
+        _string<String>(json['key']) ??
+        'Field',
+    semanticRole: _string<String>(json['semantic_role']),
+    valueType: _string<String>(json['value_type']) ?? 'text',
+    sensitivity: _string<String>(json['sensitivity']) ?? 'private_metadata',
+    protected: json['protected'] == true,
+    hasValue: json['has_value'] == true,
+    value: json['value'],
+    displayHint: _string<String>(json['display_hint']),
+  );
+
+  final String id;
+  final String key;
+  final String label;
+  final String? semanticRole;
+  final String valueType;
+  final String sensitivity;
+  final bool protected;
+  final bool hasValue;
+  final Object? value;
+  final String? displayHint;
+
+  EntryFieldView withValue(Object? next) => EntryFieldView(
+    id: id,
+    key: key,
+    label: label,
+    semanticRole: semanticRole,
+    valueType: valueType,
+    sensitivity: sensitivity,
+    protected: protected,
+    hasValue: hasValue,
+    value: next,
+    displayHint: displayHint,
+  );
+
+  String get displayValue {
+    if (value == null) return displayHint ?? (hasValue ? 'Stored' : '');
+    final envelope = value;
+    if (envelope is! Map) return '$envelope';
+    final type = '${envelope['type']}';
+    final content = envelope['value'];
+    if (type == 'month_year' && content is Map) {
+      final month = (content['month'] as num?)?.toInt();
+      final year = (content['year'] as num?)?.toInt();
+      if (month != null && year != null) {
+        return '${month.toString().padLeft(2, '0')}/$year';
+      }
+    }
+    if (type == 'address' && content is Map) {
+      return content.values
+          .where((part) => part != null && '$part'.trim().isNotEmpty)
+          .map((part) => '$part')
+          .join(', ');
+    }
+    if (content is Map || content is List) return '$content';
+    return content?.toString() ?? '';
+  }
+}
+
+/// Full, field-oriented entry projection used by the detail pane.
+@immutable
+class EntryDetailView {
+  const EntryDetailView({
+    required this.metadata,
+    required this.templateVersion,
+    required this.tags,
+    required this.fields,
+    this.projectId,
+    this.hasNotes = false,
+  });
+
+  factory EntryDetailView.fromJson(Map<String, dynamic> json) =>
+      EntryDetailView(
+        metadata: EntrySummary.fromJson(
+          Map<String, dynamic>.from(json['metadata'] as Map),
+        ),
+        templateVersion: (json['template_version'] as num?)?.toInt() ?? 1,
+        projectId: _string<String>(json['project_id']),
+        tags: _strings(json['tags']),
+        fields: parseList(json['fields'], EntryFieldView.fromJson),
+        hasNotes: json['has_notes'] == true,
+      );
+
+  final EntrySummary metadata;
+  final int templateVersion;
+  final String? projectId;
+  final List<String> tags;
+  final List<EntryFieldView> fields;
+  final bool hasNotes;
+}
+
+@immutable
+class TemplateDefinition {
+  const TemplateDefinition({
+    required this.kind,
+    required this.label,
+    required this.family,
+    required this.markdownNotes,
+    required this.fields,
+  });
+
+  factory TemplateDefinition.fromJson(Map<String, dynamic> json) =>
+      TemplateDefinition(
+        kind: '${json['kind']}',
+        label: _string<String>(json['label']) ?? '${json['kind']}',
+        family: _string<String>(json['family']) ?? 'other',
+        markdownNotes: json['markdown_notes'] == true,
+        fields: parseList(json['fields'], TemplateFieldDefinition.fromJson),
+      );
+
+  final String kind;
+  final String label;
+  final String family;
+  final bool markdownNotes;
+  final List<TemplateFieldDefinition> fields;
+}
+
+@immutable
+class TemplateFieldDefinition {
+  const TemplateFieldDefinition({
+    required this.key,
+    required this.label,
+    required this.valueType,
+    required this.semanticRole,
+    required this.sensitivity,
+    required this.protected,
+    required this.section,
+  });
+
+  factory TemplateFieldDefinition.fromJson(Map<String, dynamic> json) =>
+      TemplateFieldDefinition(
+        key: '${json['key']}',
+        label: '${json['label']}',
+        valueType: _string<String>(json['value_type']) ?? 'text',
+        semanticRole:
+            _string<String>(json['semantic_role']) ?? '${json['key']}',
+        sensitivity: _string<String>(json['sensitivity']) ?? 'private_metadata',
+        protected: json['protected'] == true,
+        section: _string<String>(json['section']) ?? 'Details',
+      );
+
+  final String key;
+  final String label;
+  final String valueType;
+  final String semanticRole;
+  final String sensitivity;
+  final bool protected;
+  final String section;
+}
+
+@immutable
+class VaultProjectModel {
+  const VaultProjectModel({
+    required this.id,
+    required this.slug,
+    required this.name,
+  });
+
+  factory VaultProjectModel.fromJson(
+    Map<String, dynamic> json,
+  ) => VaultProjectModel(
+    id: '${json['id']}',
+    slug: _string<String>(json['slug']) ?? '',
+    name: _string<String>(json['name']) ?? _string<String>(json['slug']) ?? '',
+  );
+
+  final String id;
+  final String slug;
+  final String name;
+}
+
+@immutable
+class MigrationProposalModel {
+  const MigrationProposalModel({
+    required this.itemId,
+    required this.title,
+    required this.currentKind,
+    required this.proposedKind,
+    required this.confidence,
+    required this.reasons,
+    required this.expectedRevision,
+  });
+
+  factory MigrationProposalModel.fromJson(Map<String, dynamic> json) =>
+      MigrationProposalModel(
+        itemId: '${json['item_id']}',
+        title: _string<String>(json['title']) ?? 'Untitled',
+        currentKind: _string<String>(json['current_kind']) ?? 'core.generic',
+        proposedKind: _string<String>(json['proposed_kind']) ?? 'core.generic',
+        confidence: _string<String>(json['confidence']) ?? 'unknown',
+        reasons: _strings(json['reasons']),
+        expectedRevision: (json['expected_revision'] as num?)?.toInt() ?? 0,
+      );
+
+  final String itemId;
+  final String title;
+  final String currentKind;
+  final String proposedKind;
+  final String confidence;
+  final List<String> reasons;
+  final int expectedRevision;
+}
+
+@immutable
+class MigrationPreviewModel {
+  const MigrationPreviewModel({
+    required this.id,
+    required this.version,
+    required this.title,
+    required this.type,
+    required this.digest,
+    required this.proposals,
+  });
+
+  factory MigrationPreviewModel.fromJson(Map<String, dynamic> json) =>
+      MigrationPreviewModel(
+        id: '${json['migration_id']}',
+        version: (json['version'] as num?)?.toInt() ?? 1,
+        title: _string<String>(json['title']) ?? '${json['migration_id']}',
+        type: _string<String>(json['migration_type']) ?? 'semantic',
+        digest: _string<String>(json['preview_digest']) ?? '',
+        proposals: parseList(
+          json['proposals'],
+          MigrationProposalModel.fromJson,
+        ),
+      );
+
+  final String id;
+  final int version;
+  final String title;
+  final String type;
+  final String digest;
+  final List<MigrationProposalModel> proposals;
+}
+
+@immutable
+class MigrationStatusModel {
+  const MigrationStatusModel({
+    required this.frameworkVersion,
+    required this.pending,
+    required this.history,
+  });
+
+  factory MigrationStatusModel.fromJson(Map<String, dynamic> json) =>
+      MigrationStatusModel(
+        frameworkVersion: (json['framework_version'] as num?)?.toInt() ?? 1,
+        pending: parseList(json['pending'], MigrationPreviewModel.fromJson),
+        history: parseList(json['history'], MigrationHistoryModel.fromJson),
+      );
+
+  final int frameworkVersion;
+  final List<MigrationPreviewModel> pending;
+  final List<MigrationHistoryModel> history;
+}
+
+@immutable
+class MigrationHistoryModel {
+  const MigrationHistoryModel({
+    required this.id,
+    required this.version,
+    required this.state,
+    required this.itemCount,
+    this.appliedAt,
+    this.rolledBackAt,
+  });
+
+  factory MigrationHistoryModel.fromJson(Map<String, dynamic> json) =>
+      MigrationHistoryModel(
+        id: '${json['migration_id']}',
+        version: (json['version'] as num?)?.toInt() ?? 1,
+        state: _string<String>(json['state']) ?? 'unknown',
+        itemCount: (json['item_count'] as num?)?.toInt() ?? 0,
+        appliedAt: _time(json['applied_at']),
+        rolledBackAt: _time(json['rolled_back_at']),
+      );
+
+  final String id;
+  final int version;
+  final String state;
+  final int itemCount;
+  final DateTime? appliedAt;
+  final DateTime? rolledBackAt;
 }
 
 /// `connections_list` element. See `ConnectionRecord`.

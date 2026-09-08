@@ -1,6 +1,8 @@
 import Cocoa
 import FlutterMacOS
 import ServiceManagement
+import UniformTypeIdentifiers
+import Vision
 
 class MainFlutterWindow: NSWindow {
   private var observerTokens: [NSObjectProtocol] = []
@@ -150,6 +152,48 @@ class MainFlutterWindow: NSWindow {
         result(true)
         return
       }
+      if call.method == "scanTotpQrCode" {
+        let panel = NSOpenPanel()
+        panel.title = "Choose a TOTP QR code image"
+        panel.message = "KeyLease reads the QR code locally. The image is not uploaded."
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.image]
+        panel.beginSheetModal(for: self) { response in
+          guard response == .OK, let url = panel.url else {
+            result(nil)
+            return
+          }
+          guard let image = NSImage(contentsOf: url),
+                let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            result(FlutterError(code: "QR_IMAGE_INVALID", message: "The selected image could not be read.", details: nil))
+            return
+          }
+          DispatchQueue.global(qos: .userInitiated).async {
+            let request = VNDetectBarcodesRequest()
+            request.symbologies = [.qr]
+            do {
+              try VNImageRequestHandler(cgImage: cgImage, options: [:]).perform([request])
+              let payload = (request.results ?? [])
+                .compactMap { $0.payloadStringValue }
+                .first { $0.lowercased().hasPrefix("otpauth://totp/") }
+              DispatchQueue.main.async {
+                guard let payload else {
+                  result(FlutterError(code: "TOTP_QR_NOT_FOUND", message: "No TOTP QR code was found in this image.", details: nil))
+                  return
+                }
+                result(payload)
+              }
+            } catch {
+              DispatchQueue.main.async {
+                result(FlutterError(code: "QR_SCAN_FAILED", message: "The QR code could not be scanned.", details: String(describing: error)))
+              }
+            }
+          }
+        }
+        return
+      }
       guard call.method == "selectClientToken" else {
         result(FlutterMethodNotImplemented)
         return
@@ -239,6 +283,25 @@ private final class LocalRuntimeBridge {
           return result(FlutterError(code: "INVALID_REQUEST", message: "Invalid setup request", details: nil))
         }
         self.run(arguments: ["desktop", "provision"], input: data, result: result, returnValue: false)
+      case "listVaults":
+        self.run(arguments: ["desktop", "vaults-list"], input: nil, result: result)
+      case "createVault":
+        guard let values = call.arguments as? [String: Any],
+              let data = try? JSONSerialization.data(withJSONObject: values) else {
+          return result(FlutterError(code: "INVALID_REQUEST", message: "Invalid vault request", details: nil))
+        }
+        self.run(arguments: ["desktop", "vault-create"], input: data, result: result, returnValue: false)
+      case "switchVault":
+        guard let values = call.arguments as? [String: Any], let id = values["id"] as? String else {
+          return result(FlutterError(code: "INVALID_REQUEST", message: "Missing vault id", details: nil))
+        }
+        self.run(arguments: ["desktop", "vault-switch", id], input: nil, result: result, returnValue: false)
+      case "renameVault":
+        guard let values = call.arguments as? [String: Any],
+              let id = values["id"] as? String, let name = values["name"] as? String else {
+          return result(FlutterError(code: "INVALID_REQUEST", message: "Missing vault name", details: nil))
+        }
+        self.run(arguments: ["desktop", "vault-rename", id, name], input: nil, result: result, returnValue: false)
       case "ensureService": self.ensureService(restart: false, result: result)
       case "restartService": self.ensureService(restart: true, result: result)
       case "openLoginItemsSettings":

@@ -37,6 +37,10 @@ abstract class SecurityAdapter {
   /// Opens the security-scoped picker for the registered client token.
   Future<String?> selectClientToken();
 
+  /// Lets the host select an image and returns an otpauth TOTP URI decoded
+  /// from its QR code.
+  Future<String?> scanTotpQrCode();
+
   /// Opens the Google authorization URL in the user's browser.
   Future<bool> openGoogleAuthorization(String url);
 
@@ -129,6 +133,15 @@ class MethodChannelSecurityAdapter implements SecurityAdapter {
       return await channel.invokeMethod<String>('selectClientToken');
     } on MissingPluginException {
       throw const UnsupportedPlatformCapability('file picker');
+    }
+  }
+
+  @override
+  Future<String?> scanTotpQrCode() async {
+    try {
+      return await channel.invokeMethod<String>('scanTotpQrCode');
+    } on MissingPluginException {
+      throw const UnsupportedPlatformCapability('QR code scanner');
     }
   }
 

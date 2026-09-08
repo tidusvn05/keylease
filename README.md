@@ -113,6 +113,9 @@ KeyLease creates its managed vault and private runtime files under
 registered with macOS Login Items, so users do not configure sockets, client
 IDs, token files, or `PATH`. This desktop runtime requires macOS 13 or newer.
 
+Additional independent vaults can be created, imported, renamed, and switched
+from Settings > Vaults. See [`docs/multi-vault.md`](docs/multi-vault.md).
+
 After the desktop setup, the CLI automatically uses the managed runtime under
 `~/.keylease`:
 

@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     sync::{Arc, Mutex, RwLock},
     time::{Duration as StdDuration, Instant},
 };
@@ -134,6 +134,8 @@ pub struct NewEntryInput {
     pub kind: String,
     pub title: String,
     #[serde(default)]
+    pub favorite: bool,
+    #[serde(default)]
     pub username: Option<String>,
     #[serde(default)]
     pub password: Option<String>,
@@ -172,6 +174,155 @@ pub struct EntryPatch {
     pub totp: Option<TotpConfig>,
     pub totp_uri: Option<String>,
     pub custom_fields: Option<Vec<ItemField>>,
+    #[serde(default)]
+    pub field_updates: Vec<ItemField>,
+    pub favorite: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FieldView {
+    pub id: FieldId,
+    pub key: String,
+    pub label: String,
+    pub semantic_role: Option<String>,
+    pub value_type: String,
+    pub sensitivity: Sensitivity,
+    pub protected: bool,
+    pub has_value: bool,
+    pub value: Option<FieldValue>,
+    pub display_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EntryView {
+    pub metadata: ItemMetadata,
+    pub template_version: u32,
+    pub project_id: Option<ProjectId>,
+    pub tags: Vec<String>,
+    pub sections: Vec<ItemSection>,
+    pub fields: Vec<FieldView>,
+    pub attachments: Vec<String>,
+    pub has_notes: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ContentCreateInput {
+    pub kind: String,
+    pub title: String,
+    #[serde(default)]
+    pub favorite: bool,
+    pub body: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub project_slug: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ContentPatch {
+    pub title: Option<String>,
+    pub body: Option<String>,
+    pub tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub add_tags: Vec<String>,
+    #[serde(default)]
+    pub remove_tags: Vec<String>,
+    pub project_slug: Option<String>,
+    #[serde(default)]
+    pub clear_project: bool,
+    pub favorite: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ContentSummary {
+    pub id: ItemId,
+    pub reference: String,
+    pub kind: String,
+    pub title: String,
+    pub favorite: bool,
+    pub tags: Vec<String>,
+    pub project_id: Option<ProjectId>,
+    pub project_slug: Option<String>,
+    pub revision: u64,
+    pub agent_access: AgentAccess,
+    pub content_metadata: ContentMetadata,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ContentDocument {
+    pub summary: ContentSummary,
+    pub body: String,
+}
+
+pub const MIGRATION_FRAMEWORK_VERSION: u32 = 1;
+pub const KDBX_RECLASSIFY_MIGRATION_ID: &str = "kdbx-reclassify-v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MigrationProposal {
+    pub item_id: ItemId,
+    pub title: String,
+    pub current_kind: String,
+    pub proposed_kind: String,
+    pub confidence: String,
+    pub reasons: Vec<String>,
+    pub expected_revision: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MigrationPreview {
+    pub migration_id: String,
+    pub version: u32,
+    pub title: String,
+    pub migration_type: String,
+    pub preview_digest: String,
+    pub proposals: Vec<MigrationProposal>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MigrationHistoryEntry {
+    pub migration_id: String,
+    pub version: u32,
+    pub state: String,
+    pub item_count: u64,
+    pub applied_at: DateTime<Utc>,
+    pub rolled_back_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MigrationStatus {
+    pub framework_version: u32,
+    pub pending: Vec<MigrationPreview>,
+    pub history: Vec<MigrationHistoryEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MigrationApplyResult {
+    pub migration_id: String,
+    pub state: String,
+    pub item_count: u64,
+    pub checkpoint_available: bool,
+}
+
+impl std::fmt::Debug for ContentDocument {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ContentDocument")
+            .field("summary", &self.summary)
+            .field("body", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for EntryPatch {
@@ -436,6 +587,8 @@ impl KeyLeaseService {
                 vault_id: vault.vault_id.clone(),
                 parent_id,
                 name: name.into(),
+                purpose: GroupPurpose::User,
+                sort_order: None,
                 revision: 1,
                 created_at: now,
                 updated_at: now,
@@ -484,6 +637,8 @@ impl KeyLeaseService {
                 vault_id: vault.vault_id.clone(),
                 parent_id,
                 name: name.into(),
+                purpose: GroupPurpose::User,
+                sort_order: None,
                 revision: 1,
                 created_at: now,
                 updated_at: now,
@@ -530,6 +685,70 @@ impl KeyLeaseService {
                 Value::Object(Default::default()),
             )?;
             self.store.list_groups(vault)
+        })
+    }
+    pub fn reorder_groups_authorized(
+        &self,
+        actor: &ActorContext,
+        parent_id: Option<GroupId>,
+        ordered_ids: &[GroupId],
+        expected_revisions: &BTreeMap<String, u64>,
+        idempotency_key: &str,
+        dry_run: bool,
+    ) -> Result<Vec<VaultGroup>> {
+        self.with_vault(|vault| {
+            validate_idempotency_key(idempotency_key)?;
+            self.authorize_vault(
+                actor,
+                "group:update",
+                &format!("kl://{}/groups", vault.vault_id.0),
+                serde_json::json!({"parent_id":parent_id,"ordered_ids":ordered_ids}),
+            )?;
+            let groups = self.store.list_groups(vault)?;
+            let mut siblings: Vec<VaultGroup> = groups
+                .into_iter()
+                .filter(|group| group.parent_id == parent_id)
+                .collect();
+            let mut actual: Vec<String> = siblings.iter().map(|group| group.id.0.clone()).collect();
+            let mut requested: Vec<String> = ordered_ids.iter().map(|id| id.0.clone()).collect();
+            actual.sort();
+            requested.sort();
+            if actual != requested {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "ordered_ids must contain every sibling exactly once".into(),
+                });
+            }
+            for group in &siblings {
+                let expected = expected_revisions
+                    .get(&group.id.0)
+                    .copied()
+                    .ok_or_else(|| KeyLeaseError::InvalidRequest {
+                        reason: format!("missing revision for {}", group.id.0),
+                    })?;
+                if group.revision != expected {
+                    return Err(KeyLeaseError::RevisionConflict {
+                        expected,
+                        actual: group.revision,
+                        retryable: false,
+                    });
+                }
+            }
+            siblings.sort_by_key(|group| {
+                ordered_ids
+                    .iter()
+                    .position(|id| id == &group.id)
+                    .unwrap_or(usize::MAX)
+            });
+            for (index, group) in siblings.iter_mut().enumerate() {
+                let expected = group.revision;
+                group.sort_order = Some(index as u32);
+                group.revision += 1;
+                group.updated_at = Utc::now();
+                if !dry_run {
+                    self.store.put_group(vault, group, Some(expected), None)?;
+                }
+            }
+            Ok(siblings)
         })
     }
     pub fn update_group(
@@ -767,6 +986,7 @@ impl KeyLeaseService {
     ) -> Result<ItemMetadata> {
         self.with_vault(|vault| {
             normalize_totp(&mut input.totp, &mut input.totp_uri)?;
+            canonicalize_template_fields(&input.kind, &mut input.custom_fields);
             validate_custom_fields(&input.custom_fields)?;
             validate_item_title(&input.title)?;
             validate_idempotency_key(idempotency_key)?;
@@ -868,8 +1088,13 @@ impl KeyLeaseService {
                     })
                     .collect(),
                 tags: vec![],
+                favorite: input.favorite,
                 attachments: vec![],
                 notes: input.notes.clone(),
+                template_version: 1,
+                project_id: None,
+                agent_access: AgentAccess::None,
+                content_metadata: None,
                 schema_version: 1,
                 revision: 1,
                 created_at: now,
@@ -929,8 +1154,15 @@ impl KeyLeaseService {
         self.with_vault(|vault| {
             normalize_totp(&mut patch.totp, &mut patch.totp_uri)?;
             validate_idempotency_key(idempotency_key)?;
-            if let Some(fields) = &patch.custom_fields {
+            if let Some(fields) = &mut patch.custom_fields {
+                let kind = self.store.get_item(vault, id)?.kind;
+                canonicalize_template_fields(&kind, fields);
                 validate_custom_fields(fields)?;
+            }
+            if !patch.field_updates.is_empty() {
+                let kind = self.store.get_item(vault, id)?.kind;
+                canonicalize_template_fields(&kind, &mut patch.field_updates);
+                validate_custom_fields(&patch.field_updates)?;
             }
             if let Some(title) = &patch.title {
                 validate_item_title(title)?;
@@ -948,14 +1180,20 @@ impl KeyLeaseService {
                 || patch.username.is_some()
                 || patch.url.is_some()
                 || patch.notes.is_some()
+                || patch.favorite.is_some()
                 || patch.custom_fields.as_ref().is_some_and(|fields| {
                     fields.iter().any(|field| !field_requires_protection(field))
-                });
+                })
+                || patch
+                    .field_updates
+                    .iter()
+                    .any(|field| !field_requires_protection(field));
             let has_protected_fields = patch.password.is_some()
                 || patch
                     .custom_fields
                     .as_ref()
-                    .is_some_and(|fields| fields.iter().any(field_requires_protection));
+                    .is_some_and(|fields| fields.iter().any(field_requires_protection))
+                || patch.field_updates.iter().any(field_requires_protection);
             if !has_standard_fields
                 && !has_protected_fields
                 && patch.totp.is_none()
@@ -1049,6 +1287,11 @@ impl KeyLeaseService {
                 item.group_id = v;
                 changed.push("group_id".into())
             }
+            if let Some(v) = patch.favorite {
+                item.favorite = v;
+                item.extensions.remove("onepux.favorite_index");
+                changed.push("favorite".into())
+            }
             if let Some(v) = patch.totp {
                 upsert(
                     &mut item.fields,
@@ -1064,6 +1307,18 @@ impl KeyLeaseService {
                     .retain(|field| matches!(field.key.as_str(), "username" | "password" | "otp"));
                 changed.extend(fields.iter().map(|field| field.key.clone()));
                 item.fields.extend(fields);
+            }
+            for field in patch.field_updates {
+                changed.push(field.key.clone());
+                if let Some(existing) = item
+                    .fields
+                    .iter_mut()
+                    .find(|existing| existing.id == field.id || existing.key == field.key)
+                {
+                    *existing = field;
+                } else {
+                    item.fields.push(field);
+                }
             }
             item.revision += 1;
             item.updated_at = Utc::now();
@@ -1147,6 +1402,870 @@ impl KeyLeaseService {
             Ok(metadata)
         })
     }
+
+    pub fn migration_status(&self, actor: &ActorContext) -> Result<MigrationStatus> {
+        self.with_vault(|vault| {
+            self.ensure_migration_owner(actor)?;
+            let records = self.store.list_migration_records()?;
+            let already_handled = records
+                .iter()
+                .any(|record| record.migration_id == KDBX_RECLASSIFY_MIGRATION_ID);
+            let preview = self.kdbx_reclassify_preview(vault)?;
+            let pending = if !already_handled && !preview.proposals.is_empty() {
+                vec![preview]
+            } else {
+                vec![]
+            };
+            let history = records
+                .into_iter()
+                .map(|record| MigrationHistoryEntry {
+                    migration_id: record.migration_id,
+                    version: record.version,
+                    state: record.state,
+                    item_count: record.item_count,
+                    applied_at: record.applied_at,
+                    rolled_back_at: record.rolled_back_at,
+                })
+                .collect();
+            Ok(MigrationStatus {
+                framework_version: MIGRATION_FRAMEWORK_VERSION,
+                pending,
+                history,
+            })
+        })
+    }
+
+    pub fn preview_migration(
+        &self,
+        actor: &ActorContext,
+        migration_id: &str,
+    ) -> Result<MigrationPreview> {
+        self.with_vault(|vault| {
+            self.ensure_migration_owner(actor)?;
+            match migration_id {
+                KDBX_RECLASSIFY_MIGRATION_ID => self.kdbx_reclassify_preview(vault),
+                _ => Err(KeyLeaseError::NotFound {
+                    resource: migration_id.into(),
+                }),
+            }
+        })
+    }
+
+    pub fn apply_migration(
+        &self,
+        actor: &ActorContext,
+        migration_id: &str,
+        preview_digest: &str,
+    ) -> Result<MigrationApplyResult> {
+        self.with_vault(|vault| {
+            self.ensure_migration_owner(actor)?;
+            let preview = match migration_id {
+                KDBX_RECLASSIFY_MIGRATION_ID => self.kdbx_reclassify_preview(vault)?,
+                _ => {
+                    return Err(KeyLeaseError::NotFound {
+                        resource: migration_id.into(),
+                    });
+                }
+            };
+            if preview.preview_digest != preview_digest {
+                return Err(KeyLeaseError::RevisionConflict {
+                    expected: 0,
+                    actual: 0,
+                    retryable: true,
+                });
+            }
+            let proposal_by_id = preview
+                .proposals
+                .iter()
+                .map(|proposal| (&proposal.item_id, proposal))
+                .collect::<HashMap<_, _>>();
+            let now = Utc::now();
+            let mut items = self
+                .store
+                .list_items(vault)?
+                .into_iter()
+                .filter_map(|mut item| {
+                    let proposal = proposal_by_id.get(&item.id)?;
+                    if item.revision != proposal.expected_revision {
+                        return Some(Err(KeyLeaseError::RevisionConflict {
+                            expected: proposal.expected_revision,
+                            actual: item.revision,
+                            retryable: true,
+                        }));
+                    }
+                    item.extensions.insert(
+                        "migration.kdbx_reclassify_v1.previous_kind".into(),
+                        serde_json::json!(item.kind),
+                    );
+                    item.extensions.insert(
+                        "migration.kdbx_reclassify_v1.applied_at".into(),
+                        serde_json::json!(now),
+                    );
+                    item.kind = proposal.proposed_kind.clone();
+                    item.template_version = item_kind(&item.kind)
+                        .map(|template| template.template_version)
+                        .unwrap_or(1);
+                    canonicalize_template_fields(&item.kind, &mut item.fields);
+                    item.revision += 1;
+                    item.updated_at = now;
+                    Some(Ok(item))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            items.sort_by(|left, right| left.id.0.cmp(&right.id.0));
+            let audit = self.vault_audit_event(
+                actor,
+                "migration:apply",
+                migration_id,
+                "allow",
+                "success",
+                vec!["kind".into(), "semantic_role".into(), "sensitivity".into()],
+            );
+            let count = self.store.apply_item_migration(
+                vault,
+                migration_id,
+                preview.version,
+                preview_digest,
+                &items,
+                &audit,
+            )?;
+            Ok(MigrationApplyResult {
+                migration_id: migration_id.into(),
+                state: "applied".into(),
+                item_count: count,
+                checkpoint_available: true,
+            })
+        })
+    }
+
+    pub fn rollback_migration(
+        &self,
+        actor: &ActorContext,
+        migration_id: &str,
+    ) -> Result<MigrationApplyResult> {
+        self.with_vault(|vault| {
+            self.ensure_migration_owner(actor)?;
+            let audit = self.vault_audit_event(
+                actor,
+                "migration:rollback",
+                migration_id,
+                "allow",
+                "success",
+                vec!["items".into()],
+            );
+            let count = self
+                .store
+                .rollback_item_migration(vault, migration_id, &audit)?;
+            Ok(MigrationApplyResult {
+                migration_id: migration_id.into(),
+                state: "rolled_back".into(),
+                item_count: count,
+                checkpoint_available: false,
+            })
+        })
+    }
+
+    fn ensure_migration_owner(&self, actor: &ActorContext) -> Result<()> {
+        if !self.store.is_desktop_client(&actor.agent_id)? {
+            return Err(KeyLeaseError::Denied {
+                reason: "only the local owner may manage vault migrations".into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn kdbx_reclassify_preview(&self, vault: &UnlockedVault) -> Result<MigrationPreview> {
+        let mut proposals = self
+            .store
+            .list_items(vault)?
+            .into_iter()
+            .filter_map(|item| legacy_kdbx_proposal(&item))
+            .collect::<Vec<_>>();
+        proposals.sort_by(|left, right| left.item_id.0.cmp(&right.item_id.0));
+        let digest_material = serde_json::to_vec(
+            &proposals
+                .iter()
+                .map(|proposal| {
+                    (
+                        &proposal.item_id,
+                        proposal.expected_revision,
+                        &proposal.proposed_kind,
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|_| KeyLeaseError::Storage)?;
+        let preview_digest = hex(&Sha256::digest(digest_material));
+        Ok(MigrationPreview {
+            migration_id: KDBX_RECLASSIFY_MIGRATION_ID.into(),
+            version: 1,
+            title: "Reclassify legacy Strongbox/KDBX items".into(),
+            migration_type: "semantic".into(),
+            preview_digest,
+            proposals,
+        })
+    }
+
+    pub fn get_entry_view(&self, actor: &ActorContext, id: &ItemId) -> Result<EntryView> {
+        self.with_vault(|vault| {
+            let resource = format!("kl://{}/{}", vault.vault_id.0, id.0);
+            self.authorize_vault(
+                actor,
+                "entry:read_fields",
+                &resource,
+                Value::Object(Default::default()),
+            )?;
+            let item = self.store.get_item(vault, id)?;
+            let fields = item.fields.iter().map(field_view).collect();
+            let view = EntryView {
+                metadata: item.metadata(),
+                template_version: item.template_version,
+                project_id: item.project_id.clone(),
+                tags: item.tags.clone(),
+                sections: item.sections.clone(),
+                fields,
+                attachments: item.attachments.clone(),
+                has_notes: item
+                    .notes
+                    .as_deref()
+                    .is_some_and(|notes| !notes.trim().is_empty()),
+            };
+            self.audit_vault(
+                actor,
+                "entry:read_fields",
+                &resource,
+                "allow",
+                "success",
+                vec![],
+            )?;
+            Ok(view)
+        })
+    }
+
+    pub fn reveal_field_by_id_authorized(
+        &self,
+        actor: &ActorContext,
+        id: &ItemId,
+        field_id: &FieldId,
+    ) -> Result<FieldValue> {
+        self.with_vault(|vault| {
+            let resource = format!("kl://{}/{}/{}", vault.vault_id.0, id.0, field_id.0);
+            self.authorize_vault(
+                actor,
+                "entry:read_secret",
+                &resource,
+                serde_json::json!({"field_id":field_id}),
+            )?;
+            let value = self
+                .store
+                .get_item(vault, id)?
+                .fields
+                .into_iter()
+                .find(|field| field.id == *field_id)
+                .map(|field| field.value)
+                .ok_or_else(|| KeyLeaseError::NotFound {
+                    resource: field_id.0.clone(),
+                })?;
+            self.audit_vault(
+                actor,
+                "entry:read_secret",
+                &resource,
+                "allow",
+                "success",
+                vec!["field".into()],
+            )?;
+            Ok(value)
+        })
+    }
+
+    pub fn list_projects_agent(&self, actor: &ActorContext) -> Result<Vec<VaultProject>> {
+        self.with_vault(|vault| {
+            self.ensure_agent_content_channel(actor)?;
+            let projects = self.store.list_projects(vault)?;
+            self.audit_vault(
+                actor,
+                "project:list",
+                &vault.vault_id.0,
+                "allow",
+                "success",
+                vec![],
+            )?;
+            Ok(projects)
+        })
+    }
+
+    pub fn create_project_agent(
+        &self,
+        actor: &ActorContext,
+        slug: &str,
+        name: Option<&str>,
+        idempotency_key: &str,
+    ) -> Result<VaultProject> {
+        self.with_vault(|vault| {
+            self.ensure_agent_content_channel(actor)?;
+            validate_idempotency_key(idempotency_key)?;
+            let slug = normalize_project_slug(slug)?;
+            let name = name.unwrap_or(&slug).to_owned();
+            validate_project_name(&name)?;
+            let request_material = operation_material(&serde_json::json!({
+                "operation":"project:create",
+                "actor":actor.agent_id,
+                "slug":slug,
+                "name":name,
+            }))?;
+            if let Some(replay) =
+                self.store
+                    .mutation_replay(vault, idempotency_key, &request_material)?
+            {
+                return self.store.get_project(vault, &ProjectId(replay.item_id.0));
+            }
+            if self
+                .store
+                .list_projects(vault)?
+                .iter()
+                .any(|project| project.slug == slug)
+            {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "project slug already exists".into(),
+                });
+            }
+            let now = Utc::now();
+            let project = VaultProject {
+                id: ProjectId::new(),
+                vault_id: vault.vault_id.clone(),
+                slug,
+                name,
+                revision: 1,
+                created_by: actor.agent_id.clone(),
+                updated_by: actor.agent_id.clone(),
+                created_at: now,
+                updated_at: now,
+                archived_at: None,
+            };
+            let audit = self.vault_audit_event(
+                actor,
+                "project:create",
+                &project.id.0,
+                "allow",
+                "success",
+                vec!["project".into()],
+            );
+            self.store.put_project(
+                vault,
+                &project,
+                Some(0),
+                MutationContext {
+                    actor: &actor.agent_id.0,
+                    idempotency_key,
+                    request_material: &request_material,
+                    audit_event: Some(&audit),
+                },
+            )?;
+            Ok(project)
+        })
+    }
+
+    pub fn search_content(
+        &self,
+        actor: &ActorContext,
+        query: &str,
+        kind: Option<&str>,
+        tag: Option<&str>,
+        project_slug: Option<&str>,
+        reviewed_only: bool,
+    ) -> Result<Vec<ContentSummary>> {
+        self.with_vault(|vault| {
+            self.ensure_agent_content_channel(actor)?;
+            let owner = self.store.is_desktop_client(&actor.agent_id)?;
+            let projects = self.store.list_projects(vault)?;
+            let project_by_id = projects
+                .iter()
+                .map(|project| (project.id.0.as_str(), project.slug.as_str()))
+                .collect::<HashMap<_, _>>();
+            let query = query.to_lowercase();
+            let mut result = self
+                .store
+                .list_items(vault)?
+                .into_iter()
+                .filter(|item| is_agent_content_kind(&item.kind))
+                .filter(|item| owner || item.agent_access != AgentAccess::None)
+                .filter(|item| kind.is_none_or(|kind| item.kind == format!("core.{kind}")))
+                .filter(|item| {
+                    tag.is_none_or(|tag| {
+                        item.tags
+                            .iter()
+                            .any(|candidate| candidate.eq_ignore_ascii_case(tag))
+                    })
+                })
+                .filter(|item| {
+                    project_slug.is_none_or(|slug| {
+                        item.project_id
+                            .as_ref()
+                            .and_then(|id| project_by_id.get(id.0.as_str()))
+                            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(slug))
+                    })
+                })
+                .filter(|item| {
+                    !reviewed_only
+                        || item.content_metadata.as_ref().is_some_and(|metadata| {
+                            metadata.review_state == ContentReviewState::HumanReviewed
+                        })
+                })
+                .filter(|item| {
+                    query.is_empty()
+                        || item.title.to_lowercase().contains(&query)
+                        || item
+                            .tags
+                            .iter()
+                            .any(|tag| tag.to_lowercase().contains(&query))
+                        || item
+                            .notes
+                            .as_deref()
+                            .is_some_and(|body| body.to_lowercase().contains(&query))
+                })
+                .filter_map(|item| content_summary(&item, &projects))
+                .take(100)
+                .collect::<Vec<_>>();
+            result.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
+            self.audit_vault(
+                actor,
+                "content:search",
+                &vault.vault_id.0,
+                "allow",
+                "success",
+                vec![],
+            )?;
+            Ok(result)
+        })
+    }
+
+    pub fn get_content(&self, actor: &ActorContext, id: &ItemId) -> Result<ContentDocument> {
+        self.with_vault(|vault| {
+            self.ensure_agent_content_channel(actor)?;
+            let item = self.store.get_item(vault, id)?;
+            let owner = self.store.is_desktop_client(&actor.agent_id)?;
+            if !is_agent_content_kind(&item.kind)
+                || (!owner && item.agent_access == AgentAccess::None)
+            {
+                return Err(KeyLeaseError::NotFound {
+                    resource: id.0.clone(),
+                });
+            }
+            let summary =
+                content_summary(&item, &self.store.list_projects(vault)?).ok_or_else(|| {
+                    KeyLeaseError::NotFound {
+                        resource: id.0.clone(),
+                    }
+                })?;
+            let body = item.notes.unwrap_or_default();
+            self.audit_vault(actor, "content:read", &id.0, "allow", "success", vec![])?;
+            Ok(ContentDocument { summary, body })
+        })
+    }
+
+    pub fn create_content(
+        &self,
+        actor: &ActorContext,
+        input: ContentCreateInput,
+        idempotency_key: &str,
+    ) -> Result<ContentDocument> {
+        self.with_vault(|vault| {
+            self.ensure_agent_content_channel(actor)?;
+            validate_content(&input.title, &input.body, &input.tags)?;
+            validate_idempotency_key(idempotency_key)?;
+            if !is_agent_content_kind(&input.kind) {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "content kind must be core.prompt, core.runbook, or core.note".into(),
+                });
+            }
+            let request_material = operation_material(&serde_json::json!({
+                "operation":"content:create",
+                "actor":actor.agent_id,
+                "input":input,
+            }))?;
+            if let Some(replay) =
+                self.store
+                    .mutation_replay(vault, idempotency_key, &request_material)?
+            {
+                let item = self.store.get_item_at_revision(
+                    vault,
+                    &replay.item_id,
+                    replay.result_revision,
+                )?;
+                return content_document(item, self.store.list_projects(vault)?);
+            }
+            let owner = self.store.is_desktop_client(&actor.agent_id)?;
+            let project_id = resolve_project_id(
+                &self.store.list_projects(vault)?,
+                input.project_slug.as_deref(),
+            )?;
+            let group_id = self.ensure_knowledge_group(vault)?;
+            let now = Utc::now();
+            let item = VaultItem {
+                id: ItemId::new(),
+                vault_id: vault.vault_id.clone(),
+                group_id,
+                kind: input.kind,
+                title: input.title,
+                sections: vec![],
+                fields: vec![],
+                urls: vec![],
+                tags: normalize_tags(input.tags)?,
+                favorite: input.favorite,
+                attachments: vec![],
+                notes: Some(input.body),
+                template_version: 1,
+                project_id,
+                agent_access: if owner {
+                    AgentAccess::None
+                } else {
+                    AgentAccess::ReadWrite
+                },
+                content_metadata: Some(ContentMetadata {
+                    created_by: actor.agent_id.clone(),
+                    last_modified_by: actor.agent_id.clone(),
+                    review_state: if owner {
+                        ContentReviewState::HumanReviewed
+                    } else {
+                        ContentReviewState::Unreviewed
+                    },
+                    reviewed_by: owner.then(|| "local-owner".into()),
+                    reviewed_at: owner.then_some(now),
+                }),
+                schema_version: 2,
+                revision: 1,
+                created_at: now,
+                updated_at: now,
+                secret_changed_at: None,
+                expires_at: None,
+                rotation_interval_days: None,
+                issuer: None,
+                environment: None,
+                owner: None,
+                status: ItemStatus::Active,
+                extensions: Default::default(),
+            };
+            let audit = self.vault_audit_event(
+                actor,
+                "content:create",
+                &item.id.0,
+                "allow",
+                "success",
+                vec!["content".into()],
+            );
+            self.store.put_item(
+                vault,
+                &item,
+                Some(0),
+                MutationContext {
+                    actor: &actor.agent_id.0,
+                    idempotency_key,
+                    request_material: &request_material,
+                    audit_event: Some(&audit),
+                },
+            )?;
+            content_document(item, self.store.list_projects(vault)?)
+        })
+    }
+
+    pub fn update_content(
+        &self,
+        actor: &ActorContext,
+        id: &ItemId,
+        patch: ContentPatch,
+        expected_revision: u64,
+        idempotency_key: &str,
+    ) -> Result<ContentDocument> {
+        self.with_vault(|vault| {
+            self.ensure_agent_content_channel(actor)?;
+            validate_idempotency_key(idempotency_key)?;
+            if patch.project_slug.is_some() && patch.clear_project {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "project_slug and clear_project are mutually exclusive".into(),
+                });
+            }
+            if patch.title.is_none()
+                && patch.body.is_none()
+                && patch.tags.is_none()
+                && patch.add_tags.is_empty()
+                && patch.remove_tags.is_empty()
+                && patch.project_slug.is_none()
+                && !patch.clear_project
+                && patch.favorite.is_none()
+            {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "content update has no changes".into(),
+                });
+            }
+            let request_material = operation_material(&serde_json::json!({
+                "operation":"content:update",
+                "actor":actor.agent_id,
+                "item_id":id,
+                "patch":patch,
+                "expected_revision":expected_revision,
+            }))?;
+            if let Some(replay) =
+                self.store
+                    .mutation_replay(vault, idempotency_key, &request_material)?
+            {
+                let item = self.store.get_item_at_revision(
+                    vault,
+                    &replay.item_id,
+                    replay.result_revision,
+                )?;
+                return content_document(item, self.store.list_projects(vault)?);
+            }
+            let mut item = self.store.get_item(vault, id)?;
+            let owner = self.store.is_desktop_client(&actor.agent_id)?;
+            if !is_agent_content_kind(&item.kind)
+                || (!owner && item.agent_access != AgentAccess::ReadWrite)
+            {
+                return Err(KeyLeaseError::Denied {
+                    reason: "content item is not agent-writable".into(),
+                });
+            }
+            if let Some(title) = patch.title {
+                item.title = title;
+            }
+            if let Some(body) = patch.body {
+                item.notes = Some(body);
+            }
+            if let Some(tags) = patch.tags {
+                item.tags = normalize_tags(tags)?;
+            }
+            if let Some(favorite) = patch.favorite {
+                item.favorite = favorite;
+                item.extensions.remove("onepux.favorite_index");
+            }
+            for tag in patch.remove_tags {
+                item.tags
+                    .retain(|candidate| !candidate.eq_ignore_ascii_case(&tag));
+            }
+            item.tags.extend(patch.add_tags);
+            item.tags = normalize_tags(item.tags)?;
+            let projects = self.store.list_projects(vault)?;
+            if patch.clear_project {
+                item.project_id = None;
+            } else if let Some(slug) = patch.project_slug.as_deref() {
+                item.project_id = resolve_project_id(&projects, Some(slug))?;
+            }
+            validate_content(
+                &item.title,
+                item.notes.as_deref().unwrap_or_default(),
+                &item.tags,
+            )?;
+            let now = Utc::now();
+            let metadata = item
+                .content_metadata
+                .as_mut()
+                .ok_or(KeyLeaseError::Crypto)?;
+            metadata.last_modified_by = actor.agent_id.clone();
+            metadata.review_state = if owner {
+                ContentReviewState::HumanReviewed
+            } else {
+                ContentReviewState::Unreviewed
+            };
+            metadata.reviewed_by = owner.then(|| "local-owner".into());
+            metadata.reviewed_at = owner.then_some(now);
+            item.schema_version = 2;
+            item.revision = expected_revision + 1;
+            item.updated_at = now;
+            let audit = self.vault_audit_event(
+                actor,
+                "content:update",
+                &item.id.0,
+                "allow",
+                "success",
+                vec!["content".into()],
+            );
+            self.store.put_item(
+                vault,
+                &item,
+                Some(expected_revision),
+                MutationContext {
+                    actor: &actor.agent_id.0,
+                    idempotency_key,
+                    request_material: &request_material,
+                    audit_event: Some(&audit),
+                },
+            )?;
+            content_document(item, projects)
+        })
+    }
+
+    pub fn set_content_access(
+        &self,
+        actor: &ActorContext,
+        id: &ItemId,
+        access: AgentAccess,
+        expected_revision: u64,
+        idempotency_key: &str,
+    ) -> Result<ContentDocument> {
+        self.with_vault(|vault| {
+            if !self.store.is_desktop_client(&actor.agent_id)? {
+                return Err(KeyLeaseError::Denied {
+                    reason: "only the local owner may change agent access".into(),
+                });
+            }
+            validate_idempotency_key(idempotency_key)?;
+            let request_material = operation_material(&serde_json::json!({
+                "operation":"content:set_access",
+                "actor":actor.agent_id,
+                "item_id":id,
+                "access":access,
+                "expected_revision":expected_revision,
+            }))?;
+            if let Some(replay) =
+                self.store
+                    .mutation_replay(vault, idempotency_key, &request_material)?
+            {
+                return content_document(
+                    self.store.get_item_at_revision(
+                        vault,
+                        &replay.item_id,
+                        replay.result_revision,
+                    )?,
+                    self.store.list_projects(vault)?,
+                );
+            }
+            let mut item = self.store.get_item(vault, id)?;
+            if !is_agent_content_kind(&item.kind) {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "agent access is only valid for Prompt, Runbook, and Note".into(),
+                });
+            }
+            item.agent_access = access;
+            item.revision = expected_revision + 1;
+            item.schema_version = 2;
+            item.updated_at = Utc::now();
+            let audit = self.vault_audit_event(
+                actor,
+                "content:set_access",
+                &item.id.0,
+                "allow",
+                "success",
+                vec!["agent_access".into()],
+            );
+            self.store.put_item(
+                vault,
+                &item,
+                Some(expected_revision),
+                MutationContext {
+                    actor: &actor.agent_id.0,
+                    idempotency_key,
+                    request_material: &request_material,
+                    audit_event: Some(&audit),
+                },
+            )?;
+            content_document(item, self.store.list_projects(vault)?)
+        })
+    }
+
+    pub fn review_content(
+        &self,
+        actor: &ActorContext,
+        id: &ItemId,
+        expected_revision: u64,
+        idempotency_key: &str,
+    ) -> Result<ContentDocument> {
+        self.with_vault(|vault| {
+            if !self.store.is_desktop_client(&actor.agent_id)? {
+                return Err(KeyLeaseError::Denied {
+                    reason: "only the local owner may review content".into(),
+                });
+            }
+            validate_idempotency_key(idempotency_key)?;
+            let request_material = operation_material(&serde_json::json!({
+                "operation":"content:review",
+                "actor":actor.agent_id,
+                "item_id":id,
+                "expected_revision":expected_revision,
+            }))?;
+            if let Some(replay) =
+                self.store
+                    .mutation_replay(vault, idempotency_key, &request_material)?
+            {
+                return content_document(
+                    self.store.get_item_at_revision(
+                        vault,
+                        &replay.item_id,
+                        replay.result_revision,
+                    )?,
+                    self.store.list_projects(vault)?,
+                );
+            }
+            let mut item = self.store.get_item(vault, id)?;
+            if !is_agent_content_kind(&item.kind) {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "only Prompt, Runbook, and Note can be reviewed".into(),
+                });
+            }
+            let now = Utc::now();
+            let metadata = item
+                .content_metadata
+                .as_mut()
+                .ok_or(KeyLeaseError::Crypto)?;
+            metadata.review_state = ContentReviewState::HumanReviewed;
+            metadata.reviewed_by = Some("local-owner".into());
+            metadata.reviewed_at = Some(now);
+            item.revision = expected_revision + 1;
+            item.schema_version = 2;
+            item.updated_at = now;
+            let audit = self.vault_audit_event(
+                actor,
+                "content:review",
+                &item.id.0,
+                "allow",
+                "success",
+                vec!["review_state".into()],
+            );
+            self.store.put_item(
+                vault,
+                &item,
+                Some(expected_revision),
+                MutationContext {
+                    actor: &actor.agent_id.0,
+                    idempotency_key,
+                    request_material: &request_material,
+                    audit_event: Some(&audit),
+                },
+            )?;
+            content_document(item, self.store.list_projects(vault)?)
+        })
+    }
+
+    fn ensure_agent_content_channel(&self, actor: &ActorContext) -> Result<()> {
+        if !self.store.is_desktop_client(&actor.agent_id)? && self.store.kill_switch_enabled()? {
+            return Err(KeyLeaseError::Denied {
+                reason: "global kill switch is active".into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn ensure_knowledge_group(&self, vault: &UnlockedVault) -> Result<GroupId> {
+        if let Some(group) = self
+            .store
+            .list_groups(vault)?
+            .into_iter()
+            .find(|group| group.purpose == GroupPurpose::Knowledge)
+        {
+            return Ok(group.id);
+        }
+        let now = Utc::now();
+        let group = VaultGroup {
+            id: GroupId::new(),
+            vault_id: vault.vault_id.clone(),
+            parent_id: None,
+            name: "Knowledge".into(),
+            purpose: GroupPurpose::Knowledge,
+            sort_order: None,
+            revision: 1,
+            created_at: now,
+            updated_at: now,
+        };
+        self.store.put_group(vault, &group, Some(0), None)?;
+        Ok(group.id)
+    }
     pub fn reveal_field_for_human(&self, id: &ItemId, key: &str) -> Result<String> {
         self.with_vault(|vault| {
             let item = self.store.get_item(vault, id)?;
@@ -1161,14 +2280,7 @@ impl KeyLeaseService {
             item.fields
                 .into_iter()
                 .find(|field| field.key == key)
-                .and_then(|field| match field.value {
-                    FieldValue::Text(value)
-                    | FieldValue::Concealed(value)
-                    | FieldValue::Url(value)
-                    | FieldValue::Email(value)
-                    | FieldValue::Phone(value) => Some(value),
-                    _ => None,
-                })
+                .map(|field| field_value_string(&field.value))
                 .ok_or_else(|| KeyLeaseError::NotFound {
                     resource: format!("{}/{}", id.0, key),
                 })
@@ -1204,14 +2316,7 @@ impl KeyLeaseService {
                 item.fields
                     .into_iter()
                     .find(|field| field.key == key)
-                    .and_then(|field| match field.value {
-                        FieldValue::Text(value)
-                        | FieldValue::Concealed(value)
-                        | FieldValue::Url(value)
-                        | FieldValue::Email(value)
-                        | FieldValue::Phone(value) => Some(value),
-                        _ => None,
-                    })
+                    .map(|field| field_value_string(&field.value))
             }
             .ok_or_else(|| KeyLeaseError::NotFound {
                 resource: format!("{}/{}", id.0, key),
@@ -1428,8 +2533,13 @@ impl KeyLeaseService {
                 )],
                 urls: vec![],
                 tags: vec!["keylease.connection".into()],
+                favorite: false,
                 attachments: vec![],
                 notes: None,
+                template_version: 1,
+                project_id: None,
+                agent_access: AgentAccess::None,
+                content_metadata: None,
                 schema_version: 1,
                 revision: 1,
                 created_at: now,
@@ -2966,6 +4076,7 @@ fn desktop_owner_rule(agent_id: AgentId, vault_id: &VaultId) -> PolicyRule {
         actions: [
             "entry:search",
             "entry:read_metadata",
+            "entry:read_fields",
             "entry:read_username",
             "entry:read_secret",
             "entry:create",
@@ -3266,7 +4377,213 @@ fn field(
         value,
         sensitivity,
         protected,
+        semantic_role: semantic_role_for("core.generic", key, label),
     }
+}
+
+fn field_value_string(value: &FieldValue) -> String {
+    match value {
+        FieldValue::Text(value)
+        | FieldValue::Concealed(value)
+        | FieldValue::Url(value)
+        | FieldValue::Email(value)
+        | FieldValue::Phone(value)
+        | FieldValue::Date(value)
+        | FieldValue::Certificate(value)
+        | FieldValue::AttachmentRef(value)
+        | FieldValue::Reference(value) => value.clone(),
+        FieldValue::Number(value) => value.to_string(),
+        FieldValue::MonthYear { month, year } => format!("{month:02}/{year}"),
+        FieldValue::Address(address) => [
+            &address.street,
+            &address.city,
+            &address.state,
+            &address.postal_code,
+            &address.country,
+        ]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", "),
+        FieldValue::Boolean(value) => value.to_string(),
+        FieldValue::Totp(value) => value.source_representation.clone().unwrap_or_default(),
+        FieldValue::KeyPair { public, private } => format!("{public}\n{private}"),
+        FieldValue::OpaqueJson(value) => value.to_string(),
+    }
+}
+
+fn field_value_type(value: &FieldValue) -> &'static str {
+    match value {
+        FieldValue::Text(_) => "text",
+        FieldValue::Concealed(_) => "concealed",
+        FieldValue::Url(_) => "url",
+        FieldValue::Email(_) => "email",
+        FieldValue::Phone(_) => "phone",
+        FieldValue::Number(_) => "number",
+        FieldValue::Date(_) => "date",
+        FieldValue::MonthYear { .. } => "month_year",
+        FieldValue::Address(_) => "address",
+        FieldValue::Boolean(_) => "boolean",
+        FieldValue::Totp(_) => "totp",
+        FieldValue::KeyPair { .. } => "key_pair",
+        FieldValue::Certificate(_) => "certificate",
+        FieldValue::AttachmentRef(_) => "attachment_ref",
+        FieldValue::Reference(_) => "reference",
+        FieldValue::OpaqueJson(_) => "opaque_json",
+    }
+}
+
+fn field_view(field: &ItemField) -> FieldView {
+    let redacted = field.protected
+        || matches!(
+            field.sensitivity,
+            Sensitivity::Secret | Sensitivity::HighlySensitive
+        );
+    let raw = field_value_string(&field.value);
+    let display_hint = if redacted
+        && matches!(
+            field.semantic_role.as_deref(),
+            Some("card_number" | "account_number")
+        )
+        && raw
+            .chars()
+            .filter(|character| character.is_ascii_digit())
+            .count()
+            >= 4
+    {
+        let last = raw
+            .chars()
+            .filter(|character| character.is_ascii_digit())
+            .rev()
+            .take(4)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+        Some(format!("•••• {last}"))
+    } else if redacted && !raw.is_empty() {
+        Some("Stored".into())
+    } else {
+        None
+    };
+    FieldView {
+        id: field.id.clone(),
+        key: field.key.clone(),
+        label: field.label.clone(),
+        semantic_role: field.semantic_role.clone(),
+        value_type: field_value_type(&field.value).into(),
+        sensitivity: field.sensitivity.clone(),
+        protected: field.protected,
+        has_value: !raw.is_empty(),
+        value: (!redacted).then(|| field.value.clone()),
+        display_hint,
+    }
+}
+
+fn content_summary(item: &VaultItem, projects: &[VaultProject]) -> Option<ContentSummary> {
+    let metadata = item.content_metadata.clone()?;
+    let project_slug = item.project_id.as_ref().and_then(|project_id| {
+        projects
+            .iter()
+            .find(|project| project.id == *project_id)
+            .map(|project| project.slug.clone())
+    });
+    Some(ContentSummary {
+        id: item.id.clone(),
+        reference: format!("kl://{}/{}", item.vault_id.0, item.id.0),
+        kind: item.kind.clone(),
+        title: item.title.clone(),
+        favorite: item.metadata().favorite,
+        tags: item.tags.clone(),
+        project_id: item.project_id.clone(),
+        project_slug,
+        revision: item.revision,
+        agent_access: item.agent_access.clone(),
+        content_metadata: metadata,
+        updated_at: item.updated_at,
+    })
+}
+
+fn content_document(item: VaultItem, projects: Vec<VaultProject>) -> Result<ContentDocument> {
+    let summary = content_summary(&item, &projects).ok_or(KeyLeaseError::Crypto)?;
+    Ok(ContentDocument {
+        summary,
+        body: item.notes.unwrap_or_default(),
+    })
+}
+
+fn normalize_project_slug(value: &str) -> Result<String> {
+    let slug = value.trim().to_ascii_lowercase();
+    let valid = !slug.is_empty()
+        && slug.len() <= 63
+        && slug
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !slug.starts_with('-')
+        && !slug.ends_with('-');
+    if !valid {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "project slug must be 1-63 lowercase letters, digits, or internal hyphens"
+                .into(),
+        });
+    }
+    Ok(slug)
+}
+
+fn validate_project_name(value: &str) -> Result<()> {
+    if value.trim().is_empty() || value.chars().count() > 200 || value.chars().any(char::is_control)
+    {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "project name must be 1-200 printable characters".into(),
+        });
+    }
+    Ok(())
+}
+
+fn resolve_project_id(projects: &[VaultProject], slug: Option<&str>) -> Result<Option<ProjectId>> {
+    let Some(slug) = slug else { return Ok(None) };
+    let slug = normalize_project_slug(slug)?;
+    projects
+        .iter()
+        .find(|project| project.slug == slug && project.archived_at.is_none())
+        .map(|project| Some(project.id.clone()))
+        .ok_or(KeyLeaseError::NotFound { resource: slug })
+}
+
+fn normalize_tags(tags: Vec<String>) -> Result<Vec<String>> {
+    if tags.len() > 32 {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "content supports at most 32 tags".into(),
+        });
+    }
+    let mut result = Vec::new();
+    for tag in tags {
+        let tag = tag.trim().to_owned();
+        if tag.is_empty() || tag.chars().count() > 64 || tag.chars().any(char::is_control) {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "tags must be 1-64 printable characters".into(),
+            });
+        }
+        if !result
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(&tag))
+        {
+            result.push(tag);
+        }
+    }
+    Ok(result)
+}
+
+fn validate_content(title: &str, body: &str, tags: &[String]) -> Result<()> {
+    validate_item_title(title)?;
+    if body.trim().is_empty() || body.len() > 1024 * 1024 {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "content body must be non-empty UTF-8 up to 1 MiB".into(),
+        });
+    }
+    let _ = normalize_tags(tags.to_vec())?;
+    Ok(())
 }
 fn upsert(
     fields: &mut Vec<ItemField>,
@@ -3284,11 +4601,7 @@ fn upsert(
     }
 }
 fn validate_kind(kind: &str) -> Result<String> {
-    if matches!(
-        kind,
-        "core.login" | "core.api_credential" | "core.secure_note" | "core.generic"
-    ) || kind.starts_with("user.custom.")
-    {
+    if item_kind(kind).is_some() || kind.starts_with("user.custom.") {
         Ok(kind.into())
     } else {
         Err(KeyLeaseError::InvalidRequest {
@@ -3316,6 +4629,16 @@ fn validate_group(name: &str, parent_id: Option<&GroupId>, groups: &[VaultGroup]
             resource: parent_id.0.clone(),
         });
     }
+    if let Some(parent_id) = parent_id
+        && groups
+            .iter()
+            .find(|group| &group.id == parent_id)
+            .is_some_and(|group| group.parent_id.is_some())
+    {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "groups support at most two levels".into(),
+        });
+    }
     Ok(())
 }
 fn validate_item_title(title: &str) -> Result<()> {
@@ -3326,15 +4649,141 @@ fn validate_item_title(title: &str) -> Result<()> {
     }
     Ok(())
 }
+fn legacy_kdbx_proposal(item: &VaultItem) -> Option<MigrationProposal> {
+    if item.kind != "core.login" || item.status != ItemStatus::Active {
+        return None;
+    }
+    let names = item
+        .fields
+        .iter()
+        .flat_map(|field| [&field.key, &field.label])
+        .map(|value| normalize_field_alias(value))
+        .collect::<Vec<_>>();
+    let has = |aliases: &[&str]| {
+        aliases.iter().any(|alias| {
+            let alias = normalize_field_alias(alias);
+            names.iter().any(|name| name == &alias)
+        })
+    };
+    let title = normalize_field_alias(&item.title);
+    let card_title = ["visa", "mastercard", "amex", "creditcard", "debitcard"]
+        .iter()
+        .any(|marker| title.contains(marker));
+    let has_card_number = has(&["card number", "credit card number", "cc number", "card no"])
+        || card_title && has(&["number"]);
+    let has_expiry = has(&[
+        "expiry",
+        "expiry date",
+        "expiration",
+        "expiration date",
+        "valid until",
+    ]);
+    let (proposed_kind, reasons) = if has_card_number && has_expiry {
+        (
+            "core.credit_card",
+            vec!["card number field".into(), "expiry field".into()],
+        )
+    } else if has(&["private key", "ssh private key"])
+        && (has(&["public key", "ssh public key"]) || title.contains("ssh"))
+    {
+        (
+            "core.ssh_key",
+            vec!["private key field".into(), "SSH key evidence".into()],
+        )
+    } else if item.fields.is_empty()
+        && item.urls.is_empty()
+        && item
+            .notes
+            .as_deref()
+            .is_some_and(|notes| !notes.trim().is_empty())
+    {
+        ("core.secure_note", vec!["notes-only legacy login".into()])
+    } else {
+        return None;
+    };
+    Some(MigrationProposal {
+        item_id: item.id.clone(),
+        title: item.title.clone(),
+        current_kind: item.kind.clone(),
+        proposed_kind: proposed_kind.into(),
+        confidence: "high".into(),
+        reasons,
+        expected_revision: item.revision,
+    })
+}
+
+fn canonicalize_template_fields(kind: &str, fields: &mut [ItemField]) {
+    let definitions = item_kind(kind)
+        .map(|definition| definition.fields)
+        .unwrap_or_default();
+    for field in fields {
+        let field_key = normalize_field_alias(&field.key);
+        let field_label = normalize_field_alias(&field.label);
+        let role = definitions
+            .iter()
+            .find(|definition| {
+                field_key == normalize_field_alias(&definition.key)
+                    || field_label == normalize_field_alias(&definition.label)
+                    || definition.aliases.iter().any(|alias| {
+                        let alias = normalize_field_alias(alias);
+                        alias == field_key || alias == field_label
+                    })
+            })
+            .map(|definition| {
+                if definition.protected
+                    || matches!(
+                        definition.sensitivity,
+                        Sensitivity::Secret | Sensitivity::HighlySensitive
+                    )
+                {
+                    field.protected = true;
+                    field.sensitivity = definition.sensitivity.clone();
+                    if let FieldValue::Text(value) = &field.value {
+                        field.value = FieldValue::Concealed(value.clone());
+                    }
+                }
+                definition.semantic_role.clone()
+            })
+            .or_else(|| semantic_role_for(kind, &field.key, &field.label));
+        if role.is_some() {
+            field.semantic_role = role;
+        }
+        if matches!(
+            field.semantic_role.as_deref(),
+            Some(
+                "password"
+                    | "credential"
+                    | "client_secret"
+                    | "card_number"
+                    | "card_verification"
+                    | "pin"
+                    | "account_number"
+                    | "routing_number"
+                    | "iban"
+                    | "swift"
+                    | "identity_number"
+                    | "private_key"
+                    | "passphrase"
+                    | "recovery_phrase"
+                    | "license_key"
+                    | "connection_string"
+                    | "wifi_password"
+            )
+        ) {
+            field.protected = true;
+            field.sensitivity = Sensitivity::HighlySensitive;
+            if let FieldValue::Text(value) = &field.value {
+                field.value = FieldValue::Concealed(value.clone());
+            }
+        }
+    }
+}
 fn validate_custom_fields(fields: &[ItemField]) -> Result<()> {
     let mut keys = std::collections::HashSet::new();
     let mut ids = std::collections::HashSet::new();
     for field in fields {
         if field.key.is_empty()
-            || matches!(
-                field.key.as_str(),
-                "username" | "password" | "otp" | "credential"
-            )
+            || matches!(field.key.as_str(), "username" | "password" | "otp")
             || !keys.insert(field.key.clone())
             || !ids.insert(field.id.clone())
         {
@@ -3661,18 +5110,192 @@ fn completion_usage(response: &ActionResponse, idempotent: bool) -> Result<DataU
 }
 
 pub fn generate_password(length: usize) -> Result<String> {
-    if !(16..=256).contains(&length) {
-        return Err(KeyLeaseError::InvalidRequest {
-            reason: "password length must be 16..=256".into(),
-        });
+    generate_password_with_recipe(&PasswordRecipe::Random {
+        length,
+        uppercase: true,
+        lowercase: true,
+        numbers: true,
+        symbols: true,
+        avoid_ambiguous: true,
+    })
+}
+
+/// A password recipe shared by the desktop generator and item editors.
+/// Defaults are deliberately strong while still allowing sites with narrow
+/// password policies to opt out of individual character classes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PasswordRecipe {
+    Random {
+        length: usize,
+        #[serde(default = "default_true")]
+        uppercase: bool,
+        #[serde(default = "default_true")]
+        lowercase: bool,
+        #[serde(default = "default_true")]
+        numbers: bool,
+        #[serde(default = "default_true")]
+        symbols: bool,
+        #[serde(default = "default_true")]
+        avoid_ambiguous: bool,
+    },
+    Words {
+        count: usize,
+        separator: String,
+        #[serde(default)]
+        capitalize: bool,
+        #[serde(default = "default_true")]
+        include_number: bool,
+    },
+    Pin {
+        length: usize,
+    },
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn random_index(upper: usize) -> usize {
+    debug_assert!(upper > 0 && upper <= 256);
+    let zone = 256 - (256 % upper);
+    loop {
+        let mut byte = [0_u8; 1];
+        rand::rng().fill_bytes(&mut byte);
+        if usize::from(byte[0]) < zone {
+            return usize::from(byte[0]) % upper;
+        }
     }
-    const CHARS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*()-_=+";
-    let mut random = vec![0_u8; length];
-    rand::rng().fill_bytes(&mut random);
-    Ok(random
-        .into_iter()
-        .map(|b| CHARS[b as usize % CHARS.len()] as char)
-        .collect())
+}
+
+fn shuffle(bytes: &mut [u8]) {
+    for index in (1..bytes.len()).rev() {
+        bytes.swap(index, random_index(index + 1));
+    }
+}
+
+pub fn generate_password_with_recipe(recipe: &PasswordRecipe) -> Result<String> {
+    match recipe {
+        PasswordRecipe::Random {
+            length,
+            uppercase,
+            lowercase,
+            numbers,
+            symbols,
+            avoid_ambiguous,
+        } => {
+            if !(8..=256).contains(length) {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "random password length must be 8..=256".into(),
+                });
+            }
+            let classes: Vec<&[u8]> = [
+                uppercase.then_some(if *avoid_ambiguous {
+                    b"ABCDEFGHJKLMNPQRSTUVWXYZ".as_slice()
+                } else {
+                    b"ABCDEFGHIJKLMNOPQRSTUVWXYZ".as_slice()
+                }),
+                lowercase.then_some(if *avoid_ambiguous {
+                    b"abcdefghijkmnopqrstuvwxyz".as_slice()
+                } else {
+                    b"abcdefghijklmnopqrstuvwxyz".as_slice()
+                }),
+                numbers.then_some(if *avoid_ambiguous {
+                    b"23456789".as_slice()
+                } else {
+                    b"0123456789".as_slice()
+                }),
+                symbols.then_some(b"!@#$%^&*()-_=+".as_slice()),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            if classes.is_empty() || *length < classes.len() {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "select at least one character class".into(),
+                });
+            }
+            let pool: Vec<u8> = classes
+                .iter()
+                .flat_map(|value| value.iter().copied())
+                .collect();
+            let mut output: Vec<u8> = classes
+                .iter()
+                .map(|class| class[random_index(class.len())])
+                .collect();
+            while output.len() < *length {
+                output.push(pool[random_index(pool.len())]);
+            }
+            shuffle(&mut output);
+            String::from_utf8(output).map_err(|_| KeyLeaseError::Storage)
+        }
+        PasswordRecipe::Words {
+            count,
+            separator,
+            capitalize,
+            include_number,
+        } => {
+            if !(3..=12).contains(count)
+                || separator.chars().count() > 3
+                || separator.chars().any(char::is_control)
+            {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "word password must use 3..=12 words and a short separator".into(),
+                });
+            }
+            // Combining two independently selected 6-bit halves gives each
+            // readable word 12 bits of entropy without shipping a huge wordlist.
+            const PREFIXES: [&str; 64] = [
+                "amber", "ancient", "apricot", "arctic", "autumn", "azure", "brave", "bright",
+                "calm", "cedar", "clever", "cloud", "coral", "cosmic", "crimson", "crystal",
+                "daring", "delta", "eager", "ember", "emerald", "fable", "fair", "forest",
+                "gentle", "golden", "grand", "green", "happy", "hidden", "indigo", "ivory", "jade",
+                "jolly", "kind", "lively", "lucky", "lunar", "maple", "merry", "misty", "modern",
+                "navy", "nimble", "noble", "ocean", "olive", "orange", "pearl", "polar", "proud",
+                "quiet", "rapid", "red", "royal", "silver", "solar", "steady", "swift", "tender",
+                "vivid", "warm", "wild", "young",
+            ];
+            const SUFFIXES: [&str; 64] = [
+                "anchor", "apple", "badger", "beacon", "birch", "breeze", "bridge", "canyon",
+                "castle", "comet", "coral", "dawn", "dolphin", "dragon", "eagle", "falcon", "fern",
+                "field", "finch", "flame", "flower", "fox", "garden", "glade", "grove", "harbor",
+                "hawk", "hill", "island", "lake", "lantern", "leaf", "lion", "meadow", "meteor",
+                "moon", "oak", "otter", "owl", "panda", "pine", "planet", "plum", "pond", "quartz",
+                "rain", "raven", "reef", "river", "robin", "rock", "rose", "sail", "sky",
+                "sparrow", "star", "stone", "storm", "sun", "tiger", "trail", "valley", "wave",
+                "willow",
+            ];
+            let mut words = Vec::with_capacity(*count);
+            for _ in 0..*count {
+                let mut word = format!(
+                    "{}{}",
+                    PREFIXES[random_index(PREFIXES.len())],
+                    SUFFIXES[random_index(SUFFIXES.len())]
+                );
+                if *capitalize {
+                    word.get_mut(0..1)
+                        .expect("ASCII word")
+                        .make_ascii_uppercase();
+                }
+                words.push(word);
+            }
+            if *include_number {
+                let index = random_index(words.len());
+                words[index].push_str(&format!("{:02}", random_index(100)));
+            }
+            Ok(words.join(separator))
+        }
+        PasswordRecipe::Pin { length } => {
+            if !(4..=20).contains(length) {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "PIN length must be 4..=20".into(),
+                });
+            }
+            Ok((0..*length)
+                .map(|_| char::from(b'0' + random_index(10) as u8))
+                .collect())
+        }
+    }
 }
 pub fn current_totp(config: &TotpConfig) -> Result<(String, u64)> {
     let algorithm = match config.algorithm {
@@ -3711,6 +5334,115 @@ pub fn current_totp(config: &TotpConfig) -> Result<(String, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_template_roles_cannot_be_downgraded_by_a_client() {
+        let mut fields = vec![ItemField {
+            id: FieldId::new(),
+            key: "cc number".into(),
+            label: "Card Number".into(),
+            value: FieldValue::Text("4111111111111111".into()),
+            sensitivity: Sensitivity::PublicMetadata,
+            protected: false,
+            semantic_role: None,
+        }];
+        canonicalize_template_fields("core.credit_card", &mut fields);
+        let field = &fields[0];
+        assert_eq!(field.semantic_role.as_deref(), Some("card_number"));
+        assert_eq!(field.sensitivity, Sensitivity::HighlySensitive);
+        assert!(field.protected);
+        assert!(matches!(field.value, FieldValue::Concealed(_)));
+    }
+
+    #[test]
+    fn semantic_migration_previews_applies_and_rolls_back_atomically() {
+        let (_dir, service, actor) = service();
+        let group = service.create_group("Imported", None).unwrap();
+        let created = service
+            .create_entry(
+                &actor,
+                NewEntryInput {
+                    favorite: false,
+                    group_id: group.id,
+                    kind: "core.login".into(),
+                    title: "VISA test".into(),
+                    username: None,
+                    password: None,
+                    url: None,
+                    notes: None,
+                    custom_fields: vec![
+                        ItemField {
+                            id: FieldId::new(),
+                            key: "Number".into(),
+                            label: "Number".into(),
+                            value: FieldValue::Concealed("4111111111111111".into()),
+                            sensitivity: Sensitivity::HighlySensitive,
+                            protected: true,
+                            semantic_role: None,
+                        },
+                        ItemField {
+                            id: FieldId::new(),
+                            key: "Expiration Date".into(),
+                            label: "Expiration Date".into(),
+                            value: FieldValue::Text("09/2029".into()),
+                            sensitivity: Sensitivity::PrivateMetadata,
+                            protected: false,
+                            semantic_role: None,
+                        },
+                    ],
+                    totp: None,
+                    totp_uri: None,
+                },
+                "legacy-card",
+                false,
+            )
+            .unwrap();
+        let (owner_id, owner_token) = service.register_desktop_client().unwrap();
+        let owner = service
+            .authenticate(&owner_id, &owner_token, "migration-owner")
+            .unwrap();
+        let preview = service
+            .preview_migration(&owner, KDBX_RECLASSIFY_MIGRATION_ID)
+            .unwrap();
+        assert_eq!(preview.proposals.len(), 1);
+        assert_eq!(preview.proposals[0].item_id, created.id);
+        assert_eq!(preview.proposals[0].proposed_kind, "core.credit_card");
+        assert!(matches!(
+            service.apply_migration(&owner, KDBX_RECLASSIFY_MIGRATION_ID, "stale"),
+            Err(KeyLeaseError::RevisionConflict {
+                retryable: true,
+                ..
+            })
+        ));
+        let applied = service
+            .apply_migration(
+                &owner,
+                KDBX_RECLASSIFY_MIGRATION_ID,
+                &preview.preview_digest,
+            )
+            .unwrap();
+        assert_eq!(applied.item_count, 1);
+        assert!(
+            service
+                .preview_migration(&owner, KDBX_RECLASSIFY_MIGRATION_ID)
+                .unwrap()
+                .proposals
+                .is_empty()
+        );
+        let rolled_back = service
+            .rollback_migration(&owner, KDBX_RECLASSIFY_MIGRATION_ID)
+            .unwrap();
+        assert_eq!(rolled_back.item_count, 1);
+        assert_eq!(
+            service
+                .preview_migration(&owner, KDBX_RECLASSIFY_MIGRATION_ID)
+                .unwrap()
+                .proposals
+                .len(),
+            1
+        );
+    }
+
     fn service() -> (tempfile::TempDir, KeyLeaseService, ActorContext) {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(NativeStore::open(dir.path().join("vault.sqlite")).unwrap());
@@ -3803,6 +5535,7 @@ mod tests {
         let (_dir, service, actor) = service();
         let group = service.create_group("Development", None).unwrap();
         let input = NewEntryInput {
+            favorite: false,
             group_id: group.id,
             kind: "core.login".into(),
             title: "GitHub".into(),
@@ -3898,6 +5631,15 @@ mod tests {
         assert!(matches!(error, KeyLeaseError::RevisionConflict { .. }));
         let update_patch = EntryPatch {
             title: Some("Changed".into()),
+            field_updates: vec![ItemField {
+                id: FieldId::new(),
+                key: "environment".into(),
+                label: "Environment".into(),
+                value: FieldValue::Text("production".into()),
+                sensitivity: Sensitivity::PrivateMetadata,
+                protected: false,
+                semantic_role: Some("environment".into()),
+            }],
             ..Default::default()
         };
         let updated = service
@@ -3911,6 +5653,18 @@ mod tests {
             )
             .unwrap();
         assert_eq!(updated.revision, 2);
+        assert_eq!(
+            service
+                .reveal_field_authorized(&actor, &item.id, "environment")
+                .unwrap(),
+            "production"
+        );
+        assert_eq!(
+            service
+                .reveal_field_authorized(&actor, &item.id, "password")
+                .unwrap(),
+            "new-secret"
+        );
         let repeated_update = service
             .update_entry(
                 &actor,
@@ -4055,6 +5809,44 @@ mod tests {
     #[test]
     fn password_generator_and_totp() {
         assert_eq!(generate_password(32).unwrap().len(), 32);
+        let random = generate_password_with_recipe(&PasswordRecipe::Random {
+            length: 24,
+            uppercase: true,
+            lowercase: true,
+            numbers: true,
+            symbols: true,
+            avoid_ambiguous: true,
+        })
+        .unwrap();
+        assert_eq!(random.len(), 24);
+        assert!(random.chars().any(|value| value.is_ascii_uppercase()));
+        assert!(random.chars().any(|value| value.is_ascii_lowercase()));
+        assert!(random.chars().any(|value| value.is_ascii_digit()));
+        assert!(random.chars().any(|value| !value.is_ascii_alphanumeric()));
+        assert!(!random.chars().any(|value| "0O1l".contains(value)));
+        let words = generate_password_with_recipe(&PasswordRecipe::Words {
+            count: 5,
+            separator: "-".into(),
+            capitalize: true,
+            include_number: true,
+        })
+        .unwrap();
+        assert_eq!(words.split('-').count(), 5);
+        assert!(words.chars().any(|value| value.is_ascii_digit()));
+        let pin = generate_password_with_recipe(&PasswordRecipe::Pin { length: 8 }).unwrap();
+        assert_eq!(pin.len(), 8);
+        assert!(pin.chars().all(|value| value.is_ascii_digit()));
+        assert!(
+            generate_password_with_recipe(&PasswordRecipe::Random {
+                length: 24,
+                uppercase: false,
+                lowercase: false,
+                numbers: false,
+                symbols: false,
+                avoid_ambiguous: true,
+            })
+            .is_err()
+        );
         let config = TotpConfig {
             secret_base32: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ".into(),
             issuer: None,
@@ -4433,6 +6225,143 @@ mod tests {
                 .unwrap();
             assert!(service.list_groups_authorized(&actor).is_ok());
         }
+    }
+
+    #[test]
+    fn registered_agent_can_manage_shared_content_without_grants() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(NativeStore::open(dir.path().join("vault.sqlite")).unwrap());
+        let service = KeyLeaseService::new(store).unwrap();
+        service.initialize(b"password", Duration::hours(1)).unwrap();
+        let (agent, token) = service.register_client("writer").unwrap();
+        let actor = service
+            .authenticate(&agent, &token, "writer-session")
+            .unwrap();
+
+        let project = service
+            .create_project_agent(&actor, "leasegate", Some("Leasegate"), "project-create")
+            .unwrap();
+        assert_eq!(project.slug, "leasegate");
+        assert_eq!(service.list_projects_agent(&actor).unwrap(), vec![project]);
+
+        let created = service
+            .create_content(
+                &actor,
+                ContentCreateInput {
+                    favorite: false,
+                    kind: "core.runbook".into(),
+                    title: "Release safely".into(),
+                    body: "# Release\n\nRun checks first.".into(),
+                    tags: vec!["release".into(), "ops".into()],
+                    project_slug: Some("leasegate".into()),
+                },
+                "content-create",
+            )
+            .unwrap();
+        assert_eq!(created.summary.agent_access, AgentAccess::ReadWrite);
+        assert_eq!(
+            created.summary.content_metadata.review_state,
+            ContentReviewState::Unreviewed
+        );
+        assert_eq!(created.summary.project_slug.as_deref(), Some("leasegate"));
+        assert_eq!(
+            service
+                .get_content(&actor, &created.summary.id)
+                .unwrap()
+                .body,
+            created.body
+        );
+
+        let updated = service
+            .update_content(
+                &actor,
+                &created.summary.id,
+                ContentPatch {
+                    body: Some("# Release\n\nRun all checks first.".into()),
+                    add_tags: vec!["verified-later".into()],
+                    ..ContentPatch::default()
+                },
+                created.summary.revision,
+                "content-update",
+            )
+            .unwrap();
+        assert_eq!(updated.summary.revision, created.summary.revision + 1);
+        assert!(updated.summary.tags.contains(&"verified-later".into()));
+        assert_eq!(
+            service
+                .search_content(
+                    &actor,
+                    "all checks",
+                    Some("runbook"),
+                    None,
+                    Some("leasegate"),
+                    false
+                )
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(matches!(
+            service.set_content_access(
+                &actor,
+                &updated.summary.id,
+                AgentAccess::None,
+                updated.summary.revision,
+                "content-access",
+            ),
+            Err(KeyLeaseError::Denied { .. })
+        ));
+        let (owner_id, owner_token) = service.register_desktop_client().unwrap();
+        let owner = service
+            .authenticate(&owner_id, &owner_token, "owner-session")
+            .unwrap();
+        let private = service
+            .set_content_access(
+                &owner,
+                &updated.summary.id,
+                AgentAccess::None,
+                updated.summary.revision,
+                "owner-content-access",
+            )
+            .unwrap();
+        assert_eq!(private.summary.agent_access, AgentAccess::None);
+        assert!(matches!(
+            service.get_content(&actor, &private.summary.id),
+            Err(KeyLeaseError::NotFound { .. })
+        ));
+        let reviewed = service
+            .review_content(
+                &owner,
+                &private.summary.id,
+                private.summary.revision,
+                "owner-content-review",
+            )
+            .unwrap();
+        assert_eq!(
+            reviewed.summary.content_metadata.review_state,
+            ContentReviewState::HumanReviewed
+        );
+    }
+
+    #[test]
+    fn content_channel_obeys_global_kill_switch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(NativeStore::open(dir.path().join("vault.sqlite")).unwrap());
+        let service = KeyLeaseService::new(store).unwrap();
+        service.initialize(b"password", Duration::hours(1)).unwrap();
+        let (agent, token) = service.register_client("writer").unwrap();
+        let actor = service
+            .authenticate(&agent, &token, "writer-session")
+            .unwrap();
+        service.kill_switch(true).unwrap();
+        assert!(matches!(
+            service.search_content(&actor, "", None, None, None, false),
+            Err(KeyLeaseError::Denied { .. })
+        ));
+        assert!(matches!(
+            service.create_project_agent(&actor, "blocked", None, "blocked-project"),
+            Err(KeyLeaseError::Denied { .. })
+        ));
     }
 
     #[test]

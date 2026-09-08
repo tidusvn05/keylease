@@ -143,6 +143,7 @@ class SecretField extends StatelessWidget {
     required this.onCopy,
     this.busy = false,
     this.maskLength = 12,
+    this.maskedValue,
     super.key,
   });
 
@@ -153,13 +154,14 @@ class SecretField extends StatelessWidget {
   final VoidCallback? onCopy;
   final bool busy;
   final int maskLength;
+  final String? maskedValue;
 
   bool get revealed => revealedValue != null;
 
   @override
   Widget build(BuildContext context) => DetailField(
     label: label,
-    value: revealed ? revealedValue : '•' * maskLength,
+    value: revealed ? revealedValue : (maskedValue ?? '•' * maskLength),
     monospace: true,
     actions: [
       IconAction(

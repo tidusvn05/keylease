@@ -240,6 +240,100 @@ void main() {
     expect(find.byKey(const ValueKey('entry-save')), findsOneWidget);
   });
 
+  testWidgets('changing template rebuilds the form from its schema', (
+    tester,
+  ) async {
+    await pumpVault(
+      tester,
+      script: (client) => client.value('templates_list', [
+        {
+          'kind': 'core.login',
+          'label': 'Login',
+          'family': 'access',
+          'markdown_notes': true,
+          'fields': [
+            {
+              'key': 'username',
+              'label': 'Username',
+              'value_type': 'text',
+              'semantic_role': 'username',
+              'section': 'Login',
+            },
+            {
+              'key': 'password',
+              'label': 'Password',
+              'value_type': 'concealed',
+              'semantic_role': 'password',
+              'protected': true,
+              'section': 'Login',
+            },
+          ],
+        },
+        {
+          'kind': 'core.note',
+          'label': 'Note',
+          'family': 'agent_content',
+          'markdown_notes': true,
+          'fields': <Map<String, dynamic>>[],
+        },
+        {
+          'kind': 'core.credit_card',
+          'label': 'Credit Card',
+          'family': 'financial',
+          'markdown_notes': true,
+          'fields': [
+            {
+              'key': 'card_number',
+              'label': 'Card number',
+              'value_type': 'concealed',
+              'semantic_role': 'card_number',
+              'protected': true,
+              'section': 'Card',
+            },
+            {
+              'key': 'expiry',
+              'label': 'Expiry',
+              'value_type': 'month_year',
+              'semantic_role': 'expiry',
+              'section': 'Card',
+            },
+          ],
+        },
+      ]),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('action-New item')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('entry-username')), findsOneWidget);
+    expect(find.byKey(const ValueKey('entry-password')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('entry-kind')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Note').last);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('entry-username')), findsNothing);
+    expect(find.byKey(const ValueKey('entry-password')), findsNothing);
+    expect(find.text('Markdown body'), findsOneWidget);
+    expect(find.byKey(const ValueKey('entry-notes')), findsOneWidget);
+    expect(find.byKey(const ValueKey('entry-tags')), findsOneWidget);
+    expect(find.byKey(const ValueKey('entry-project')), findsOneWidget);
+    expect(find.byKey(const ValueKey('entry-group')), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('entry-kind')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Credit Card').last);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('entry-template-card_number')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('entry-template-expiry')), findsOneWidget);
+    expect(find.byKey(const ValueKey('entry-tags')), findsNothing);
+    expect(find.byKey(const ValueKey('entry-group')), findsOneWidget);
+  });
+
   testWidgets('settings hide internal connection details', (tester) async {
     final harness = await pumpVault(tester);
     harness.app.selectSection(AppSection.settings);
@@ -250,5 +344,88 @@ void main() {
     expect(find.text('Unix socket'), findsNothing);
     expect(find.text('Client ID'), findsNothing);
     expect(find.textContaining('token'), findsNothing);
+  });
+
+  testWidgets('standalone generator copies and creates a prefilled Login', (
+    tester,
+  ) async {
+    final harness = await pumpVault(tester);
+
+    await tester.tap(find.byKey(const ValueKey('tool-password-generator')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Password generator'), findsWidgets);
+    expect(find.byKey(const ValueKey('password-copied')), findsOneWidget);
+    expect(harness.adapter.copied, ['generated-32-characters-long!!']);
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.byKey(const ValueKey('password-copied')), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('password-use')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('New item'), findsOneWidget);
+    expect(harness.app.vault.activeDraft?.kind, 'core.login');
+    expect(
+      harness.app.vault.activeDraft?.password,
+      'generated-32-characters-long!!',
+    );
+  });
+
+  testWidgets('password field generates immediately and shows copied briefly', (
+    tester,
+  ) async {
+    final harness = await pumpVault(tester);
+
+    await tester.tap(find.byKey(const ValueKey('action-New item')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('entry-password-settings')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('entry-password-generate')));
+    await tester.pump();
+    await tester.pump();
+
+    expect(harness.adapter.copied, ['generated-32-characters-long!!']);
+    expect(
+      find.bySemanticsLabel('Password generated and copied'),
+      findsOneWidget,
+    );
+    expect(find.text('Password generator settings'), findsNothing);
+
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.bySemanticsLabel('Generate and copy password'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('entry-password-settings')));
+    await tester.pumpAndSettle();
+    expect(find.text('Password generator settings'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('password-settings-save')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('Login editor scans a TOTP QR image into the item', (
+    tester,
+  ) async {
+    final harness = await pumpVault(tester);
+    const uri =
+        'otpauth://totp/Example:alice?secret=JBSWY3DPEHPK3PXP&issuer=Example';
+    harness.adapter.qrCodeToReturn = uri;
+
+    await tester.tap(find.byKey(const ValueKey('action-New item')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('entry-totp-scan')));
+    await tester.pumpAndSettle();
+
+    expect(harness.app.vault.activeDraft?.totp, uri);
+    final editable = tester.widget<EditableText>(
+      find.descendant(
+        of: find.byKey(const ValueKey('entry-totp')),
+        matching: find.byType(EditableText),
+      ),
+    );
+    expect(editable.controller.text, uri);
   });
 }

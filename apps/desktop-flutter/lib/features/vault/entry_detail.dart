@@ -11,6 +11,7 @@ import '../../ui/components/keylease_dialog.dart';
 import '../../ui/components/keylease_mark.dart';
 import '../../ui/components/secret_field.dart';
 import '../../ui/components/section_label.dart';
+import '../../ui/components/scroll_area.dart';
 import '../../ui/components/state_screen.dart';
 import '../../ui/tokens/keylease_tokens.dart';
 import 'entry_editor.dart';
@@ -54,6 +55,27 @@ class EntryDetail extends StatelessWidget {
     }
   }
 
+  Future<void> _copyField(
+    BuildContext context,
+    EntrySummary item,
+    EntryFieldView field,
+  ) async {
+    final value = field.protected
+        ? vault.revealedValue(item.id, field.id) ??
+              await vault.fetchField(item, field)
+        : field.displayValue;
+    if (value == null || value.isEmpty) return;
+    if (!context.mounted) return;
+    final copied = await app.copySensitive(value);
+    if (copied && context.mounted) {
+      showFToast(
+        context: context,
+        title: Text('${field.label} copied'),
+        description: const Text('The clipboard clears in 30 seconds.'),
+      );
+    }
+  }
+
   Future<void> _copyAgentPrompt(BuildContext context, EntrySummary item) async {
     final copied = await app.copyAgentPrompt(item);
     if (!copied || !context.mounted) return;
@@ -62,6 +84,23 @@ class EntryDetail extends StatelessWidget {
       title: const Text('Entry prompt copied'),
       description: const Text('Paste it into Codex or another local agent.'),
     );
+  }
+
+  Future<void> _copyContent(BuildContext context, EntrySummary item) async {
+    try {
+      final body = await vault.fetchContentBody(item);
+      if (body == null || body.isEmpty || !context.mounted) return;
+      final copied = await app.copySensitive(body);
+      if (copied && context.mounted) {
+        showFToast(
+          context: context,
+          title: const Text('Markdown copied'),
+          description: const Text('The clipboard clears in 30 seconds.'),
+        );
+      }
+    } catch (caught) {
+      if (context.mounted) showFailure(context, caught);
+    }
   }
 
   Future<void> _copyCliCommand(BuildContext context, EntrySummary item) async {
@@ -110,11 +149,17 @@ class EntryDetail extends StatelessWidget {
     }
     final tokens = KeyLeaseTokens.of(context);
     final theme = context.theme;
+    final detail = vault.entryView(item.id);
     final password = vault.revealedValue(item.id, 'password');
     final username = vault.revealedValue(item.id, 'username');
     final hasUsername = (username ?? item.username)?.isNotEmpty == true;
     final hasLoginDetails =
         hasUsername || item.hasPassword || item.primaryUrl != null;
+    final isAgentContent = const {
+      'core.prompt',
+      'core.runbook',
+      'core.note',
+    }.contains(item.kind);
     Widget identity() => Row(
       children: [
         KeyLeaseMark(text: item.monogram, large: true),
@@ -134,7 +179,7 @@ class EntryDetail extends StatelessWidget {
               ),
               const SizedBox(height: 5),
               Text(
-                item.primaryUrl ?? kindLabel(item.kind),
+                item.primaryUrl ?? vault.kindLabel(item.kind),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: theme.typography.body.sm.copyWith(
@@ -151,14 +196,27 @@ class EntryDetail extends StatelessWidget {
       runSpacing: 6,
       alignment: WrapAlignment.end,
       children: [
+        IconAction(
+          label: item.favorite ? 'Remove from favorites' : 'Add to favorites',
+          icon: item.favorite ? FLucideIcons.starOff : FLucideIcons.star,
+          onPress: () async {
+            try {
+              await vault.toggleFavorite(item);
+            } catch (caught) {
+              if (context.mounted) showFailure(context, caught);
+            }
+          },
+        ),
         FButton(
           key: ValueKey('entry-prompt-${item.id}'),
           variant: FButtonVariant.outline,
           size: FButtonSizeVariant.xs,
           mainAxisSize: MainAxisSize.min,
           prefix: const Icon(FLucideIcons.terminal, size: 14),
-          onPress: () => _copyAgentPrompt(context, item),
-          child: const Text('Prompt'),
+          onPress: () => isAgentContent
+              ? _copyContent(context, item)
+              : _copyAgentPrompt(context, item),
+          child: Text(isAgentContent ? 'Copy Markdown' : 'Prompt'),
         ),
         FButton(
           key: ValueKey('entry-cli-${item.id}'),
@@ -181,7 +239,7 @@ class EntryDetail extends StatelessWidget {
         ),
       ],
     );
-    return ListView(
+    return KeyLeaseScrollArea(
       key: ValueKey('detail-${item.id}'),
       padding: EdgeInsets.fromLTRB(
         tokens.gutter * 1.6,
@@ -268,6 +326,37 @@ class EntryDetail extends StatelessWidget {
             ],
           ),
         ],
+        if (detail != null && _additionalFields(detail).isNotEmpty) ...[
+          SizedBox(height: tokens.gutter * 1.5),
+          const SectionLabel('Details'),
+          FieldGroup(
+            children: [
+              for (final field in _additionalFields(detail))
+                if (field.protected)
+                  SecretField(
+                    label: field.label,
+                    revealedValue: vault.revealedValue(item.id, field.id),
+                    busy: vault.isBusy('reveal.${item.id}/${field.id}'),
+                    maskedValue: field.displayHint,
+                    onReveal: () => vault.revealField(item, field),
+                    onHide: () => vault.hideSecret(item.id, field.id),
+                    onCopy: () => _copyField(context, item, field),
+                  )
+                else
+                  DetailField(
+                    label: field.label,
+                    value: field.displayValue,
+                    actions: [
+                      IconAction(
+                        label: 'Copy ${field.label}',
+                        icon: FLucideIcons.copy,
+                        onPress: () => _copyField(context, item, field),
+                      ),
+                    ],
+                  ),
+            ],
+          ),
+        ],
         if (item.hasTotp) ...[
           SizedBox(height: tokens.gutter * 1.5),
           const SectionLabel('Two-factor authentication'),
@@ -280,11 +369,34 @@ class EntryDetail extends StatelessWidget {
         SizedBox(height: tokens.gutter * 1.5),
         _MetadataSection(
           item: item,
+          detail: detail,
+          templateLabel: vault.kindLabel(item.kind),
+          projectName: vault.projectName(detail?.projectId),
           groupName: _groupName(item.groupId),
           onHistory: () => _history(context, item),
         ),
       ],
     );
+  }
+
+  List<EntryFieldView> _additionalFields(EntryDetailView detail) {
+    const legacyRoles = {'username', 'password', 'website', 'url', 'otp'};
+    const legacyKeys = {
+      'username',
+      'password',
+      'url',
+      'website',
+      'otp',
+      'totp',
+    };
+    return detail.fields
+        .where(
+          (field) =>
+              field.hasValue &&
+              !legacyRoles.contains(field.semanticRole) &&
+              !legacyKeys.contains(field.key.toLowerCase()),
+        )
+        .toList(growable: false);
   }
 
   String _groupName(String id) {
@@ -477,11 +589,17 @@ class _InlineNotesSectionState extends State<_InlineNotesSection> {
 class _MetadataSection extends StatefulWidget {
   const _MetadataSection({
     required this.item,
+    required this.detail,
+    required this.templateLabel,
+    required this.projectName,
     required this.groupName,
     required this.onHistory,
   });
 
   final EntrySummary item;
+  final EntryDetailView? detail;
+  final String templateLabel;
+  final String? projectName;
   final String groupName;
   final VoidCallback onHistory;
 
@@ -523,8 +641,12 @@ class _MetadataSectionState extends State<_MetadataSection> {
         const SizedBox(height: 8),
         FieldGroup(
           children: [
-            DetailField(label: 'Template', value: kindLabel(widget.item.kind)),
+            DetailField(label: 'Template', value: widget.templateLabel),
             DetailField(label: 'Group', value: widget.groupName),
+            if (widget.projectName != null)
+              DetailField(label: 'Project', value: widget.projectName),
+            if (widget.detail?.tags.isNotEmpty == true)
+              DetailField(label: 'Tags', value: widget.detail!.tags.join(', ')),
             DetailField(
               label: 'Last updated',
               value: widget.item.updatedAt?.toString() ?? 'Unknown',

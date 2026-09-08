@@ -7,8 +7,7 @@ import 'keylease_mark.dart';
 
 /// One vault entry in the list.
 ///
-/// The row shows only what `ItemMetadata` carries. There is no favourite star
-/// or "recently used" marker because the IPC contract has no such field.
+/// Favorites are visible without opening an item.
 class EntryRow extends StatelessWidget {
   const EntryRow({
     required this.entry,
@@ -41,6 +40,7 @@ class EntryRow extends StatelessWidget {
         subtitle: subtitle.isEmpty
             ? null
             : Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+        suffix: entry.favorite ? const Icon(FLucideIcons.star, size: 15) : null,
       ),
     );
   }

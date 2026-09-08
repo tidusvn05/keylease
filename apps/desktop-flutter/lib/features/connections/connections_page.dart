@@ -7,6 +7,7 @@ import '../../core/state/section_controllers.dart';
 import '../../ui/components/connection_health.dart';
 import '../../ui/components/keylease_dialog.dart';
 import '../../ui/components/message_banner.dart';
+import '../../ui/components/scroll_area.dart';
 import '../../ui/components/secret_field.dart';
 import '../../ui/components/section_label.dart';
 import '../../ui/components/state_screen.dart';
@@ -67,7 +68,7 @@ class ConnectionsPage extends StatelessWidget {
                           'Connect an account so KeyLease can act on the '
                           'exact resources you allow.',
                     )
-                  : ListView.builder(
+                  : KeyLeaseScrollArea.builder(
                       padding: EdgeInsets.fromLTRB(
                         tokens.gutter,
                         0,

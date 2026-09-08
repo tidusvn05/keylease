@@ -12,6 +12,7 @@ import '../rpc/keylease_rpc.dart';
 import 'app_phase.dart';
 import 'busy_registry.dart';
 import 'connection_settings.dart';
+import 'password_generator_settings.dart';
 import 'section_controllers.dart';
 import 'user_message.dart';
 import 'vault_controller.dart';
@@ -73,7 +74,10 @@ Keep returned secrets private. If the vault is locked, ask me to unlock KeyLease
   bool legacyAvailable = false;
   String? legacyDatabase;
   String? serviceVersion;
+  List<LocalVaultProfile> vaultProfiles = const [];
   bool _createFirstItemRequested = false;
+  PasswordGeneratorSettings passwordGeneratorSettings =
+      const PasswordGeneratorSettings();
 
   late final VaultController vault;
   late final ConnectionsController connections;
@@ -93,9 +97,16 @@ Keep returned secrets private. If the vault is locked, ask me to unlock KeyLease
         KeyLeaseLayout.sidebarWidth;
     listWidth =
         (stored['list_width'] as num?)?.toDouble() ?? KeyLeaseLayout.listWidth;
+    passwordGeneratorSettings = PasswordGeneratorSettings.fromJson(
+      stored['password_generator'],
+    );
     notifyListeners();
     try {
       final inspection = await runtime.inspect();
+      if (inspection.tokenPath != null) {
+        settings = settings.copyWith(tokenPath: inspection.tokenPath);
+      }
+      vaultProfiles = await runtime.listVaults();
       legacyAvailable = inspection.legacyAvailable;
       legacyDatabase = inspection.legacyDatabase;
       serviceVersion = inspection.serviceVersion;
@@ -125,7 +136,16 @@ Keep returned secrets private. If the vault is locked, ask me to unlock KeyLease
   Future<void> persistPreferences() => preferences.save({
     'sidebar_width': sidebarWidth,
     'list_width': listWidth,
+    'password_generator': passwordGeneratorSettings.toJson(),
   });
+
+  Future<void> updatePasswordGeneratorSettings(
+    PasswordGeneratorSettings value,
+  ) async {
+    passwordGeneratorSettings = value;
+    notifyListeners();
+    await persistPreferences();
+  }
 
   void setPaneWidths({double? sidebar, double? list}) {
     sidebarWidth = sidebar ?? sidebarWidth;
@@ -197,6 +217,7 @@ Keep returned secrets private. If the vault is locked, ask me to unlock KeyLease
         }
 
         _enter(AppPhase.ready, null);
+        await vault.loadMigrations();
         await loadSection();
       },
       onError: (caught) {
@@ -255,6 +276,55 @@ Keep returned secrets private. If the vault is locked, ask me to unlock KeyLease
 
   Future<void> openDataFolder() => runtime.openDataFolder();
 
+  Future<void> reloadVaultProfiles() async {
+    vaultProfiles = await runtime.listVaults();
+    notifyListeners();
+  }
+
+  Future<void> createManagedVault(
+    String name,
+    Map<String, dynamic> request,
+  ) async {
+    await runtime.createVault(name, request);
+    await reloadVaultProfiles();
+  }
+
+  Future<void> renameManagedVault(String id, String name) async {
+    await runtime.renameVault(id, name);
+    await reloadVaultProfiles();
+  }
+
+  Future<void> switchManagedVault(String id) async {
+    final previous = vaultProfiles
+        .where((profile) => profile.active)
+        .firstOrNull;
+    if (previous?.id == id) return;
+    if (isReady) await lock();
+    _clearSessionData();
+    try {
+      await runtime.switchVault(id);
+      await runtime.restartService();
+      final inspection = await runtime.inspect();
+      settings = ConnectionSettings.defaults().copyWith(
+        tokenPath: inspection.tokenPath,
+      );
+      vaultProfiles = await runtime.listVaults();
+      await _waitForService();
+      await refresh();
+    } catch (_) {
+      if (previous != null) {
+        await runtime.switchVault(previous.id);
+        await runtime.restartService();
+        final inspection = await runtime.inspect();
+        settings = ConnectionSettings.defaults().copyWith(
+          tokenPath: inspection.tokenPath,
+        );
+        vaultProfiles = await runtime.listVaults();
+      }
+      rethrow;
+    }
+  }
+
   Future<void> _waitForService() async {
     Object? lastError;
     for (var attempt = 0; attempt < 30; attempt++) {
@@ -274,14 +344,10 @@ Keep returned secrets private. If the vault is locked, ask me to unlock KeyLease
     switch (section) {
       case AppSection.vault:
         await vault.load();
-      case AppSection.connections:
-        await connections.load();
       case AppSection.approvals:
         await approvals.load();
-      case AppSection.activity:
-        await activity.load();
       case AppSection.settings:
-        break;
+        await Future.wait([connections.load(), activity.load()]);
     }
   }
 

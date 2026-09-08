@@ -8,13 +8,18 @@ import '../models/models.dart';
 /// navigation change cannot lose typed data. Secret fields start empty on an
 /// edit: an empty secret means "keep the stored value", never "clear it".
 class EntryDraft {
-  EntryDraft.create({this.groupId, this.kind = 'core.login'})
-    : entryId = null,
-      revision = 0,
-      _originalGroupId = groupId,
-      _originalTitle = '',
-      _originalUsername = '',
-      _originalUrl = '';
+  EntryDraft.create({
+    this.groupId,
+    this.kind = 'core.login',
+    String initialPassword = '',
+  }) : entryId = null,
+       revision = 0,
+       _originalGroupId = groupId,
+       _originalTitle = '',
+       _originalUsername = '',
+       _originalUrl = '' {
+    password = initialPassword;
+  }
 
   EntryDraft.edit(EntrySummary entry)
     : entryId = entry.id,
@@ -28,6 +33,8 @@ class EntryDraft {
     title = entry.title;
     username = entry.username ?? '';
     url = entry.primaryUrl ?? '';
+    favorite = entry.favorite;
+    _originalFavorite = entry.favorite;
   }
 
   final String? entryId;
@@ -39,6 +46,7 @@ class EntryDraft {
   final String _originalTitle;
   final String _originalUsername;
   final String _originalUrl;
+  bool _originalFavorite = false;
 
   String title = '';
   String username = '';
@@ -47,6 +55,13 @@ class EntryDraft {
   String notes = '';
   String totp = '';
   String customFields = '';
+  String tags = '';
+  String? projectSlug;
+  String agentAccess = 'none';
+  bool favorite = false;
+
+  bool get isAgentContent =>
+      const {'core.prompt', 'core.runbook', 'core.note'}.contains(kind);
 
   bool get isNew => entryId == null;
 
@@ -58,6 +73,10 @@ class EntryDraft {
       password.isNotEmpty ||
       notes.isNotEmpty ||
       totp.isNotEmpty ||
+      tags.isNotEmpty ||
+      projectSlug != null ||
+      agentAccess != 'none' ||
+      favorite != _originalFavorite ||
       customFields.isNotEmpty;
 
   /// Field-level validation messages, keyed by field name.
@@ -66,7 +85,7 @@ class EntryDraft {
     if (title.trim().isEmpty) {
       errors['title'] = 'Give this item a name.';
     }
-    if (groupId == null || groupId!.isEmpty) {
+    if (!isAgentContent && (groupId == null || groupId!.isEmpty)) {
       errors['group'] = 'Choose a group for this item.';
     }
     if (customFields.trim().isNotEmpty && _parseCustomFields() == null) {
@@ -104,6 +123,7 @@ class EntryDraft {
     'group_id': groupId,
     'kind': kind,
     'title': title.trim(),
+    'favorite': favorite,
     'username': username,
     'password': password.isEmpty ? null : password,
     'url': url.isEmpty ? null : url,
@@ -111,6 +131,37 @@ class EntryDraft {
     'custom_fields': _parseCustomFields() ?? <dynamic>[],
     'totp': _totpPayload(),
     'totp_uri': _totpUri,
+  };
+
+  Map<String, dynamic> toContentCreateInput() => {
+    'kind': kind,
+    'title': title.trim(),
+    'body': notes,
+    'tags': tags
+        .split(',')
+        .map((tag) => tag.trim())
+        .where((tag) => tag.isNotEmpty)
+        .toSet()
+        .toList(growable: false),
+    'project_slug': projectSlug,
+    'favorite': favorite,
+  };
+
+  Map<String, dynamic> toContentPatch() => {
+    'title': title.trim(),
+    if (notes.isNotEmpty) 'body': notes,
+    if (tags.trim().isNotEmpty)
+      'tags': tags
+          .split(',')
+          .map((tag) => tag.trim())
+          .where((tag) => tag.isNotEmpty)
+          .toSet()
+          .toList(growable: false),
+    'add_tags': <String>[],
+    'remove_tags': <String>[],
+    if (projectSlug != null) 'project_slug': projectSlug,
+    'clear_project': false,
+    if (favorite != _originalFavorite) 'favorite': favorite,
   };
 
   /// `entries_update` patch. Empty secrets are omitted so they keep their
@@ -122,11 +173,12 @@ class EntryDraft {
       'username': username,
       'url': url.isEmpty ? null : url,
       if (groupId != _originalGroupId) 'group_id': groupId,
+      if (favorite != _originalFavorite) 'favorite': favorite,
       if (password.isNotEmpty) 'password': password,
       if (notes.isNotEmpty) 'notes': notes,
       if (_totpPayload() != null) 'totp': _totpPayload(),
       if (_totpUri != null) 'totp_uri': _totpUri,
-      if (parsed != null) 'custom_fields': parsed,
+      if (parsed != null) 'field_updates': parsed,
     };
   }
 
