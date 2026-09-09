@@ -180,6 +180,9 @@ class AgentCreationPromptBuilder {
       )
       ..writeln(
         '3. Gather only the values needed for this one item. Ask concise questions if required data is missing. Never ask for the master password.',
+      )
+      ..writeln(
+        '   If you need more information, say exactly: `Waiting for details — no KeyLease item has been created yet.` Then list the missing fields and stop until I reply.',
       );
 
     if (draft.isAgentContent) {
@@ -199,7 +202,7 @@ class AgentCreationPromptBuilder {
         '- Do not perform network connections, SSH tests, logins, or other external side effects while collecting this item.',
       )
       ..writeln(
-        '- After creation, verify the returned item ID and report only its ID, title, template, destination, and field names. Redact every secret value.',
+        '- After successful creation, start your response with `Created in KeyLease: <item-id>`. Then report only its title, template, destination, and field names. Redact every secret value.',
       )
       ..writeln(
         '- Do not create a second item. Reuse the supplied idempotency key if this instruction is retried.',

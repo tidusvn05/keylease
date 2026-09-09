@@ -95,6 +95,13 @@ void main() {
       expect(prompt, contains('--dry-run'));
       expect(prompt, contains('create it immediately'));
       expect(prompt.toLowerCase(), contains('create exactly one item'));
+      expect(
+        prompt,
+        contains(
+          'Waiting for details — no KeyLease item has been created yet.',
+        ),
+      );
+      expect(prompt, contains('Created in KeyLease: <item-id>'));
       expect(prompt, contains('ssh_connect_via'));
       expect(prompt, contains('Never save an `IdentityFile` path'));
       expect(prompt, isNot(contains('desktop.token')));
@@ -194,11 +201,15 @@ void main() {
     expect(prompt, contains('Destination group: "Work" (`group-work`)'));
     expect(prompt, contains('Do not create a second item'));
 
-    created = true;
     await tester.pump(const Duration(seconds: 4));
     final refresh = find.byKey(const ValueKey('agent-refresh-review'));
     await tester.drag(find.byType(ListView).last, const Offset(0, -500));
     await tester.pumpAndSettle();
+    await tester.tap(refresh);
+    await tester.pumpAndSettle();
+    expect(find.text('The agent has not created an item yet'), findsOneWidget);
+
+    created = true;
     await tester.tap(refresh);
     await tester.pumpAndSettle();
 

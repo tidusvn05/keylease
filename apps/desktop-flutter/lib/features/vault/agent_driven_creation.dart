@@ -172,7 +172,7 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
           context: context,
           title: const Text('Agent prompt copied'),
           description: const Text(
-            'Paste it into a local agent with terminal access. The clipboard clears in 2 minutes.',
+            'Paste it into your agent and answer any follow-up questions until it returns an item ID.',
           ),
         );
       }
@@ -199,8 +199,8 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
       } else if (candidates.isEmpty) {
         setState(() {
           _message = const UserMessage(
-            title: 'No new item found yet',
-            detail: 'Let the agent finish, then refresh again. Your prompt setup is still here.',
+            title: 'The agent has not created an item yet',
+            detail: 'If the agent asked for a title or fields, reply in that chat first. Refresh only after it says “Created in KeyLease” and returns an item ID.',
           );
         });
       } else {
@@ -426,7 +426,7 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
         const _StepTitle(number: 4, title: 'Refresh and review'),
         const SizedBox(height: 8),
         Text(
-          'After the agent returns an item ID, refresh KeyLease to find the new item and edit anything it inferred incorrectly.',
+          'Continue the agent conversation until it says “Created in KeyLease” and returns an item ID. Then refresh here to review and edit the result.',
           style: theme.typography.body.sm.copyWith(
             color: theme.colors.mutedForeground,
           ),
