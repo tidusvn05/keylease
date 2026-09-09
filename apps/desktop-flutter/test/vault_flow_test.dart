@@ -379,6 +379,52 @@ void main() {
     expect(find.byKey(const ValueKey('entry-group')), findsOneWidget);
   });
 
+  testWidgets(
+    'adding an SSH server spaces cards and scrolls to inline errors',
+    (tester) async {
+      final harness = await pumpVault(
+        tester,
+        size: const Size(1280, 600),
+        script: (client) => client.value('entries_search', [
+          Fixtures.entry(kind: 'core.ssh_server'),
+        ]),
+      );
+
+      expect(harness.app.vault.entries.single.kind, 'core.ssh_server');
+      harness.app.vault.beginEdit(harness.app.vault.entries.single);
+      await tester.pumpAndSettle();
+      expect(harness.app.vault.activeDraft?.kind, 'core.ssh_server');
+      expect(find.text('Edit item'), findsOneWidget);
+      expect(find.text('SSH SERVERS'), findsOneWidget);
+
+      final addServer = find.byKey(const ValueKey('ssh-add-server'));
+      await tester.tap(addServer);
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(addServer);
+      await tester.pumpAndSettle();
+      await tester.tap(addServer);
+      await tester.pumpAndSettle();
+
+      final cards = find.byWidgetPredicate(
+        (widget) =>
+            widget.key is ValueKey &&
+            '${widget.key}'.contains('ssh-endpoint-card-'),
+      );
+      expect(cards, findsNWidgets(2));
+      final first = tester.getRect(cards.first);
+      final second = tester.getRect(cards.last);
+      expect(second.top - first.bottom, greaterThanOrEqualTo(12));
+      expect(second.top, inInclusiveRange(60, 180));
+      expect(find.text('Enter an SSH alias.'), findsNWidgets(2));
+      expect(
+        find.text(
+          'SSH aliases must be unique and contain only letters, digits, dot, underscore, or hyphen.',
+        ),
+        findsNothing,
+      );
+    },
+  );
+
   testWidgets('settings hide internal connection details', (tester) async {
     final harness = await pumpVault(tester);
     harness.app.selectSection(AppSection.settings);

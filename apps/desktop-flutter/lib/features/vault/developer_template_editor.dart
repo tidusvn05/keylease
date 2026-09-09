@@ -597,6 +597,8 @@ class _SshServerTemplateEditorState extends State<SshServerTemplateEditor> {
   final _endpoints = <_SshEndpointDraft>[];
   final _forwards = <_SshForwardDraft>[];
   final _removed = <String>[];
+  final _endpointAnchors = <String, GlobalKey>{};
+  final _forwardAnchors = <String, GlobalKey>{};
   var _hydrated = false;
   var _discovering = false;
   List<SshPrivateKeyCandidate> _keys = const [];
@@ -703,58 +705,69 @@ class _SshServerTemplateEditorState extends State<SshServerTemplateEditor> {
     secret: secret,
   );
 
+  Map<String, String> _errorsForEndpoint(_SshEndpointDraft endpoint) {
+    final errors = <String, String>{};
+    if (endpoint.name.trim().isEmpty) {
+      errors['name'] = 'Enter a display name.';
+    }
+    if (endpoint.host.trim().isEmpty) {
+      errors['host'] = 'Enter a host or IP address.';
+    }
+    final alias = endpoint.alias.trim();
+    if (alias.isEmpty) {
+      errors['alias'] = 'Enter an SSH alias.';
+    } else if (!RegExp(r'^[A-Za-z0-9._-]+$').hasMatch(alias)) {
+      errors['alias'] =
+          'Use only letters, digits, dots, underscores, or hyphens.';
+    } else if (_endpoints.where((item) => item.alias.trim() == alias).length >
+        1) {
+      errors['alias'] = 'This SSH alias is already used by another server.';
+    }
+    final port = int.tryParse(endpoint.port);
+    if (port == null || port < 1 || port > 65535) {
+      errors['port'] = 'Use a port from 1 to 65535.';
+    }
+    if (endpoint.connectVia.isNotEmpty &&
+        !_endpoints.any((item) => item.id == endpoint.connectVia)) {
+      errors['connectVia'] = 'Choose an existing jump host.';
+    }
+    final seen = <String>{};
+    var cursor = endpoint;
+    while (cursor.connectVia.isNotEmpty) {
+      if (!seen.add(cursor.id)) {
+        errors['connectVia'] = 'Jump host chains cannot contain a cycle.';
+        break;
+      }
+      final next = _endpoints
+          .where((item) => item.id == cursor.connectVia)
+          .firstOrNull;
+      if (next == null) break;
+      cursor = next;
+    }
+    if (endpoint.authMode == 'password' &&
+        endpoint.password.isEmpty &&
+        !endpoint.storedRoles.contains('ssh_password')) {
+      errors['password'] = 'Enter the SSH password.';
+    }
+    if (endpoint.sudoMode == 'same_as_ssh_password' &&
+        endpoint.authMode != 'password') {
+      errors['sudo'] =
+          'Reusing the SSH password requires password authentication.';
+    }
+    if (endpoint.sudoMode == 'separate_password' &&
+        endpoint.sudoPassword.isEmpty &&
+        !endpoint.storedRoles.contains('ssh_sudo_password')) {
+      errors['sudoPassword'] = 'Enter the sudo password.';
+    }
+    return errors;
+  }
+
   void _sync() {
     final errors = <String, String>{};
     final removals = <String>{..._removed};
-    final aliases = <String>{};
     final endpointIds = _endpoints.map((endpoint) => endpoint.id).toSet();
-    for (final endpoint in _endpoints) {
-      if (endpoint.name.trim().isEmpty || endpoint.host.trim().isEmpty) {
-        errors['ssh_endpoints'] = 'Every server needs a name and host.';
-      }
-      if (!RegExp(r'^[A-Za-z0-9._-]+$').hasMatch(endpoint.alias) ||
-          !aliases.add(endpoint.alias)) {
-        errors['ssh_endpoints'] = 'SSH aliases must be unique and contain only letters, digits, dot, underscore, or hyphen.';
-      }
-      final port = int.tryParse(endpoint.port);
-      if (port == null || port < 1 || port > 65535) {
-        errors['ssh_endpoints'] = 'SSH ports must be in 1..65535.';
-      }
-      if (endpoint.connectVia.isNotEmpty &&
-          !endpointIds.contains(endpoint.connectVia)) {
-        errors['ssh_endpoints'] = 'A selected jump host no longer exists.';
-      }
-      if (endpoint.authMode == 'password' &&
-          endpoint.password.isEmpty &&
-          !endpoint.storedRoles.contains('ssh_password')) {
-        errors['ssh_endpoints'] =
-            'Password authentication requires a password.';
-      }
-      if (endpoint.sudoMode == 'same_as_ssh_password' &&
-          endpoint.authMode != 'password') {
-        errors['ssh_endpoints'] = 'Sudo can reuse the SSH password only with password authentication.';
-      }
-      if (endpoint.sudoMode == 'separate_password' &&
-          endpoint.sudoPassword.isEmpty &&
-          !endpoint.storedRoles.contains('ssh_sudo_password')) {
-        errors['ssh_endpoints'] =
-            'Separate sudo mode requires a sudo password.';
-      }
-    }
-    for (final endpoint in _endpoints) {
-      final seen = <String>{};
-      var cursor = endpoint;
-      while (cursor.connectVia.isNotEmpty) {
-        if (!seen.add(cursor.id)) {
-          errors['ssh_endpoints'] = 'Jump host chains cannot contain a cycle.';
-          break;
-        }
-        final next = _endpoints
-            .where((item) => item.id == cursor.connectVia)
-            .firstOrNull;
-        if (next == null) break;
-        cursor = next;
-      }
+    if (_endpoints.any((endpoint) => _errorsForEndpoint(endpoint).isNotEmpty)) {
+      errors['ssh_endpoints'] = 'Complete the highlighted SSH server fields.';
     }
     final fields = <Map<String, dynamic>>[];
     final sections = <EntrySectionView>[];
@@ -936,12 +949,16 @@ class _SshServerTemplateEditorState extends State<SshServerTemplateEditor> {
   }
 
   void _addEndpoint() {
-    setState(
-      () => _endpoints.add(
-        _SshEndpointDraft(id: structuredId('ssh_endpoint', _endpoints.length)),
-      ),
+    final endpoint = _SshEndpointDraft(
+      id: structuredId('ssh_endpoint', _endpoints.length),
     );
+    final anchor = _endpointAnchors.putIfAbsent(
+      endpoint.id,
+      () => GlobalKey(debugLabel: endpoint.id),
+    );
+    setState(() => _endpoints.add(endpoint));
     _sync();
+    _scrollTo(anchor);
   }
 
   void _removeEndpoint(_SshEndpointDraft endpoint) {
@@ -964,6 +981,7 @@ class _SshServerTemplateEditorState extends State<SshServerTemplateEditor> {
       )) {
         item.connectVia = '';
       }
+      _endpointAnchors.remove(endpoint.id);
     });
     _sync();
   }
@@ -980,19 +998,25 @@ class _SshServerTemplateEditorState extends State<SshServerTemplateEditor> {
   }
 
   void _addForward() {
+    final forward = _SshForwardDraft(
+      id: structuredId('ssh_forward', _forwards.length),
+    )..endpointId = _endpoints.firstOrNull?.id ?? '';
+    final anchor = _forwardAnchors.putIfAbsent(
+      forward.id,
+      () => GlobalKey(debugLabel: forward.id),
+    );
     setState(() {
-      _forwards.add(
-        _SshForwardDraft(id: structuredId('ssh_forward', _forwards.length))
-          ..endpointId = _endpoints.firstOrNull?.id ?? '',
-      );
+      _forwards.add(forward);
     });
     _sync();
+    _scrollTo(anchor);
   }
 
   void _removeForward(_SshForwardDraft forward) {
     setState(() {
       _forwards.remove(forward);
       if (forward.existing) _removed.addAll(forward.fieldIds.values);
+      _forwardAnchors.remove(forward.id);
     });
     _sync();
   }
@@ -1014,6 +1038,23 @@ class _SshServerTemplateEditorState extends State<SshServerTemplateEditor> {
           ? null
           : widget.app.sshKeyBinding(widget.draft.entryId!, endpoint.id));
 
+  void _scrollTo(GlobalKey anchor) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = anchor.currentContext;
+      if (!mounted || target == null) return;
+      unawaited(
+        Scrollable.ensureVisible(
+          target,
+          alignment: 0.06,
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
+        ),
+      );
+    });
+  }
+
+  void _changed() => setState(_sync);
+
   @override
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1023,6 +1064,7 @@ class _SshServerTemplateEditorState extends State<SshServerTemplateEditor> {
         children: [
           const Expanded(child: SectionLabel('SSH servers')),
           FButton(
+            key: const ValueKey('ssh-add-server'),
             size: FButtonSizeVariant.xs,
             variant: FButtonVariant.outline,
             onPress: _addEndpoint,
@@ -1030,62 +1072,63 @@ class _SshServerTemplateEditorState extends State<SshServerTemplateEditor> {
           ),
         ],
       ),
-      if (widget.draft.structuredErrors['ssh_endpoints'] case final error?)
-        Padding(
-          padding: const EdgeInsets.only(top: 8),
-          child: Text(
-            error,
-            style: TextStyle(color: context.theme.colors.destructive),
-          ),
-        ),
       for (final (index, endpoint) in _endpoints.indexed)
-        _SshEndpointCard(
-          key: ValueKey(endpoint.id),
-          endpoint: endpoint,
-          endpoints: _endpoints,
-          keyCandidates: _keys,
-          discovering: _discovering,
-          binding: _binding(endpoint),
-          onBinding: (path) => setState(() {
-            widget.draft
-              ..sshKeyBindings = {
-                ...widget.draft.sshKeyBindings,
-                endpoint.id: path,
-              }
-              ..sshBindingsToClear = widget.draft.sshBindingsToClear
+        Padding(
+          key: _endpointAnchors.putIfAbsent(
+            endpoint.id,
+            () => GlobalKey(debugLabel: endpoint.id),
+          ),
+          padding: const EdgeInsets.only(top: 12),
+          child: _SshEndpointCard(
+            key: ValueKey('card-${endpoint.id}'),
+            endpoint: endpoint,
+            endpoints: _endpoints,
+            errors: _errorsForEndpoint(endpoint),
+            keyCandidates: _keys,
+            discovering: _discovering,
+            binding: _binding(endpoint),
+            onBinding: (path) => setState(() {
+              widget.draft
+                ..sshKeyBindings = {
+                  ...widget.draft.sshKeyBindings,
+                  endpoint.id: path,
+                }
+                ..sshBindingsToClear = widget.draft.sshBindingsToClear
+                    .where((id) => id != endpoint.id)
+                    .toList(growable: false);
+            }),
+            onKeepBinding: () => setState(() {
+              widget.draft.sshBindingsToClear = widget.draft.sshBindingsToClear
                   .where((id) => id != endpoint.id)
                   .toList(growable: false);
-          }),
-          onKeepBinding: () => setState(() {
-            widget.draft.sshBindingsToClear = widget.draft.sshBindingsToClear
-                .where((id) => id != endpoint.id)
-                .toList(growable: false);
-          }),
-          onClearBinding: () => setState(() {
-            final bindings = {...widget.draft.sshKeyBindings}
-              ..remove(endpoint.id);
-            widget.draft
-              ..sshKeyBindings = bindings
-              ..sshBindingsToClear = {
-                ...widget.draft.sshBindingsToClear,
-                endpoint.id,
-              }.toList(growable: false);
-          }),
-          onChooseKey: () => _chooseKey(endpoint),
-          onChanged: _sync,
-          onRemove: _endpoints.length > 1
-              ? () => _removeEndpoint(endpoint)
-              : null,
-          onMoveUp: index > 0 ? () => _moveEndpoint(endpoint, -1) : null,
-          onMoveDown: index < _endpoints.length - 1
-              ? () => _moveEndpoint(endpoint, 1)
-              : null,
+            }),
+            onClearBinding: () => setState(() {
+              final bindings = {...widget.draft.sshKeyBindings}
+                ..remove(endpoint.id);
+              widget.draft
+                ..sshKeyBindings = bindings
+                ..sshBindingsToClear = {
+                  ...widget.draft.sshBindingsToClear,
+                  endpoint.id,
+                }.toList(growable: false);
+            }),
+            onChooseKey: () => _chooseKey(endpoint),
+            onChanged: _changed,
+            onRemove: _endpoints.length > 1
+                ? () => _removeEndpoint(endpoint)
+                : null,
+            onMoveUp: index > 0 ? () => _moveEndpoint(endpoint, -1) : null,
+            onMoveDown: index < _endpoints.length - 1
+                ? () => _moveEndpoint(endpoint, 1)
+                : null,
+          ),
         ),
       const SizedBox(height: 18),
       Row(
         children: [
           const Expanded(child: SectionLabel('SSH tunnels')),
           FButton(
+            key: const ValueKey('ssh-add-tunnel'),
             size: FButtonSizeVariant.xs,
             variant: FButtonVariant.outline,
             onPress: _endpoints.isEmpty ? null : _addForward,
@@ -1102,12 +1145,19 @@ class _SshServerTemplateEditorState extends State<SshServerTemplateEditor> {
           ),
         ),
       for (final forward in _forwards)
-        _SshForwardCard(
-          key: ValueKey(forward.id),
-          forward: forward,
-          endpoints: _endpoints,
-          onChanged: _sync,
-          onRemove: () => _removeForward(forward),
+        Padding(
+          key: _forwardAnchors.putIfAbsent(
+            forward.id,
+            () => GlobalKey(debugLabel: forward.id),
+          ),
+          padding: const EdgeInsets.only(top: 12),
+          child: _SshForwardCard(
+            key: ValueKey('card-${forward.id}'),
+            forward: forward,
+            endpoints: _endpoints,
+            onChanged: _changed,
+            onRemove: () => _removeForward(forward),
+          ),
         ),
     ],
   );
@@ -1117,6 +1167,7 @@ class _SshEndpointCard extends StatefulWidget {
   const _SshEndpointCard({
     required this.endpoint,
     required this.endpoints,
+    required this.errors,
     required this.keyCandidates,
     required this.discovering,
     required this.binding,
@@ -1133,6 +1184,7 @@ class _SshEndpointCard extends StatefulWidget {
 
   final _SshEndpointDraft endpoint;
   final List<_SshEndpointDraft> endpoints;
+  final Map<String, String> errors;
   final List<SshPrivateKeyCandidate> keyCandidates;
   final bool discovering;
   final String? binding;
@@ -1202,9 +1254,11 @@ class _SshEndpointCardState extends State<_SshEndpointCard> {
     String label, {
     bool secret = false,
     String? description,
+    String? error,
   }) => FTextField(
     label: Text(label),
     description: description == null ? null : Text(description),
+    error: error == null ? null : Text(error),
     obscureText: secret,
     control: FTextFieldControl.managed(
       controller: _controllers[name]!,
@@ -1216,6 +1270,7 @@ class _SshEndpointCardState extends State<_SshEndpointCard> {
   Widget build(BuildContext context) {
     final endpoint = widget.endpoint;
     return FCard(
+      key: ValueKey('ssh-endpoint-card-${endpoint.id}'),
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
@@ -1243,15 +1298,24 @@ class _SshEndpointCardState extends State<_SshEndpointCard> {
               ],
             ),
             const SizedBox(height: 8),
-            _text('name', 'Display name'),
+            _text('name', 'Display name', error: widget.errors['name']),
             const SizedBox(height: 8),
-            _text('alias', 'SSH alias'),
+            _text('alias', 'SSH alias', error: widget.errors['alias']),
             const SizedBox(height: 8),
             Row(
               children: [
-                Expanded(flex: 3, child: _text('host', 'Host / IP')),
+                Expanded(
+                  flex: 3,
+                  child: _text(
+                    'host',
+                    'Host / IP',
+                    error: widget.errors['host'],
+                  ),
+                ),
                 const SizedBox(width: 8),
-                Expanded(child: _text('port', 'Port')),
+                Expanded(
+                  child: _text('port', 'Port', error: widget.errors['port']),
+                ),
               ],
             ),
             const SizedBox(height: 8),
@@ -1278,6 +1342,7 @@ class _SshEndpointCardState extends State<_SshEndpointCard> {
                 setState(() => endpoint.connectVia = value ?? '');
                 widget.onChanged();
               },
+              forceErrorText: widget.errors['connectVia'],
             ),
             const SizedBox(height: 8),
             FSelect<String>(
@@ -1308,6 +1373,7 @@ class _SshEndpointCardState extends State<_SshEndpointCard> {
                 'password',
                 'SSH password',
                 secret: true,
+                error: widget.errors['password'],
                 description: endpoint.storedRoles.contains('ssh_password')
                     ? 'Stored; blank keeps current password.'
                     : null,
@@ -1382,12 +1448,21 @@ class _SshEndpointCardState extends State<_SshEndpointCard> {
                 },
               ),
             ),
+            if (widget.errors['sudo'] case final error?)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  error,
+                  style: TextStyle(color: context.theme.colors.destructive),
+                ),
+              ),
             if (endpoint.sudoMode == 'separate_password') ...[
               const SizedBox(height: 8),
               _text(
                 'sudoPassword',
                 'Sudo password',
                 secret: true,
+                error: widget.errors['sudoPassword'],
                 description: endpoint.storedRoles.contains('ssh_sudo_password')
                     ? 'Stored; blank keeps current password.'
                     : null,
@@ -1460,6 +1535,7 @@ class _SshForwardCardState extends State<_SshForwardCard> {
 
   @override
   Widget build(BuildContext context) => FCard(
+    key: ValueKey('ssh-forward-card-${widget.forward.id}'),
     child: Padding(
       padding: const EdgeInsets.all(12),
       child: Column(
