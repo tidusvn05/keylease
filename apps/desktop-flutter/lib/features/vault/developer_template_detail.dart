@@ -268,14 +268,37 @@ class _SshDetail extends StatelessWidget {
 
   Future<void> _copyConfig(BuildContext context) async {
     try {
-      final content = renderSshConfig(
+      final paths = await resolveSshPrivateKeyPaths(
         endpoints: _endpoints,
-        forwards: _forwards,
-        privateKeyPaths: {
+        currentPaths: {
           for (final endpoint in _endpoints)
             if (app.sshKeyBinding(item.id, endpoint.sectionId) case final path?)
               endpoint.sectionId: path,
         },
+        discover: () async => [
+          for (final candidate in await app.adapter.discoverSshPrivateKeys())
+            candidate.path,
+        ],
+        select: (_) => app.adapter.selectSshPrivateKey(),
+        onSelected: (endpoint, path) =>
+            app.setSshKeyBinding(item.id, endpoint.sectionId, path),
+      );
+      if (paths == null) {
+        if (context.mounted) {
+          showFToast(
+            context: context,
+            title: const Text('Private key needed'),
+            description: const Text(
+              'Choose a private key on this device before copying the SSH config.',
+            ),
+          );
+        }
+        return;
+      }
+      final content = renderSshConfig(
+        endpoints: _endpoints,
+        forwards: _forwards,
+        privateKeyPaths: paths,
       );
       final copied = await app.copySensitive(content);
       if (copied && context.mounted) {

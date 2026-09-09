@@ -272,6 +272,46 @@ class SshForwardConfig {
   final int destinationPort;
 }
 
+/// Resolves the per-device key paths needed to render an SSH config.
+///
+/// A single discovered key is safe to select automatically. When the device
+/// has multiple candidates, the caller asks the user which one belongs to the
+/// endpoint. Returning `null` means the user cancelled selection.
+Future<Map<String, String>?> resolveSshPrivateKeyPaths({
+  required List<SshEndpointConfig> endpoints,
+  required Map<String, String> currentPaths,
+  required Future<List<String>> Function() discover,
+  required Future<String?> Function(SshEndpointConfig endpoint) select,
+  required Future<void> Function(SshEndpointConfig endpoint, String path)
+  onSelected,
+}) async {
+  final paths = {...currentPaths};
+  final missing = endpoints
+      .where(
+        (endpoint) =>
+            endpoint.authMode == 'private_key' &&
+            (paths[endpoint.sectionId]?.isEmpty ?? true),
+      )
+      .toList(growable: false);
+  if (missing.isEmpty) return paths;
+
+  List<String> discovered = const [];
+  try {
+    discovered = await discover();
+  } catch (_) {
+    // Manual selection remains available when discovery is unsupported.
+  }
+  for (final endpoint in missing) {
+    final path = discovered.length == 1
+        ? discovered.single
+        : await select(endpoint);
+    if (path == null || path.isEmpty) return null;
+    await onSelected(endpoint, path);
+    paths[endpoint.sectionId] = path;
+  }
+  return paths;
+}
+
 String renderSshConfig({
   required List<SshEndpointConfig> endpoints,
   required List<SshForwardConfig> forwards,

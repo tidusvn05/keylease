@@ -127,5 +127,44 @@ EMPTY=
         throwsFormatException,
       );
     });
+
+    test('automatically binds the only discovered private key', () async {
+      final selected = <String, String>{};
+      final paths = await resolveSshPrivateKeyPaths(
+        endpoints: endpoints,
+        currentPaths: const {},
+        discover: () async => ['/Users/me/.ssh/id_ed25519'],
+        select: (_) async => throw StateError('picker should not open'),
+        onSelected: (endpoint, path) async {
+          selected[endpoint.sectionId] = path;
+        },
+      );
+
+      expect(paths, const {'target': '/Users/me/.ssh/id_ed25519'});
+      expect(selected, paths);
+    });
+
+    test(
+      'asks for a key when discovery is ambiguous and handles cancel',
+      () async {
+        var pickerCalls = 0;
+        final paths = await resolveSshPrivateKeyPaths(
+          endpoints: endpoints,
+          currentPaths: const {},
+          discover: () async => [
+            '/Users/me/.ssh/id_ed25519',
+            '/Users/me/.ssh/work',
+          ],
+          select: (_) async {
+            pickerCalls++;
+            return null;
+          },
+          onSelected: (_, _) async {},
+        );
+
+        expect(paths, isNull);
+        expect(pickerCalls, 1);
+      },
+    );
   });
 }
