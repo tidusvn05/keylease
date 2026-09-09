@@ -349,6 +349,16 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('action-New item')));
     await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('entry-template-guidance')),
+      findsOneWidget,
+    );
+    expect(
+      find.text(
+        'A website or app sign-in with password and optional one-time code.',
+      ),
+      findsOneWidget,
+    );
     expect(find.byKey(const ValueKey('entry-username')), findsOneWidget);
     expect(find.byKey(const ValueKey('entry-password')), findsOneWidget);
 
@@ -357,6 +367,10 @@ void main() {
     await tester.tap(find.text('Note').last);
     await tester.pumpAndSettle();
 
+    expect(
+      find.text('Reusable Markdown knowledge that an agent can read.'),
+      findsOneWidget,
+    );
     expect(find.byKey(const ValueKey('entry-username')), findsNothing);
     expect(find.byKey(const ValueKey('entry-password')), findsNothing);
     expect(find.text('Markdown body'), findsOneWidget);
@@ -396,6 +410,8 @@ void main() {
       expect(harness.app.vault.activeDraft?.kind, 'core.ssh_server');
       expect(find.text('Edit item'), findsOneWidget);
       expect(find.text('SSH SERVERS'), findsOneWidget);
+      expect(find.byKey(const ValueKey('ssh-guidance')), findsOneWidget);
+      expect(find.byKey(const ValueKey('ssh-tunnel-guidance')), findsOneWidget);
 
       final addServer = find.byKey(const ValueKey('ssh-add-server'));
       await tester.tap(addServer);

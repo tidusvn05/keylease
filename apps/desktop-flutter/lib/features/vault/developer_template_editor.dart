@@ -12,6 +12,7 @@ import '../../ui/components/keylease_dialog.dart';
 import '../../ui/components/searchable_select.dart';
 import '../../ui/components/section_label.dart';
 import 'developer_templates.dart';
+import 'template_guidance.dart';
 
 class DeveloperTemplateEditor extends StatelessWidget {
   const DeveloperTemplateEditor({
@@ -291,6 +292,13 @@ class _EnvironmentTemplateEditorState extends State<EnvironmentTemplateEditor> {
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
+      const SizedBox(height: 18),
+      const GuidanceCard(
+        key: ValueKey('environment-guidance'),
+        title: 'How to use an Environment item',
+        summary: 'Keep the variables for one project and environment together. Mark sensitive values as secrets so they stay protected.',
+        useWhen: 'Enter variables one by one, or paste .env content and review the parsed fields before saving.',
+      ),
       const SizedBox(height: 18),
       const SectionLabel('Environment'),
       const SizedBox(height: 8),
@@ -1060,6 +1068,13 @@ class _SshServerTemplateEditorState extends State<SshServerTemplateEditor> {
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       const SizedBox(height: 18),
+      const GuidanceCard(
+        key: ValueKey('ssh-guidance'),
+        title: 'How to model SSH access',
+        summary: 'A server or application endpoint is any host you connect to. Add every related endpoint here instead of creating separate vault items.',
+        useWhen: 'For a bastion chain, add the bastion first, then set each downstream endpoint to connect through it.',
+      ),
+      const SizedBox(height: 18),
       Row(
         children: [
           const Expanded(child: SectionLabel('SSH servers')),
@@ -1123,6 +1138,13 @@ class _SshServerTemplateEditorState extends State<SshServerTemplateEditor> {
                 : null,
           ),
         ),
+      const SizedBox(height: 18),
+      const GuidanceCard(
+        key: ValueKey('ssh-tunnel-guidance'),
+        title: 'What is an SSH tunnel?',
+        summary: 'A tunnel securely forwards a local or remote port through one of the endpoints above.',
+        useWhen: 'Use local forwarding for a remote database or web service, remote forwarding to expose a local service remotely, or dynamic forwarding for a SOCKS proxy.',
+      ),
       const SizedBox(height: 18),
       Row(
         children: [

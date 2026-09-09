@@ -18,6 +18,7 @@ import '../../ui/components/section_label.dart';
 import '../../ui/tokens/keylease_tokens.dart';
 import 'password_generator.dart';
 import 'developer_template_editor.dart';
+import 'template_guidance.dart';
 
 /// Opens the draft-based editor.
 ///
@@ -914,6 +915,7 @@ class _EntryFormState extends State<_EntryForm> {
     final vault = widget.app.vault;
     final groups = vault.groups;
     final templates = vault.templates;
+    final guidance = guidanceForTemplate(draft.kind, label: _template?.label);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -956,12 +958,25 @@ class _EntryFormState extends State<_EntryForm> {
                             ? 'Server (generic)'
                             : template.label,
                         section: _templateSection(template),
+                        subtitle: guidanceForTemplate(
+                          template.kind,
+                          label: template.label,
+                        ).summary,
                         searchTerms: [template.kind, template.family],
                       ),
                   ],
             value: draft.kind,
             onChange: _changeTemplate,
           ),
+        if (draft.isNew) ...[
+          const SizedBox(height: 8),
+          GuidanceCard(
+            key: const ValueKey('entry-template-guidance'),
+            title: 'About this template',
+            summary: guidance.summary,
+            useWhen: guidance.useWhen,
+          ),
+        ],
         const SizedBox(height: 10),
         if (!draft.isAgentContent)
           SearchableSelect<String>(
