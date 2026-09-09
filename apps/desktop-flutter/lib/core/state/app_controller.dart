@@ -467,7 +467,7 @@ Keep returned content and secrets private. If the vault is locked, ask me to unl
         unlocked = true;
       },
       onError: (caught) {
-        banner = UserMessage.from(caught);
+        banner = UserMessage.fromUnlock(caught);
       },
     );
     if (unlocked) await refresh();

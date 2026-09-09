@@ -16,6 +16,31 @@ class UserMessage {
   final String? actionLabel;
   final String? diagnostics;
 
+  static UserMessage fromUnlock(Object error) {
+    if (error case KeyLeaseException(:final code, :final details)) {
+      final reason = details?['reason'];
+      if (code == KeyLeaseErrorCode.crypto ||
+          (code == KeyLeaseErrorCode.denied &&
+              reason == 'master password rejected')) {
+        return UserMessage(
+          title: 'Incorrect master password',
+          detail: 'Check your password and try again.',
+          diagnostics: error.diagnostics,
+        );
+      }
+      if (code == KeyLeaseErrorCode.denied &&
+          reason is String &&
+          reason.contains('unlock rate limit')) {
+        return UserMessage(
+          title: 'Too many unlock attempts',
+          detail: 'Wait a minute, then try again.',
+          diagnostics: error.diagnostics,
+        );
+      }
+    }
+    return from(error);
+  }
+
   static UserMessage from(Object error) {
     if (error is UnsupportedPlatformCapability) {
       return UserMessage(

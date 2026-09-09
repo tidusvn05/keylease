@@ -428,7 +428,16 @@ impl KeyLeaseService {
                     .entry(bucket)
                     .or_default()
                     .push_back(now);
-                Err(error)
+                // Password-slot authentication deliberately exposes no crypto
+                // details. At this boundary a crypto failure means the supplied
+                // password could not unlock the vault (or the slot is unusable),
+                // so callers should treat it as a rejected credential.
+                match error {
+                    KeyLeaseError::Crypto => Err(KeyLeaseError::Denied {
+                        reason: "master password rejected".into(),
+                    }),
+                    other => Err(other),
+                }
             }
         }
     }
@@ -6657,6 +6666,33 @@ mod tests {
                 .unwrap();
             assert!(service.list_groups_authorized(&actor).is_ok());
         }
+    }
+
+    #[test]
+    fn wrong_master_password_is_reported_as_rejected_not_crypto() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(NativeStore::open(dir.path().join("vault.sqlite")).unwrap());
+        let service = KeyLeaseService::new(store).unwrap();
+        service
+            .initialize(b"correct password", Duration::hours(1))
+            .unwrap();
+        let (agent, _) = service.register_desktop_client().unwrap();
+        service.lock().unwrap();
+
+        assert_eq!(
+            service
+                .unlock_for_client(&agent, b"wrong password", Duration::hours(1))
+                .unwrap_err(),
+            KeyLeaseError::Denied {
+                reason: "master password rejected".into(),
+            },
+        );
+        assert!(service.status().unwrap()["locked"].as_bool().unwrap());
+        assert!(
+            service
+                .unlock_for_client(&agent, b"correct password", Duration::hours(1))
+                .is_ok()
+        );
     }
 
     #[test]

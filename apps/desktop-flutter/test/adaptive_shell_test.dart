@@ -251,10 +251,7 @@ void main() {
           ..value('status', Fixtures.lockedStatus)
           ..fail(
             'unlock',
-            KeyLeaseException.fromDaemon(const {
-              'error': 'denied',
-              'reason': 'master password rejected',
-            }),
+            KeyLeaseException.fromDaemon(const {'error': 'crypto'}),
           ),
       );
 
@@ -266,7 +263,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(app.phase, AppPhase.locked);
-      expect(find.text('Permission needed'), findsOneWidget);
+      expect(find.text('Incorrect master password'), findsOneWidget);
+      expect(find.text('Check your password and try again.'), findsOneWidget);
       expect(find.byKey(const ValueKey('unlock-submit')), findsOneWidget);
     });
 
