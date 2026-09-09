@@ -35,7 +35,11 @@ class VaultPage extends StatelessWidget {
         final list = EntryList(
           controller: vault,
           openOnSelect: !splitView,
-          onCreate: () => openEntryEditor(context, app),
+          onCreate: () => openEntryEditor(
+            context,
+            app,
+            onReview: (_) => _openDetail(context, app),
+          ),
           onGeneratePassword: () => openPasswordGenerator(context, app),
           onRefresh: app.refresh,
           refreshing: app.isBusy(AppController.refreshKey),

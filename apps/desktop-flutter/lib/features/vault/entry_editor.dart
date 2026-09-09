@@ -6,6 +6,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../core/models/models.dart';
 import '../../core/platform/security_adapter.dart';
+import '../../core/state/agent_creation_draft.dart';
 import '../../core/state/app_controller.dart';
 import '../../core/state/entry_draft.dart';
 import '../../core/state/user_message.dart';
@@ -17,6 +18,7 @@ import '../../ui/components/searchable_select.dart';
 import '../../ui/components/section_label.dart';
 import '../../ui/tokens/keylease_tokens.dart';
 import 'password_generator.dart';
+import 'agent_driven_creation.dart';
 import 'developer_template_editor.dart';
 import 'template_guidance.dart';
 
@@ -28,6 +30,7 @@ Future<void> openEntryEditor(
   BuildContext context,
   AppController app, {
   EntrySummary? existing,
+  ValueChanged<String>? onReview,
 }) async {
   if (existing == null) {
     app.vault.beginCreate();
@@ -38,15 +41,17 @@ Future<void> openEntryEditor(
       MediaQuery.sizeOf(context).width >=
       KeyLeaseTokens.of(context).splitBreakpoint;
   if (split || !context.mounted) return;
-  await Navigator.of(context).push(
-    MaterialPageRoute<void>(
+  final reviewedId = await Navigator.of(context).push<String>(
+    MaterialPageRoute<String>(
       builder: (context) => EntryEditorPane(
         app: app,
         onClosed: () => Navigator.of(context).pop(),
+        onReview: (id) => Navigator.of(context).pop(id),
       ),
     ),
   );
   if (app.vault.activeDraft != null) app.vault.closeEditor();
+  if (reviewedId != null && context.mounted) onReview?.call(reviewedId);
 }
 
 Future<bool> confirmCloseEntryEditor(
@@ -55,7 +60,10 @@ Future<bool> confirmCloseEntryEditor(
 ) async {
   final draft = app.vault.activeDraft;
   if (draft == null) return true;
-  if (draft.isDirty) {
+  final agentDirty =
+      app.vault.creationMode == EntryCreationMode.agentDriven &&
+      (app.vault.agentCreationDraft?.isDirty ?? false);
+  if (draft.isDirty || agentDirty) {
     final discard = await confirm(
       context: context,
       title: 'Discard changes?',
@@ -71,10 +79,16 @@ Future<bool> confirmCloseEntryEditor(
 
 /// Persistent right-hand workspace for both new and edited items.
 class EntryEditorPane extends StatefulWidget {
-  const EntryEditorPane({required this.app, this.onClosed, super.key});
+  const EntryEditorPane({
+    required this.app,
+    this.onClosed,
+    this.onReview,
+    super.key,
+  });
 
   final AppController app;
   final VoidCallback? onClosed;
+  final ValueChanged<String>? onReview;
 
   @override
   State<EntryEditorPane> createState() => _EntryEditorPaneState();
@@ -94,11 +108,51 @@ class _EntryEditorPaneState extends State<EntryEditorPane> {
     widget.onClosed?.call();
   }
 
+  Future<void> _cancelAgent() async {
+    final draft = widget.app.vault.agentCreationDraft;
+    final changed =
+        (widget.app.vault.activeDraft?.isDirty ?? false) ||
+        (draft?.isDirty ?? false);
+    if (changed) {
+      final discard = await confirm(
+        context: context,
+        title: 'Discard agent setup?',
+        message:
+            'The generated prompt and its source settings will be discarded.',
+        confirmLabel: 'Discard',
+        destructive: true,
+      );
+      if (!discard) return;
+    }
+    _close();
+  }
+
+  Future<void> _toggleMode() async {
+    if (widget.app.vault.creationMode == EntryCreationMode.agentDriven) {
+      widget.app.vault.useManualCreation();
+    } else {
+      try {
+        await widget.app.vault.useAgentCreation();
+      } catch (_) {
+        // Copying the prompt retries the read-only baseline snapshot and shows
+        // a useful inline error if the service is temporarily unavailable.
+      }
+    }
+    if (mounted) setState(() {});
+  }
+
+  void _review(String id) {
+    widget.onReview?.call(id);
+  }
+
   @override
   Widget build(BuildContext context) {
     final draft = widget.app.vault.activeDraft;
     if (draft == null) return const SizedBox.shrink();
     final tokens = KeyLeaseTokens.of(context);
+    final agentDriven =
+        draft.isNew &&
+        widget.app.vault.creationMode == EntryCreationMode.agentDriven;
     return SafeArea(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -123,7 +177,33 @@ class _EntryEditorPaneState extends State<EntryEditorPane> {
                     ),
                   ),
                 ),
-                _EditorActions(editor: _editor),
+                if (draft.isNew) ...[
+                  FButton(
+                    key: const ValueKey('entry-creation-mode'),
+                    size: FButtonSizeVariant.xs,
+                    variant: FButtonVariant.outline,
+                    onPress: _toggleMode,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          agentDriven
+                              ? FLucideIcons.squarePen
+                              : FLucideIcons.sparkles,
+                          size: 15,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(agentDriven ? 'Fill manually' : 'Use Agent'),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                _EditorActions(
+                  editor: _editor,
+                  showSave: !agentDriven,
+                  onCancel: agentDriven ? _cancelAgent : null,
+                ),
               ],
             ),
           ),
@@ -132,13 +212,43 @@ class _EntryEditorPaneState extends State<EntryEditorPane> {
             child: KeyLeaseScrollArea(
               padding: EdgeInsets.all(tokens.gutter * 1.25),
               children: [
-                _EntryForm(
-                  key: ValueKey('${draft.entryId}-${draft.hashCode}'),
-                  app: widget.app,
-                  draft: draft,
-                  editor: _editor,
-                  onFinished: _close,
-                ),
+                if (draft.isNew)
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Visibility(
+                        visible: !agentDriven,
+                        maintainState: true,
+                        child: _EntryForm(
+                          key: ValueKey('${draft.entryId}-${draft.hashCode}'),
+                          app: widget.app,
+                          draft: draft,
+                          editor: _editor,
+                          onFinished: _close,
+                        ),
+                      ),
+                      Visibility(
+                        visible: agentDriven,
+                        maintainState: true,
+                        child: AgentDrivenCreationPane(
+                          key: ValueKey(
+                            'agent-${widget.app.vault.agentCreationDraft?.sessionId}',
+                          ),
+                          app: widget.app,
+                          draft: widget.app.vault.agentCreationDraft!,
+                          onReview: _review,
+                        ),
+                      ),
+                    ],
+                  )
+                else
+                  _EntryForm(
+                    key: ValueKey('${draft.entryId}-${draft.hashCode}'),
+                    app: widget.app,
+                    draft: draft,
+                    editor: _editor,
+                    onFinished: _close,
+                  ),
               ],
             ),
           ),
@@ -170,9 +280,15 @@ class _EditorController extends ChangeNotifier {
 }
 
 class _EditorActions extends StatelessWidget {
-  const _EditorActions({required this.editor});
+  const _EditorActions({
+    required this.editor,
+    required this.showSave,
+    this.onCancel,
+  });
 
   final _EditorController editor;
+  final bool showSave;
+  final Future<void> Function()? onCancel;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -182,15 +298,17 @@ class _EditorActions extends StatelessWidget {
       children: [
         FButton(
           variant: FButtonVariant.outline,
-          onPress: editor.saving ? null : editor.cancel,
+          onPress: editor.saving ? null : onCancel ?? editor.cancel,
           child: const Text('Cancel'),
         ),
-        const SizedBox(width: 8),
-        FButton(
-          key: const ValueKey('entry-save'),
-          onPress: editor.saving ? null : editor.save,
-          child: Text(editor.saving ? 'Saving…' : 'Save'),
-        ),
+        if (showSave) ...[
+          const SizedBox(width: 8),
+          FButton(
+            key: const ValueKey('entry-save'),
+            onPress: editor.saving ? null : editor.save,
+            child: Text(editor.saving ? 'Saving…' : 'Save'),
+          ),
+        ],
       ],
     ),
   );
@@ -219,10 +337,10 @@ class _EntryFormState extends State<_EntryForm> {
   late final _username = TextEditingController(text: widget.draft.username);
   late final _url = TextEditingController(text: widget.draft.url);
   late final _password = TextEditingController(text: widget.draft.password);
-  final _notes = TextEditingController();
-  final _totp = TextEditingController();
-  final _custom = TextEditingController();
-  final _tags = TextEditingController();
+  late final _notes = TextEditingController(text: widget.draft.notes);
+  late final _totp = TextEditingController(text: widget.draft.totp);
+  late final _custom = TextEditingController(text: widget.draft.customFields);
+  late final _tags = TextEditingController(text: widget.draft.tags);
   final Map<String, TextEditingController> _templateFields = {};
   final Map<String, String> _templateFieldOriginals = {};
   final Map<String, String> _templateFieldIds = {};

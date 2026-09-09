@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 
 import '../models/models.dart';
 import '../rpc/keylease_rpc.dart';
+import 'agent_creation_draft.dart';
 import 'busy_registry.dart';
 import 'entry_draft.dart';
 import 'user_message.dart';
@@ -42,6 +43,8 @@ class VaultController extends ChangeNotifier with BusyRegistry {
   String? selectedEntryId;
   EntryWorkspaceMode workspaceMode = EntryWorkspaceMode.detail;
   EntryDraft? activeDraft;
+  EntryCreationMode creationMode = EntryCreationMode.manual;
+  AgentCreationDraft? agentCreationDraft;
   UserMessage? error;
   Object? lastFailure;
   bool _loaded = false;
@@ -150,6 +153,11 @@ class VaultController extends ChangeNotifier with BusyRegistry {
           (orderedGroups.isEmpty ? null : orderedGroups.first.id),
       initialPassword: initialPassword,
     );
+    creationMode = EntryCreationMode.manual;
+    agentCreationDraft = AgentCreationDraft(
+      kind: activeDraft!.kind,
+      groupId: activeDraft!.groupId,
+    );
     workspaceMode = EntryWorkspaceMode.create;
     hideSecrets();
     notifyListeners();
@@ -158,12 +166,16 @@ class VaultController extends ChangeNotifier with BusyRegistry {
   void openPasswordGenerator() {
     activeDraft?.wipeSecrets();
     activeDraft = null;
+    agentCreationDraft = null;
+    creationMode = EntryCreationMode.manual;
     workspaceMode = EntryWorkspaceMode.passwordGenerator;
     hideSecrets();
     notifyListeners();
   }
 
   void beginEdit(EntrySummary entry) {
+    agentCreationDraft = null;
+    creationMode = EntryCreationMode.manual;
     activeDraft = EntryDraft.edit(entry);
     workspaceMode = EntryWorkspaceMode.edit;
     hideSecrets();
@@ -173,8 +185,86 @@ class VaultController extends ChangeNotifier with BusyRegistry {
   void closeEditor() {
     activeDraft?.wipeSecrets();
     activeDraft = null;
+    agentCreationDraft = null;
+    creationMode = EntryCreationMode.manual;
     workspaceMode = EntryWorkspaceMode.detail;
     notifyListeners();
+  }
+
+  Future<void> useAgentCreation() async {
+    final manual = activeDraft;
+    if (manual == null || !manual.isNew) return;
+    final draft = agentCreationDraft ??= AgentCreationDraft(
+      kind: manual.kind,
+      groupId: manual.groupId,
+    );
+    if (!draft.promptCopied &&
+        draft.recipeId == 'describe' &&
+        draft.context.isEmpty &&
+        draft.sourcePath.isEmpty) {
+      draft
+        ..kind = manual.kind
+        ..groupId = manual.groupId;
+    }
+    creationMode = EntryCreationMode.agentDriven;
+    notifyListeners();
+    draft.baselineEntryIds ??= await snapshotEntryIds();
+    notifyListeners();
+  }
+
+  void useManualCreation() {
+    if (activeDraft == null) return;
+    creationMode = EntryCreationMode.manual;
+    notifyListeners();
+  }
+
+  Future<Set<String>> snapshotEntryIds() async {
+    final result = await clientOf().authorized({
+      'command': 'entries_search',
+      'query': '',
+    });
+    return parseList(
+      result,
+      EntrySummary.fromJson,
+    ).map((entry) => entry.id).toSet();
+  }
+
+  Future<List<EntrySummary>> entriesCreatedSince(Set<String> baseline) async {
+    final result = await clientOf().authorized({
+      'command': 'entries_search',
+      'query': '',
+    });
+    final all = parseList(result, EntrySummary.fromJson);
+    final created = all
+        .where((entry) => !baseline.contains(entry.id))
+        .toList(growable: false);
+    created.sort((left, right) {
+      final time = (right.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0))
+          .compareTo(left.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0));
+      return time != 0 ? time : left.title.compareTo(right.title);
+    });
+    return created;
+  }
+
+  void openAgentCreatedEntry(EntrySummary entry) {
+    activeDraft?.wipeSecrets();
+    activeDraft = null;
+    agentCreationDraft = null;
+    creationMode = EntryCreationMode.manual;
+    workspaceMode = EntryWorkspaceMode.detail;
+    query = '';
+    searchController.clear();
+    selectedGroupId = null;
+    favoritesOnly = false;
+    entries = [
+      entry,
+      ...entries.where((candidate) => candidate.id != entry.id),
+    ];
+    selectedEntryId = entry.id;
+    hideSecrets();
+    notifyListeners();
+    unawaited(loadEntryView(entry.id));
+    unawaited(_search());
   }
 
   /// Moves the selection by [delta] within the visible list, for arrow keys.
@@ -460,6 +550,8 @@ class VaultController extends ChangeNotifier with BusyRegistry {
     favoritesOnly = false;
     activeDraft?.wipeSecrets();
     activeDraft = null;
+    agentCreationDraft = null;
+    creationMode = EntryCreationMode.manual;
     workspaceMode = EntryWorkspaceMode.detail;
     error = null;
     lastFailure = null;
