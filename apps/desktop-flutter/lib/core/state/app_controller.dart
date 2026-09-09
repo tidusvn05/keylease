@@ -48,17 +48,28 @@ class AppController extends ChangeNotifier with BusyRegistry {
   static const unlockKey = 'app.unlock';
   static const lockKey = 'app.lock';
 
-  static String agentPromptForEntry(EntrySummary entry) =>
-      '''Use KeyLease entry ${jsonEncode(entry.title)} (`${entry.id}`).
+  static bool _isAgentContent(EntrySummary entry) =>
+      const {'core.prompt', 'core.runbook', 'core.note'}.contains(entry.kind);
 
-Inspect: `keylease entries get ${entry.id}`
-Reveal a needed field: `keylease entries reveal ${entry.id} --field password`
-Get OTP if needed: `keylease entries totp ${entry.id}`
+  static String agentPromptForEntry(EntrySummary entry) {
+    final readInstructions = _isAgentContent(entry)
+        ? '''Read its content: `keylease content get ${entry.id} --raw`
+If access is denied, ask me to grant this agent read access.'''
+        : '''Inspect it: `keylease entries get ${entry.id}`
+List its fields: `keylease entries view ${entry.id}`
+Reveal only a needed field: `keylease entries reveal ${entry.id} --field <field-id>`
+Get its OTP if needed: `keylease entries totp ${entry.id}`''';
+    return '''Use KeyLease Vault item ${jsonEncode(entry.title)} (`${entry.id}`) for this task.
 
-Keep returned secrets private. If the vault is locked, ask me to unlock KeyLease.''';
+Connect to KeyLease directly; do not ask me to paste the item content.
+$readInstructions
 
-  static String cliCommandForEntry(EntrySummary entry) =>
-      'keylease entries get ${entry.id}';
+Keep returned content and secrets private. If the vault is locked, ask me to unlock KeyLease.''';
+  }
+
+  static String cliCommandForEntry(EntrySummary entry) => _isAgentContent(entry)
+      ? 'keylease content get ${entry.id} --raw'
+      : 'keylease entries get ${entry.id}';
 
   final SecurityAdapter adapter;
   final PreferencesStore preferences;

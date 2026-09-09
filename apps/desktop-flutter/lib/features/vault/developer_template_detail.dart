@@ -156,13 +156,11 @@ class _EnvironmentDetailState extends State<_EnvironmentDetail> {
         Row(
           children: [
             const Expanded(child: SectionLabel('Variables')),
-            FButton(
+            IconAction(
               key: ValueKey('copy-dotenv-${widget.item.id}'),
-              size: FButtonSizeVariant.xs,
-              variant: FButtonVariant.outline,
+              label: 'Copy .env file',
+              icon: FLucideIcons.copy,
               onPress: _copyDotEnv,
-              prefix: const Icon(FLucideIcons.copy, size: 14),
-              child: const Text('Copy .env'),
             ),
           ],
         ),
@@ -326,13 +324,11 @@ class _SshDetail extends StatelessWidget {
         Row(
           children: [
             const Expanded(child: SectionLabel('SSH servers')),
-            FButton(
+            IconAction(
               key: ValueKey('copy-ssh-config-${item.id}'),
-              size: FButtonSizeVariant.xs,
-              variant: FButtonVariant.outline,
+              label: 'Copy SSH config',
+              icon: FLucideIcons.copy,
               onPress: () => _copyConfig(context),
-              prefix: const Icon(FLucideIcons.copy, size: 14),
-              child: const Text('Copy SSH config'),
             ),
           ],
         ),

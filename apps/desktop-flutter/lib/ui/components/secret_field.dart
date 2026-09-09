@@ -186,6 +186,7 @@ class IconAction extends StatelessWidget {
     required this.icon,
     required this.onPress,
     this.variant = FButtonVariant.outline,
+    this.iconColor,
     super.key,
   });
 
@@ -193,6 +194,7 @@ class IconAction extends StatelessWidget {
   final IconData icon;
   final VoidCallback? onPress;
   final FButtonVariant variant;
+  final Color? iconColor;
 
   @override
   Widget build(BuildContext context) => FTooltip(
@@ -202,7 +204,7 @@ class IconAction extends StatelessWidget {
       variant: variant,
       onPress: onPress,
       semanticsLabel: label,
-      child: Icon(icon, size: 17),
+      child: Icon(icon, size: 17, color: iconColor),
     ),
   );
 }

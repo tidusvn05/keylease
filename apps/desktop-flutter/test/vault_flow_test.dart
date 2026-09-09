@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keylease_desktop/app/keylease_app.dart';
+import 'package:keylease_desktop/core/models/models.dart';
 import 'package:keylease_desktop/core/platform/security_adapter.dart';
 import 'package:keylease_desktop/core/rpc/keylease_rpc.dart';
 import 'package:keylease_desktop/core/state/app_controller.dart';
@@ -94,14 +95,46 @@ void main() {
 
     expect(harness.adapter.copied, hasLength(1));
     final prompt = harness.adapter.copied.single;
-    expect(prompt, startsWith('Use KeyLease entry'));
+    expect(prompt, startsWith('Use KeyLease Vault item'));
     expect(prompt, contains('entry-github'));
     expect(prompt, contains('GitHub'));
+    expect(prompt, contains('Connect to KeyLease directly'));
+    expect(prompt, contains('do not ask me to paste'));
     expect(prompt, isNot(contains('Demo-only!47-sample')));
     expect(prompt, isNot(contains('client-token-fixture')));
     expect(prompt, isNot(contains('~/.keylease')));
     expect(prompt, isNot(contains('desktop.token')));
     expect(find.text('Entry prompt copied'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 400));
+  });
+
+  testWidgets('Prompt content copies an agent reference, not its Markdown', (
+    tester,
+  ) async {
+    final harness = await pumpVault(
+      tester,
+      script: (client) => client.value('entries_search', [
+        Fixtures.entry(
+          id: 'prompt-release',
+          title: 'Release prompt',
+          kind: 'core.prompt',
+          username: '',
+          urls: const [],
+          hasPassword: false,
+          hasNotes: true,
+        ),
+      ]),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('entry-prompt-prompt-release')));
+    await tester.pump();
+
+    expect(harness.adapter.copied, hasLength(1));
+    final prompt = harness.adapter.copied.single;
+    expect(prompt, contains('keylease content get prompt-release --raw'));
+    expect(prompt, contains('do not ask me to paste'));
+    expect(prompt, isNot(contains('Recovery instructions')));
+    expect(find.text('Copy Markdown'), findsNothing);
     await tester.pump(const Duration(milliseconds: 400));
   });
 
@@ -116,6 +149,17 @@ void main() {
     expect(harness.adapter.copied, ['keylease entries get entry-github']);
     expect(find.text('CLI command copied'), findsOneWidget);
     await tester.pump(const Duration(milliseconds: 400));
+  });
+
+  test('content CLI command reads the raw body directly from KeyLease', () {
+    final entry = EntrySummary.fromJson(
+      Fixtures.entry(id: 'note-1', kind: 'core.note'),
+    );
+
+    expect(
+      AppController.cliCommandForEntry(entry),
+      'keylease content get note-1 --raw',
+    );
   });
 
   testWidgets('website value opens in the default browser', (tester) async {

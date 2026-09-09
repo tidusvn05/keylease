@@ -87,23 +87,6 @@ class EntryDetail extends StatelessWidget {
     );
   }
 
-  Future<void> _copyContent(BuildContext context, EntrySummary item) async {
-    try {
-      final body = await vault.fetchContentBody(item);
-      if (body == null || body.isEmpty || !context.mounted) return;
-      final copied = await app.copySensitive(body);
-      if (copied && context.mounted) {
-        showFToast(
-          context: context,
-          title: const Text('Markdown copied'),
-          description: const Text('The clipboard clears in 30 seconds.'),
-        );
-      }
-    } catch (caught) {
-      if (context.mounted) showFailure(context, caught);
-    }
-  }
-
   Future<void> _copyCliCommand(BuildContext context, EntrySummary item) async {
     final copied = await app.copyCliCommand(item);
     if (!copied || !context.mounted) return;
@@ -156,11 +139,6 @@ class EntryDetail extends StatelessWidget {
     final hasUsername = (username ?? item.username)?.isNotEmpty == true;
     final hasLoginDetails =
         hasUsername || item.hasPassword || item.primaryUrl != null;
-    final isAgentContent = const {
-      'core.prompt',
-      'core.runbook',
-      'core.note',
-    }.contains(item.kind);
     Widget identity() => Row(
       children: [
         KeyLeaseMark(text: item.monogram, large: true),
@@ -192,53 +170,65 @@ class EntryDetail extends StatelessWidget {
         ),
       ],
     );
-    Widget actions() => Wrap(
-      spacing: 6,
-      runSpacing: 6,
-      alignment: WrapAlignment.end,
-      children: [
-        IconAction(
-          label: item.favorite ? 'Remove from favorites' : 'Add to favorites',
-          icon: item.favorite ? FLucideIcons.starOff : FLucideIcons.star,
-          onPress: () async {
-            try {
-              await vault.toggleFavorite(item);
-            } catch (caught) {
-              if (context.mounted) showFailure(context, caught);
-            }
-          },
+    Widget actions() => DecoratedBox(
+      decoration: BoxDecoration(
+        color: theme.colors.muted.withValues(alpha: 0.22),
+        border: Border.all(color: theme.colors.border),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(3),
+        child: Wrap(
+          spacing: 2,
+          runSpacing: 2,
+          alignment: WrapAlignment.end,
+          children: [
+            IconAction(
+              label: item.favorite
+                  ? 'Remove from favorites'
+                  : 'Add to favorites',
+              icon: item.favorite ? FLucideIcons.starOff : FLucideIcons.star,
+              variant: item.favorite
+                  ? FButtonVariant.secondary
+                  : FButtonVariant.ghost,
+              onPress: () async {
+                try {
+                  await vault.toggleFavorite(item);
+                } catch (caught) {
+                  if (context.mounted) showFailure(context, caught);
+                }
+              },
+            ),
+            IconAction(
+              key: ValueKey('entry-prompt-${item.id}'),
+              label: 'Copy prompt for agent',
+              icon: FLucideIcons.clipboardCopy,
+              variant: FButtonVariant.ghost,
+              onPress: () => _copyAgentPrompt(context, item),
+            ),
+            IconAction(
+              key: ValueKey('entry-cli-${item.id}'),
+              label: 'Copy CLI command',
+              icon: FLucideIcons.terminal,
+              variant: FButtonVariant.ghost,
+              onPress: () => _copyCliCommand(context, item),
+            ),
+            IconAction(
+              label: 'Edit',
+              icon: FLucideIcons.squarePen,
+              variant: FButtonVariant.ghost,
+              onPress: () => openEntryEditor(context, app, existing: item),
+            ),
+            IconAction(
+              label: 'Delete',
+              icon: FLucideIcons.trash2,
+              variant: FButtonVariant.ghost,
+              iconColor: tokens.danger,
+              onPress: () => _delete(context, item),
+            ),
+          ],
         ),
-        FButton(
-          key: ValueKey('entry-prompt-${item.id}'),
-          variant: FButtonVariant.outline,
-          size: FButtonSizeVariant.xs,
-          mainAxisSize: MainAxisSize.min,
-          prefix: const Icon(FLucideIcons.terminal, size: 14),
-          onPress: () => isAgentContent
-              ? _copyContent(context, item)
-              : _copyAgentPrompt(context, item),
-          child: Text(isAgentContent ? 'Copy Markdown' : 'Prompt'),
-        ),
-        FButton(
-          key: ValueKey('entry-cli-${item.id}'),
-          variant: FButtonVariant.outline,
-          size: FButtonSizeVariant.xs,
-          mainAxisSize: MainAxisSize.min,
-          prefix: const Icon(FLucideIcons.copy, size: 14),
-          onPress: () => _copyCliCommand(context, item),
-          child: const Text('CLI'),
-        ),
-        IconAction(
-          label: 'Edit',
-          icon: FLucideIcons.squarePen,
-          onPress: () => openEntryEditor(context, app, existing: item),
-        ),
-        IconAction(
-          label: 'Delete',
-          icon: FLucideIcons.trash2,
-          onPress: () => _delete(context, item),
-        ),
-      ],
+      ),
     );
     return KeyLeaseScrollArea(
       key: ValueKey('detail-${item.id}'),
