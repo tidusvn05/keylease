@@ -774,9 +774,15 @@ private final class KeyLeaseSettingsWindowController: NSWindowController {
 
 @available(macOS 13.0, *)
 private final class LocalRuntimeBridge {
+  private static let vaultChangedNotification = Notification.Name(
+    "app.keylease.runtime.vault-changed"
+  )
+
   private weak var window: NSWindow?
   private let channel: FlutterMethodChannel
   private let service = SMAppService.agent(plistName: "app.keylease.service.plist")
+  private let bridgeID = UUID().uuidString
+  private var vaultChangedObserver: NSObjectProtocol?
 
   init(window: NSWindow, messenger: FlutterBinaryMessenger) {
     self.window = window
@@ -784,6 +790,15 @@ private final class LocalRuntimeBridge {
   }
 
   func register() {
+    vaultChangedObserver = NotificationCenter.default.addObserver(
+      forName: Self.vaultChangedNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] notification in
+      guard let self,
+            notification.userInfo?["source"] as? String != self.bridgeID else { return }
+      self.channel.invokeMethod("vaultChanged", arguments: nil)
+    }
     channel.setMethodCallHandler { [weak self] call, result in
       guard let self else { return result(FlutterError(code: "WINDOW_CLOSED", message: nil, details: nil)) }
       switch call.method {
@@ -812,6 +827,13 @@ private final class LocalRuntimeBridge {
           return result(FlutterError(code: "INVALID_REQUEST", message: "Missing vault id", details: nil))
         }
         self.run(arguments: ["desktop", "vault-switch", id], input: nil, result: result, returnValue: false)
+      case "publishVaultChange":
+        NotificationCenter.default.post(
+          name: Self.vaultChangedNotification,
+          object: nil,
+          userInfo: ["source": self.bridgeID]
+        )
+        result(nil)
       case "renameVault":
         guard let values = call.arguments as? [String: Any],
               let id = values["id"] as? String, let name = values["name"] as? String else {
@@ -830,6 +852,13 @@ private final class LocalRuntimeBridge {
       case "chooseVaultSource": self.chooseVault(result: result)
       default: result(FlutterMethodNotImplemented)
       }
+    }
+  }
+
+  deinit {
+    channel.setMethodCallHandler(nil)
+    if let vaultChangedObserver {
+      NotificationCenter.default.removeObserver(vaultChangedObserver)
     }
   }
 

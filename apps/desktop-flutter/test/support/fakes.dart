@@ -102,10 +102,20 @@ class FakeSecurityAdapter implements SecurityAdapter {
 }
 
 class FakeLocalRuntimeAdapter implements LocalRuntimeAdapter {
+  final _vaultChanges = StreamController<void>.broadcast();
   LocalRuntimeInspection inspection = const LocalRuntimeInspection(
     state: LocalRuntimeState.ready,
     serviceVersion: 'test',
   );
+  List<LocalVaultProfile> profiles = const [
+    LocalVaultProfile(id: 'primary', name: 'Primary Vault', active: true),
+  ];
+  int publishedVaultChanges = 0;
+
+  void emitExternalVaultChange() => _vaultChanges.add(null);
+
+  @override
+  Stream<void> get vaultChanges => _vaultChanges.stream;
 
   @override
   Future<LocalRuntimeInspection> inspect() async => inspection;
@@ -127,15 +137,27 @@ class FakeLocalRuntimeAdapter implements LocalRuntimeAdapter {
   @override
   Future<void> openDataFolder() async {}
   @override
-  Future<List<LocalVaultProfile>> listVaults() async => const [
-    LocalVaultProfile(id: 'primary', name: 'Primary Vault', active: true),
-  ];
+  Future<List<LocalVaultProfile>> listVaults() async => profiles;
   @override
   Future<void> createVault(String name, Map<String, dynamic> request) async {}
   @override
-  Future<void> switchVault(String id) async {}
+  Future<void> switchVault(String id) async {
+    profiles = [
+      for (final profile in profiles)
+        LocalVaultProfile(
+          id: profile.id,
+          name: profile.name,
+          active: profile.id == id,
+        ),
+    ];
+  }
+
+  @override
+  Future<void> publishVaultChange() async => publishedVaultChanges++;
   @override
   Future<void> renameVault(String id, String name) async {}
+  @override
+  Future<void> dispose() => _vaultChanges.close();
 }
 
 /// A scripted daemon.
@@ -280,6 +302,7 @@ abstract final class Fixtures {
 buildController({
   Map<String, dynamic>? preferences,
   LocalRuntimeInspection? runtimeInspection,
+  FakeLocalRuntimeAdapter? runtime,
   void Function(FakeKeyLeaseClient client)? script,
 }) {
   final client = FakeKeyLeaseClient()
@@ -328,11 +351,11 @@ buildController({
     });
   script?.call(client);
   final adapter = FakeSecurityAdapter();
-  final runtime = FakeLocalRuntimeAdapter();
-  if (runtimeInspection != null) runtime.inspection = runtimeInspection;
+  final localRuntime = runtime ?? FakeLocalRuntimeAdapter();
+  if (runtimeInspection != null) localRuntime.inspection = runtimeInspection;
   final app = AppController(
     adapter: adapter,
-    runtime: runtime,
+    runtime: localRuntime,
     preferences: InMemoryPreferencesStore(
       preferences ??
           const ConnectionSettings(

@@ -39,6 +39,9 @@ class AppController extends ChangeNotifier with BusyRegistry {
     approvals = ApprovalsController(() => client);
     activity = ActivityController(() => client);
     _lockSubscription = adapter.lockRequests.listen(_onLockRequested);
+    _vaultChangeSubscription = runtime.vaultChanges.listen(
+      (_) => unawaited(_onExternalVaultChange()),
+    );
   }
 
   static const refreshKey = 'app.refresh';
@@ -62,6 +65,8 @@ Keep returned secrets private. If the vault is locked, ask me to unlock KeyLease
   final LocalRuntimeAdapter runtime;
   final ClientFactory clientFactory;
   StreamSubscription<LockTrigger>? _lockSubscription;
+  StreamSubscription<void>? _vaultChangeSubscription;
+  bool _handlingExternalVaultChange = false;
 
   ConnectionSettings settings = ConnectionSettings.defaults();
   AppPhase phase = AppPhase.checking;
@@ -372,6 +377,7 @@ Keep returned secrets private. If the vault is locked, ask me to unlock KeyLease
       vaultProfiles = await runtime.listVaults();
       await _waitForService();
       await refresh();
+      await runtime.publishVaultChange();
     } catch (_) {
       if (previous != null) {
         await runtime.switchVault(previous.id);
@@ -383,6 +389,31 @@ Keep returned secrets private. If the vault is locked, ask me to unlock KeyLease
         vaultProfiles = await runtime.listVaults();
       }
       rethrow;
+    }
+  }
+
+  Future<void> _onExternalVaultChange() async {
+    if (_handlingExternalVaultChange) return;
+    _handlingExternalVaultChange = true;
+    vault.hideSecrets();
+    _clearSessionData();
+    status = null;
+    _enter(AppPhase.checking, null);
+    try {
+      final inspection = await runtime.inspect();
+      settings = ConnectionSettings.defaults().copyWith(
+        tokenPath: inspection.tokenPath,
+      );
+      vaultProfiles = await runtime.listVaults();
+      await _waitForService();
+      while (isBusy(refreshKey)) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      await refresh();
+    } catch (caught) {
+      _enter(AppPhase.serviceUnavailable, UserMessage.from(caught));
+    } finally {
+      _handlingExternalVaultChange = false;
     }
   }
 
@@ -500,6 +531,9 @@ Keep returned secrets private. If the vault is locked, ask me to unlock KeyLease
   @override
   void dispose() {
     unawaited(_lockSubscription?.cancel());
+    unawaited(_vaultChangeSubscription?.cancel());
+    unawaited(runtime.dispose());
+    unawaited(adapter.dispose());
     vault.dispose();
     connections.dispose();
     approvals.dispose();

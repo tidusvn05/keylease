@@ -38,7 +38,7 @@ class _KeyLeaseAppState extends State<KeyLeaseApp> {
       widget.controller ??
       AppController(
         adapter: MethodChannelSecurityAdapter(),
-        runtime: const MethodChannelLocalRuntimeAdapter(),
+        runtime: MethodChannelLocalRuntimeAdapter(),
         preferences: FilePreferencesStore(),
       );
   late final bool _ownsController = widget.controller == null;

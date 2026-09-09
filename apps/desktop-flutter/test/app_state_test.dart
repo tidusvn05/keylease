@@ -91,6 +91,66 @@ void main() {
       expect(harness.app.vault.listState, VaultListState.empty);
     });
 
+    test('an external vault switch refreshes the other window', () async {
+      final runtime = FakeLocalRuntimeAdapter()
+        ..profiles = const [
+          LocalVaultProfile(id: 'primary', name: 'Primary', active: true),
+          LocalVaultProfile(id: 'secondary', name: 'Secondary', active: false),
+        ];
+      final harness = buildController(runtime: runtime);
+      addTearDown(harness.app.dispose);
+      await harness.app.start();
+      expect(harness.app.phase, AppPhase.ready);
+      expect(harness.app.vault.entries, isNotEmpty);
+
+      runtime
+        ..inspection = const LocalRuntimeInspection(
+          state: LocalRuntimeState.ready,
+          tokenPath: '/tmp/secondary.token',
+        )
+        ..profiles = const [
+          LocalVaultProfile(id: 'primary', name: 'Primary', active: false),
+          LocalVaultProfile(id: 'secondary', name: 'Secondary', active: true),
+        ];
+      harness.client.value('status', Fixtures.lockedStatus);
+      runtime.emitExternalVaultChange();
+
+      for (
+        var attempt = 0;
+        attempt < 50 && harness.app.phase != AppPhase.locked;
+        attempt++
+      ) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+
+      expect(harness.app.phase, AppPhase.locked);
+      expect(
+        harness.app.vaultProfiles.singleWhere((profile) => profile.active).id,
+        'secondary',
+      );
+      expect(harness.app.settings.tokenPath, '/tmp/secondary.token');
+      expect(harness.app.vault.entries, isEmpty);
+    });
+
+    test('switching a vault publishes one cross-window change', () async {
+      final runtime = FakeLocalRuntimeAdapter()
+        ..profiles = const [
+          LocalVaultProfile(id: 'primary', name: 'Primary', active: true),
+          LocalVaultProfile(id: 'secondary', name: 'Secondary', active: false),
+        ];
+      final harness = buildController(runtime: runtime);
+      addTearDown(harness.app.dispose);
+      await harness.app.start();
+
+      await harness.app.switchManagedVault('secondary');
+
+      expect(runtime.publishedVaultChanges, 1);
+      expect(
+        harness.app.vaultProfiles.singleWhere((profile) => profile.active).id,
+        'secondary',
+      );
+    });
+
     test(
       'password generator settings persist as non-secret UI preferences',
       () async {

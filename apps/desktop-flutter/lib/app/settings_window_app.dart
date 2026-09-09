@@ -27,7 +27,7 @@ class KeyLeaseSettingsWindowApp extends StatefulWidget {
 class _KeyLeaseSettingsWindowAppState extends State<KeyLeaseSettingsWindowApp> {
   late final AppController controller = AppController(
     adapter: MethodChannelSecurityAdapter(),
-    runtime: const MethodChannelLocalRuntimeAdapter(),
+    runtime: MethodChannelLocalRuntimeAdapter(),
     preferences: FilePreferencesStore(),
   );
 

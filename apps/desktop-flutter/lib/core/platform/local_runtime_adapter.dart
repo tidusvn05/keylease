@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 
 class BackgroundApprovalRequired implements Exception {
@@ -59,6 +61,7 @@ class LocalVaultProfile {
 }
 
 abstract class LocalRuntimeAdapter {
+  Stream<void> get vaultChanges;
   Future<LocalRuntimeInspection> inspect();
   Future<String?> chooseVaultSource();
   Future<Map<String, dynamic>> inspectSource(String path);
@@ -70,15 +73,30 @@ abstract class LocalRuntimeAdapter {
   Future<List<LocalVaultProfile>> listVaults();
   Future<void> createVault(String name, Map<String, dynamic> request);
   Future<void> switchVault(String id);
+  Future<void> publishVaultChange();
   Future<void> renameVault(String id, String name);
+  Future<void> dispose();
 }
 
 class MethodChannelLocalRuntimeAdapter implements LocalRuntimeAdapter {
-  const MethodChannelLocalRuntimeAdapter([
+  MethodChannelLocalRuntimeAdapter([
     this.channel = const MethodChannel('com.keylease/runtime'),
-  ]);
+  ]) {
+    channel.setMethodCallHandler(_handleNativeCall);
+  }
 
   final MethodChannel channel;
+  final _vaultChanges = StreamController<void>.broadcast();
+
+  @override
+  Stream<void> get vaultChanges => _vaultChanges.stream;
+
+  Future<Object?> _handleNativeCall(MethodCall call) async {
+    if (call.method == 'vaultChanged') {
+      _vaultChanges.add(null);
+    }
+    return null;
+  }
 
   @override
   Future<LocalRuntimeInspection> inspect() async =>
@@ -159,6 +177,16 @@ class MethodChannelLocalRuntimeAdapter implements LocalRuntimeAdapter {
       channel.invokeMethod<void>('switchVault', {'id': id});
 
   @override
+  Future<void> publishVaultChange() =>
+      channel.invokeMethod<void>('publishVaultChange');
+
+  @override
   Future<void> renameVault(String id, String name) =>
       channel.invokeMethod<void>('renameVault', {'id': id, 'name': name});
+
+  @override
+  Future<void> dispose() async {
+    channel.setMethodCallHandler(null);
+    await _vaultChanges.close();
+  }
 }
