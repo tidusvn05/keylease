@@ -136,7 +136,7 @@ fn url(key: &str, label: &str, role: &str, section: &str, aliases: &[&str]) -> I
 
 pub fn builtin_item_kinds() -> Vec<ItemKindDefinition> {
     use ItemKindFamily::{AgentKnowledge, Common, Developer, Other, Personal};
-    vec![
+    let mut kinds = vec![
         kind(
             "login",
             "Login",
@@ -729,7 +729,58 @@ pub fn builtin_item_kinds() -> Vec<ItemKindDefinition> {
         ),
         kind("note", "Note", "note", AgentKnowledge, true, vec![]),
         kind("generic", "Generic", "item", Other, true, vec![]),
-    ]
+        kind(
+            "ssh_server",
+            "SSH Server",
+            "server-cog",
+            Developer,
+            true,
+            vec![],
+        ),
+        kind(
+            "environment",
+            "Environment",
+            "square-code",
+            Developer,
+            true,
+            vec![],
+        ),
+    ];
+    kinds.sort_by(|left, right| {
+        template_priority(&left.kind)
+            .cmp(&template_priority(&right.kind))
+            .then_with(|| family_priority(&left.family).cmp(&family_priority(&right.family)))
+            .then_with(|| left.label.to_lowercase().cmp(&right.label.to_lowercase()))
+    });
+    kinds
+}
+
+fn template_priority(kind: &str) -> u8 {
+    match kind {
+        "core.prompt" => 0,
+        "core.runbook" => 1,
+        "core.environment" => 2,
+        "core.ssh_server" => 3,
+        "core.login" => 4,
+        "core.api_credential" => 5,
+        "core.database" => 6,
+        "core.ssh_key" => 7,
+        "core.secure_note" => 8,
+        "core.note" => 9,
+        "core.password" => 10,
+        "core.generic" => u8::MAX,
+        _ => 100,
+    }
+}
+
+fn family_priority(family: &ItemKindFamily) -> u8 {
+    match family {
+        ItemKindFamily::Developer => 0,
+        ItemKindFamily::Common => 1,
+        ItemKindFamily::AgentKnowledge => 2,
+        ItemKindFamily::Personal => 3,
+        ItemKindFamily::Other => 4,
+    }
 }
 
 fn identity_document_fields() -> Vec<ItemFieldDefinition> {
@@ -1129,16 +1180,21 @@ mod tests {
     fn builtin_catalog_is_complete_and_safe() {
         validate_builtin_item_kinds().unwrap();
         let kinds = builtin_item_kinds();
-        assert_eq!(kinds.len(), 26);
+        assert_eq!(kinds.len(), 28);
         for required in [
             "core.credit_card",
             "core.crypto_wallet",
             "core.ssh_key",
+            "core.ssh_server",
+            "core.environment",
             "core.prompt",
             "core.runbook",
             "core.note",
         ] {
             assert!(kinds.iter().any(|item| item.kind == required));
         }
+        assert_eq!(kinds[0].kind, "core.prompt");
+        assert_eq!(kinds[1].kind, "core.runbook");
+        assert_eq!(kinds.last().unwrap().kind, "core.generic");
     }
 }

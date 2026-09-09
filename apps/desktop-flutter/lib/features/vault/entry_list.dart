@@ -26,6 +26,7 @@ class EntryList extends StatelessWidget {
     required this.onRefresh,
     required this.refreshing,
     this.openOnSelect = false,
+    this.showSearch = true,
     super.key,
   });
 
@@ -38,6 +39,7 @@ class EntryList extends StatelessWidget {
 
   /// Narrow layouts route straight from the list to the detail view.
   final bool openOnSelect;
+  final bool showSearch;
 
   @override
   Widget build(BuildContext context) {
@@ -45,62 +47,28 @@ class EntryList extends StatelessWidget {
     final theme = context.theme;
     final entries = controller.visibleEntries;
     final showInlineActions =
+        showSearch &&
         MediaQuery.sizeOf(context).width >= tokens.expandedBreakpoint;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(
-            tokens.gutter,
-            tokens.gutter,
-            tokens.gutter,
-            tokens.gutterSmall,
-          ),
-          // Arrow keys move the list selection while the caret stays in the
-          // field. This Shortcuts sits below DefaultTextEditingShortcuts, so
-          // it wins for these two activators only.
-          child: Shortcuts(
-            shortcuts: const {
-              SingleActivator(LogicalKeyboardKey.arrowDown):
-                  MoveSelectionIntent(1),
-              SingleActivator(LogicalKeyboardKey.arrowUp): MoveSelectionIntent(
-                -1,
-              ),
-            },
-            child: Actions(
-              actions: {
-                MoveSelectionIntent: CallbackAction<MoveSelectionIntent>(
-                  onInvoke: (intent) {
-                    controller.moveSelection(intent.delta);
-                    return null;
-                  },
-                ),
-              },
-              child: FTextField(
-                key: const ValueKey('vault-search'),
-                focusNode: controller.searchFocus,
-                control: FTextFieldControl.managed(
-                  controller: controller.searchController,
-                  onChange: (value) => controller.setQuery(value.text),
-                ),
-                hint: 'Search title, username or URL',
-                prefixBuilder: (context, style, variants) => const Padding(
-                  padding: EdgeInsets.only(left: 11, right: 6),
-                  child: Icon(FLucideIcons.search, size: 17),
-                ),
-                onSubmit: (_) {
-                  final selected = controller.selectedEntry;
-                  if (selected != null) onActivate(selected.id);
-                },
-                clearable: (value) => value.text.isNotEmpty,
-              ),
+        if (showSearch)
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              tokens.gutter,
+              tokens.gutter,
+              tokens.gutter,
+              tokens.gutterSmall,
+            ),
+            child: VaultSearchField(
+              controller: controller,
+              onActivate: onActivate,
             ),
           ),
-        ),
         Padding(
           padding: EdgeInsets.fromLTRB(
             tokens.gutter,
-            0,
+            showSearch ? 0 : tokens.gutterSmall,
             tokens.gutter,
             tokens.gutterSmall,
           ),
@@ -202,4 +170,52 @@ class EntryList extends StatelessWidget {
           },
         ),
       };
+}
+
+/// Search field shared by the compact list and the unified desktop toolbar.
+class VaultSearchField extends StatelessWidget {
+  const VaultSearchField({
+    required this.controller,
+    required this.onActivate,
+    super.key,
+  });
+
+  final VaultController controller;
+  final ValueChanged<String> onActivate;
+
+  @override
+  Widget build(BuildContext context) => Shortcuts(
+    shortcuts: const {
+      SingleActivator(LogicalKeyboardKey.arrowDown): MoveSelectionIntent(1),
+      SingleActivator(LogicalKeyboardKey.arrowUp): MoveSelectionIntent(-1),
+    },
+    child: Actions(
+      actions: {
+        MoveSelectionIntent: CallbackAction<MoveSelectionIntent>(
+          onInvoke: (intent) {
+            controller.moveSelection(intent.delta);
+            return null;
+          },
+        ),
+      },
+      child: FTextField(
+        key: const ValueKey('vault-search'),
+        focusNode: controller.searchFocus,
+        control: FTextFieldControl.managed(
+          controller: controller.searchController,
+          onChange: (value) => controller.setQuery(value.text),
+        ),
+        hint: 'Search',
+        prefixBuilder: (context, style, variants) => const Padding(
+          padding: EdgeInsets.only(left: 11, right: 6),
+          child: Icon(FLucideIcons.search, size: 17),
+        ),
+        onSubmit: (_) {
+          final selected = controller.selectedEntry;
+          if (selected != null) onActivate(selected.id);
+        },
+        clearable: (value) => value.text.isNotEmpty,
+      ),
+    ),
+  );
 }

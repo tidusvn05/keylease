@@ -15,6 +15,7 @@ import '../../ui/components/scroll_area.dart';
 import '../../ui/components/state_screen.dart';
 import '../../ui/tokens/keylease_tokens.dart';
 import 'entry_editor.dart';
+import 'developer_template_detail.dart';
 import 'totp_dialog.dart';
 
 /// The always-present detail pane. Reading entry metadata never opens a
@@ -326,7 +327,15 @@ class EntryDetail extends StatelessWidget {
             ],
           ),
         ],
-        if (detail != null && _additionalFields(detail).isNotEmpty) ...[
+        if (detail != null &&
+            const {'core.environment', 'core.ssh_server'}.contains(item.kind))
+          DeveloperTemplateDetail(app: app, item: item, detail: detail),
+        if (detail != null &&
+            !const {
+              'core.environment',
+              'core.ssh_server',
+            }.contains(item.kind) &&
+            _additionalFields(detail).isNotEmpty) ...[
           SizedBox(height: tokens.gutter * 1.5),
           const SectionLabel('Details'),
           FieldGroup(
@@ -419,6 +428,7 @@ class EntryDetail extends StatelessWidget {
     if (!confirmed || !context.mounted) return;
     try {
       await vault.deleteEntry(item);
+      await app.removeSshBindingsForItem(item.id);
     } catch (caught) {
       if (context.mounted) showFailure(context, caught);
     }

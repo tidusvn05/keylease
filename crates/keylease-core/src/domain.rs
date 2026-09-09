@@ -136,6 +136,8 @@ pub struct ItemSection {
     pub id: String,
     pub label: String,
     pub field_ids: Vec<FieldId>,
+    #[serde(default)]
+    pub semantic_role: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]

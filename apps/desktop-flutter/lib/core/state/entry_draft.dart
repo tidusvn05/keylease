@@ -55,6 +55,11 @@ class EntryDraft {
   String notes = '';
   String totp = '';
   String customFields = '';
+  String sections = '';
+  List<String> removeFieldIds = const [];
+  Map<String, String> sshKeyBindings = const {};
+  List<String> sshBindingsToClear = const [];
+  Map<String, String> structuredErrors = const {};
   String tags = '';
   String? projectSlug;
   String agentAccess = 'none';
@@ -77,7 +82,11 @@ class EntryDraft {
       projectSlug != null ||
       agentAccess != 'none' ||
       favorite != _originalFavorite ||
-      customFields.isNotEmpty;
+      customFields.isNotEmpty ||
+      sections.isNotEmpty ||
+      removeFieldIds.isNotEmpty ||
+      sshKeyBindings.isNotEmpty ||
+      sshBindingsToClear.isNotEmpty;
 
   /// Field-level validation messages, keyed by field name.
   Map<String, String> validate() {
@@ -91,12 +100,26 @@ class EntryDraft {
     if (customFields.trim().isNotEmpty && _parseCustomFields() == null) {
       errors['custom_fields'] = 'Custom fields must be a JSON array.';
     }
+    if (sections.trim().isNotEmpty && _parseSections() == null) {
+      errors['sections'] = 'Sections must be a JSON array.';
+    }
+    errors.addAll(structuredErrors);
     return errors;
   }
 
   List<dynamic>? _parseCustomFields() {
     try {
       final decoded = jsonDecode(customFields);
+      return decoded is List<dynamic> ? decoded : null;
+    } on FormatException {
+      return null;
+    }
+  }
+
+  List<dynamic>? _parseSections() {
+    if (sections.trim().isEmpty) return <dynamic>[];
+    try {
+      final decoded = jsonDecode(sections);
       return decoded is List<dynamic> ? decoded : null;
     } on FormatException {
       return null;
@@ -129,6 +152,7 @@ class EntryDraft {
     'url': url.isEmpty ? null : url,
     'notes': notes.isEmpty ? null : notes,
     'custom_fields': _parseCustomFields() ?? <dynamic>[],
+    'sections': _parseSections() ?? <dynamic>[],
     'totp': _totpPayload(),
     'totp_uri': _totpUri,
   };
@@ -179,6 +203,8 @@ class EntryDraft {
       if (_totpPayload() != null) 'totp': _totpPayload(),
       if (_totpUri != null) 'totp_uri': _totpUri,
       if (parsed != null) 'field_updates': parsed,
+      if (sections.trim().isNotEmpty) 'sections': _parseSections(),
+      if (removeFieldIds.isNotEmpty) 'remove_field_ids': removeFieldIds,
     };
   }
 
@@ -188,5 +214,10 @@ class EntryDraft {
     notes = '';
     totp = '';
     customFields = '';
+    sections = '';
+    removeFieldIds = const [];
+    sshKeyBindings = const {};
+    sshBindingsToClear = const [];
+    structuredErrors = const {};
   }
 }

@@ -5,6 +5,7 @@ import 'package:forui/forui.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../core/models/models.dart';
+import '../../core/platform/security_adapter.dart';
 import '../../core/state/app_controller.dart';
 import '../../core/state/entry_draft.dart';
 import '../../core/state/user_message.dart';
@@ -12,9 +13,11 @@ import '../../ui/components/keylease_dialog.dart';
 import '../../ui/components/message_banner.dart';
 import '../../ui/components/secret_field.dart';
 import '../../ui/components/scroll_area.dart';
+import '../../ui/components/searchable_select.dart';
 import '../../ui/components/section_label.dart';
 import '../../ui/tokens/keylease_tokens.dart';
 import 'password_generator.dart';
+import 'developer_template_editor.dart';
 
 /// Opens the draft-based editor.
 ///
@@ -225,11 +228,52 @@ class _EntryFormState extends State<_EntryForm> {
 
   Map<String, String> errors = const {};
   UserMessage? failure;
+  VoidCallback? _failureAction;
   bool _passwordRevealed = false;
   bool _passwordCopied = false;
+  bool _totpScanning = false;
   Timer? _passwordCopiedTimer;
 
   EntryDraft get draft => widget.draft;
+
+  bool get _isDeveloperTemplate =>
+      const {'core.environment', 'core.ssh_server'}.contains(draft.kind);
+
+  String _groupBreadcrumb(VaultGroup group, List<VaultGroup> groups) {
+    final names = <String>[group.name];
+    final visited = <String>{group.id};
+    var parentId = group.parentId;
+    while (parentId != null && visited.add(parentId)) {
+      final parent = groups
+          .where((candidate) => candidate.id == parentId)
+          .firstOrNull;
+      if (parent == null) break;
+      names.insert(0, parent.name);
+      parentId = parent.parentId;
+    }
+    return names.join(' / ');
+  }
+
+  String _templateSection(TemplateDefinition template) {
+    const essentials = {
+      'core.prompt',
+      'core.runbook',
+      'core.environment',
+      'core.ssh_server',
+      'core.login',
+      'core.api_credential',
+      'core.database',
+      'core.ssh_key',
+    };
+    if (essentials.contains(template.kind)) return 'Developer essentials';
+    return switch (template.family) {
+      'developer' => 'Developer',
+      'common' => 'Common',
+      'agent_knowledge' => 'Agent knowledge',
+      'personal' => 'Personal',
+      _ => 'Other',
+    };
+  }
 
   @override
   void initState() {
@@ -306,8 +350,10 @@ class _EntryFormState extends State<_EntryForm> {
       ..password = _password.text
       ..notes = _notes.text
       ..totp = _totp.text
-      ..tags = _tags.text
-      ..customFields = _templateFieldPayload() ?? _custom.text;
+      ..tags = _tags.text;
+    if (!_isDeveloperTemplate) {
+      draft.customFields = _templateFieldPayload() ?? _custom.text;
+    }
   }
 
   TemplateDefinition? get _template {
@@ -552,8 +598,36 @@ class _EntryFormState extends State<_EntryForm> {
     });
     widget.editor.setSaving(value: true);
     try {
-      await widget.app.vault.save(draft);
-      if (mounted) widget.onFinished();
+      final savedId = await widget.app.vault.save(draft);
+      Object? bindingFailure;
+      if (savedId != null) {
+        try {
+          for (final endpointId in draft.sshBindingsToClear) {
+            await widget.app.setSshKeyBinding(savedId, endpointId, null);
+          }
+          for (final binding in draft.sshKeyBindings.entries) {
+            await widget.app.setSshKeyBinding(
+              savedId,
+              binding.key,
+              binding.value,
+            );
+          }
+        } catch (caught) {
+          bindingFailure = caught;
+        }
+      }
+      if (mounted) {
+        if (bindingFailure != null) {
+          showFToast(
+            context: context,
+            title: const Text('Item saved, private key not bound'),
+            description: const Text(
+              'Select the private key again from the saved item on this device.',
+            ),
+          );
+        }
+        widget.onFinished();
+      }
     } catch (caught) {
       // The draft is untouched: the user keeps every typed value.
       if (mounted) setState(() => failure = UserMessage.from(caught));
@@ -604,15 +678,47 @@ class _EntryFormState extends State<_EntryForm> {
     await showPasswordGeneratorSettings(context, widget.app);
   }
 
-  Future<void> _scanTotp() async {
+  Future<void> _scanTotp({required bool fromScreen}) async {
+    if (_totpScanning) return;
+    setState(() {
+      _totpScanning = true;
+      failure = null;
+      _failureAction = null;
+    });
     try {
-      final uri = await widget.app.adapter.scanTotpQrCode();
+      final uri = fromScreen
+          ? await widget.app.adapter.scanTotpQrCodeFromScreen()
+          : await widget.app.adapter.scanTotpQrCode();
       if (uri != null && mounted) {
         _totp.text = uri;
-        setState(() {});
+        setState(() => _totpScanning = false);
       }
     } catch (caught) {
-      if (mounted) setState(() => failure = UserMessage.from(caught));
+      if (!mounted) return;
+      setState(() {
+        _totpScanning = false;
+        failure = UserMessage.from(caught);
+        if (caught is ScreenRecordingPermissionRequired) {
+          _failureAction = () => unawaited(_openScreenRecordingSettings());
+        }
+      });
+    } finally {
+      if (mounted && _totpScanning) {
+        setState(() => _totpScanning = false);
+      }
+    }
+  }
+
+  Future<void> _openScreenRecordingSettings() async {
+    try {
+      await widget.app.adapter.openScreenRecordingSettings();
+    } catch (caught) {
+      if (mounted) {
+        setState(() {
+          failure = UserMessage.from(caught);
+          _failureAction = null;
+        });
+      }
     }
   }
 
@@ -624,6 +730,13 @@ class _EntryFormState extends State<_EntryForm> {
     _url.clear();
     _totp.clear();
     _custom.clear();
+    draft
+      ..customFields = ''
+      ..sections = ''
+      ..removeFieldIds = const []
+      ..structuredErrors = const {}
+      ..sshKeyBindings = const {}
+      ..sshBindingsToClear = const [];
     for (final controller in _templateFields.values) {
       controller.clear();
     }
@@ -678,7 +791,7 @@ class _EntryFormState extends State<_EntryForm> {
       final description = switch (field.valueType) {
         'month_year' => 'MM/YYYY',
         'date' => 'YYYY-MM-DD',
-        'totp' => 'Base32 secret or otpauth:// URI',
+        'totp' => 'Base32 secret or otpauth:// URI. Scan the screen or choose an image.',
         'address' => 'Street and address details',
         _ => null,
       };
@@ -759,12 +872,34 @@ class _EntryFormState extends State<_EntryForm> {
               : _isOtp(field)
               ? (context, style, variants) => Padding(
                   padding: const EdgeInsets.only(right: 6),
-                  child: FButton.icon(
-                    key: const ValueKey('entry-totp-scan'),
-                    variant: FButtonVariant.ghost,
-                    semanticsLabel: 'Scan TOTP QR code from image',
-                    onPress: _scanTotp,
-                    child: const Icon(FLucideIcons.keyRound, size: 16),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      FButton.icon(
+                        key: const ValueKey('entry-totp-scan-screen'),
+                        variant: FButtonVariant.ghost,
+                        semanticsLabel: 'Scan TOTP QR code from screen',
+                        onPress: _totpScanning
+                            ? null
+                            : () => _scanTotp(fromScreen: true),
+                        child: Icon(
+                          _totpScanning
+                              ? FLucideIcons.loaderCircle
+                              : FLucideIcons.scanQrCode,
+                          size: 16,
+                        ),
+                      ),
+                      const SizedBox(width: 2),
+                      FButton.icon(
+                        key: const ValueKey('entry-totp-scan'),
+                        variant: FButtonVariant.ghost,
+                        semanticsLabel: 'Choose TOTP QR code image',
+                        onPress: _totpScanning
+                            ? null
+                            : () => _scanTotp(fromScreen: false),
+                        child: const Icon(FLucideIcons.image, size: 15),
+                      ),
+                    ],
                   ),
                 )
               : null,
@@ -783,41 +918,67 @@ class _EntryFormState extends State<_EntryForm> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (failure != null) ...[
-          MessageBanner(message: failure!),
+          MessageBanner(
+            message: failure!,
+            onAction: _failureAction,
+            onDismiss: () => setState(() {
+              failure = null;
+              _failureAction = null;
+            }),
+          ),
           const SizedBox(height: 12),
         ],
         if (draft.isNew)
-          FSelect<String>(
+          SearchableSelect<String>(
             key: const ValueKey('entry-kind'),
             label: const Text('Template'),
-            items: templates.isEmpty
-                ? const {
-                    'Login': 'core.login',
-                    'API credential': 'core.api_credential',
-                    'Secure note': 'core.secure_note',
-                    'Generic item': 'core.generic',
-                  }
-                : {
+            options: templates.isEmpty
+                ? const [
+                    SearchSelectOption(value: 'core.login', label: 'Login'),
+                    SearchSelectOption(
+                      value: 'core.api_credential',
+                      label: 'API credential',
+                    ),
+                    SearchSelectOption(
+                      value: 'core.secure_note',
+                      label: 'Secure note',
+                    ),
+                    SearchSelectOption(
+                      value: 'core.generic',
+                      label: 'Generic item',
+                    ),
+                  ]
+                : [
                     for (final template in templates)
-                      template.label: template.kind,
-                  },
-            control: FSelectControl.lifted(
-              value: draft.kind,
-              onChange: _changeTemplate,
-            ),
+                      SearchSelectOption(
+                        value: template.kind,
+                        label: template.kind == 'core.server'
+                            ? 'Server (generic)'
+                            : template.label,
+                        section: _templateSection(template),
+                        searchTerms: [template.kind, template.family],
+                      ),
+                  ],
+            value: draft.kind,
+            onChange: _changeTemplate,
           ),
         const SizedBox(height: 10),
         if (!draft.isAgentContent)
-          FSelect<String>(
+          SearchableSelect<String>(
             key: const ValueKey('entry-group'),
             label: const Text('Group'),
             hint: 'Choose a group',
             forceErrorText: errors['group'],
-            items: {for (final group in groups) group.name: group.id},
-            control: FSelectControl.lifted(
-              value: draft.groupId,
-              onChange: (value) => setState(() => draft.groupId = value),
-            ),
+            options: [
+              for (final group in groups)
+                SearchSelectOption(
+                  value: group.id,
+                  label: _groupBreadcrumb(group, groups),
+                  searchTerms: [group.name, group.id],
+                ),
+            ],
+            value: draft.groupId,
+            onChange: (value) => setState(() => draft.groupId = value),
           ),
         const SizedBox(height: 10),
         FTextField(
@@ -834,6 +995,14 @@ class _EntryFormState extends State<_EntryForm> {
           onChange: (value) => setState(() => draft.favorite = value),
         ),
         ..._dynamicTemplateFields(),
+        if (_isDeveloperTemplate)
+          DeveloperTemplateEditor(
+            app: widget.app,
+            draft: draft,
+            detail: draft.entryId == null
+                ? null
+                : vault.entryView(draft.entryId!),
+          ),
         if (_template?.markdownNotes == true || draft.isAgentContent) ...[
           const SizedBox(height: 18),
           SectionLabel(draft.isAgentContent ? 'Agent content' : 'Notes'),
@@ -865,20 +1034,24 @@ class _EntryFormState extends State<_EntryForm> {
             control: FTextFieldControl.managed(controller: _tags),
           ),
           const SizedBox(height: 10),
-          FSelect<String>(
+          SearchableSelect<String>(
             key: const ValueKey('entry-project'),
             label: const Text('Project (optional)'),
-            items: {
-              'No project': '',
-              for (final project in vault.projects) project.name: project.slug,
-            },
-            control: FSelectControl.lifted(
-              value: draft.projectSlug ?? '',
-              onChange: (value) => setState(
-                () => draft.projectSlug = value == null || value.isEmpty
-                    ? null
-                    : value,
-              ),
+            options: [
+              const SearchSelectOption(value: '', label: 'No project'),
+              for (final project in vault.projects)
+                SearchSelectOption(
+                  value: project.slug,
+                  label: project.name,
+                  subtitle: project.slug,
+                  searchTerms: [project.slug],
+                ),
+            ],
+            value: draft.projectSlug ?? '',
+            onChange: (value) => setState(
+              () => draft.projectSlug = value == null || value.isEmpty
+                  ? null
+                  : value,
             ),
           ),
           if (draft.isNew) ...[

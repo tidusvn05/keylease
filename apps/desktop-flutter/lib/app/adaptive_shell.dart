@@ -11,6 +11,7 @@ import '../features/migrations/migration_center.dart';
 import '../features/onboarding/phase_screens.dart';
 import '../features/settings/settings_page.dart';
 import '../features/vault/entry_editor.dart';
+import '../features/vault/entry_list.dart';
 import '../features/vault/password_generator.dart';
 import '../features/vault/totp_dialog.dart';
 import '../features/vault/vault_page.dart';
@@ -40,7 +41,19 @@ class AdaptiveShell extends StatelessWidget {
       builder: (context, constraints) {
         final width = constraints.maxWidth;
         final splitView = width >= tokens.splitBreakpoint;
-        final body = _ShellBody(app: app, splitView: splitView);
+        final desktopToolbar = width >= tokens.expandedBreakpoint;
+        final body = _ShellBody(
+          app: app,
+          splitView: splitView,
+          desktopToolbar: desktopToolbar,
+        );
+
+        // Locked and recovery states are focused tasks, not vault
+        // destinations. Keeping the navigation visible suggests that its
+        // items are usable and leaves the unlock form visually off-centre.
+        if (!app.isReady && app.section != AppSection.settings) {
+          return FScaffold(childPad: false, child: body);
+        }
         if (width >= tokens.expandedBreakpoint) {
           return _DesktopShell(app: app, body: body);
         }
@@ -55,10 +68,15 @@ class AdaptiveShell extends StatelessWidget {
 
 /// Section content plus the app-wide banner, shared by every shell.
 class _ShellBody extends StatelessWidget {
-  const _ShellBody({required this.app, required this.splitView});
+  const _ShellBody({
+    required this.app,
+    required this.splitView,
+    required this.desktopToolbar,
+  });
 
   final AppController app;
   final bool splitView;
+  final bool desktopToolbar;
 
   @override
   Widget build(BuildContext context) {
@@ -88,7 +106,10 @@ class _ShellBody extends StatelessWidget {
           child: gated
               ? PhaseScreen(phase: app.phase)
               : switch (section) {
-                  AppSection.vault => VaultPage(splitView: splitView),
+                  AppSection.vault => VaultPage(
+                    splitView: splitView,
+                    desktopToolbar: desktopToolbar,
+                  ),
                   AppSection.approvals => const ApprovalsPage(),
                   AppSection.settings => const SettingsPage(),
                 },
@@ -145,19 +166,132 @@ class _DesktopShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = KeyLeaseTokens.of(context);
-    // Vault actions live beside the content they affect, so the vault does not
-    // spend an entire row on a mostly-empty global toolbar.
-    return SplitPane(
-      width: app.sidebarWidth,
-      minWidth: tokens.sidebarMinWidth,
-      maxWidth: tokens.sidebarMaxWidth,
-      semanticsLabel: 'Resize the sidebar',
-      onWidthChanged: (value) => app.setPaneWidths(sidebar: value),
-      leading: _Sidebar(app: app),
-      trailing: FScaffold(
-        childPad: false,
-        header: app.section == AppSection.vault ? null : _Header(app: app),
-        child: body,
+    return Column(
+      children: [
+        _DesktopTitleBar(app: app),
+        Expanded(
+          child: SplitPane(
+            width: app.sidebarWidth,
+            minWidth: tokens.sidebarMinWidth,
+            maxWidth: tokens.sidebarMaxWidth,
+            semanticsLabel: 'Resize the sidebar',
+            onWidthChanged: (value) => app.setPaneWidths(sidebar: value),
+            leading: _Sidebar(app: app),
+            trailing: FScaffold(childPad: false, child: body),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DesktopTitleBar extends StatelessWidget {
+  const _DesktopTitleBar({required this.app});
+
+  final AppController app;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.theme;
+    final vault = app.vault;
+    final activeVault = app.vaultProfiles
+        .where((profile) => profile.active)
+        .firstOrNull;
+    return Container(
+      height: 52,
+      decoration: BoxDecoration(
+        color: theme.colors.muted.withValues(alpha: 0.24),
+        border: Border(bottom: BorderSide(color: theme.colors.border)),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: app.sidebarWidth,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 78, right: 10),
+              child: Row(
+                children: [
+                  const KeyLeaseBrandMark(size: 24),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      activeVault?.name ?? 'KeyLease',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.typography.body.sm.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          ColoredBox(
+            color: theme.colors.border,
+            child: const SizedBox(width: 1),
+          ),
+          SizedBox(
+            width: app.listWidth + 6,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              child: app.section == AppSection.vault
+                  ? VaultSearchField(controller: vault, onActivate: (_) {})
+                  : Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        app.section.label,
+                        style: theme.typography.body.md.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+            ),
+          ),
+          ColoredBox(
+            color: theme.colors.border,
+            child: const SizedBox(width: 1),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  if (app.section == AppSection.vault) ...[
+                    IconAction(
+                      label: 'Password generator',
+                      icon: FLucideIcons.sparkles,
+                      onPress: () => openPasswordGenerator(context, app),
+                    ),
+                    const SizedBox(width: 6),
+                    IconAction(
+                      label: 'New item',
+                      icon: FLucideIcons.plus,
+                      onPress: () => openEntryEditor(context, app),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                  IconAction(
+                    label: 'Refresh',
+                    icon: FLucideIcons.refreshCw,
+                    onPress: app.isBusy(AppController.refreshKey)
+                        ? null
+                        : app.refresh,
+                  ),
+                  const SizedBox(width: 6),
+                  IconAction(
+                    label: 'Lock vault',
+                    icon: FLucideIcons.lock,
+                    onPress: app.isBusy(AppController.lockKey)
+                        ? null
+                        : app.lock,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -198,7 +332,14 @@ class _CompactShell extends StatelessWidget {
     header: _Header(app: app),
     footer: FBottomNavigationBar(
       index: AppSection.values.indexOf(app.section),
-      onChange: (index) => app.selectSection(AppSection.values[index]),
+      onChange: (index) {
+        final section = AppSection.values[index];
+        if (section == AppSection.settings) {
+          app.openSettings();
+        } else {
+          app.selectSection(section);
+        }
+      },
       children: const [
         FBottomNavigationBarItem(
           icon: Icon(FLucideIcons.keyRound),
@@ -246,7 +387,13 @@ class _Rail extends StatelessWidget {
               variant: app.section == section
                   ? FButtonVariant.secondary
                   : FButtonVariant.ghost,
-              onPress: () => app.selectSection(section),
+              onPress: () {
+                if (section == AppSection.settings) {
+                  app.openSettings();
+                } else {
+                  app.selectSection(section);
+                }
+              },
             ),
           ),
       ],
@@ -261,50 +408,11 @@ class _Sidebar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = context.theme;
     return Observe(
       listenable: app.vault,
       builder: (context, vault) => FSidebar.raw(
         style: const FSidebarStyleDelta.delta(
           contentPadding: EdgeInsetsGeometryDelta.value(EdgeInsets.zero),
-        ),
-        header: Padding(
-          padding: const EdgeInsets.fromLTRB(6, 6, 6, 15),
-          child: Row(
-            children: [
-              const KeyLeaseBrandMark(),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'KeyLease',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    Text(
-                      app.vaultProfiles
-                              .where((profile) => profile.active)
-                              .map((profile) => profile.name)
-                              .firstOrNull ??
-                          'Local vault',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.typography.body.xs.copyWith(
-                        color: theme.colors.mutedForeground,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (app.isReady)
-                IconAction(
-                  label: 'Lock vault',
-                  icon: FLucideIcons.lock,
-                  onPress: app.isBusy(AppController.lockKey) ? null : app.lock,
-                ),
-            ],
-          ),
         ),
         footer: _ConnectionFooter(app: app),
         child: KeyLeaseScrollArea(
@@ -428,7 +536,11 @@ class _Sidebar extends StatelessWidget {
                     selected: app.section == section,
                     onPress: () async {
                       if (!await confirmCloseEntryEditor(context, app)) return;
-                      app.selectSection(section);
+                      if (section == AppSection.settings) {
+                        await app.openSettings();
+                      } else {
+                        app.selectSection(section);
+                      }
                     },
                   ),
               ],
@@ -614,11 +726,13 @@ class _GroupRow extends StatelessWidget {
           icon: FLucideIcons.arrowUp,
           onPress: onMoveUp,
         ),
+        const SizedBox(width: 6),
         IconAction(
           label: 'Move ${group.name} down',
           icon: FLucideIcons.arrowDown,
           onPress: onMoveDown,
         ),
+        const SizedBox(width: 6),
         IconAction(
           label: 'Rename ${group.name}',
           icon: FLucideIcons.squarePen,

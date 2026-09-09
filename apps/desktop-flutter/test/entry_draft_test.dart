@@ -43,6 +43,18 @@ void main() {
       expect(draft.toPatch()['password'], 'new-secret');
     });
 
+    test('structured templates send sections and explicit field removals', () {
+      final draft = EntryDraft.edit(EntrySummary.fromJson(Fixtures.entry()))
+        ..customFields = '[]'
+        ..sections = '[{"id":"environment_variables","label":"Variables","field_ids":[],"semantic_role":"environment_variables"}]'
+        ..removeFieldIds = const ['field_old'];
+
+      final patch = draft.toPatch();
+      expect(patch['field_updates'], isEmpty);
+      expect(patch['sections'], hasLength(1));
+      expect(patch['remove_field_ids'], ['field_old']);
+    });
+
     test('an otpauth URI and a base32 secret take different fields', () {
       final uri = EntryDraft.create(groupId: 'g')
         ..title = 'x'
@@ -107,5 +119,34 @@ void main() {
       expect(draft.title, 'Renamed');
       expect(draft.password, 'kept-secret');
     });
+
+    test(
+      'SSH private key bindings are local, persisted, and removable',
+      () async {
+        final harness = buildController();
+        addTearDown(harness.app.dispose);
+        await harness.app.start();
+
+        await harness.app.setSshKeyBinding(
+          'entry-server',
+          'ssh_endpoint_main',
+          '/Users/test/.ssh/id_ed25519',
+        );
+        expect(
+          harness.app.sshKeyBinding('entry-server', 'ssh_endpoint_main'),
+          '/Users/test/.ssh/id_ed25519',
+        );
+
+        await harness.app.setSshKeyBinding(
+          'entry-server',
+          'ssh_endpoint_main',
+          null,
+        );
+        expect(
+          harness.app.sshKeyBinding('entry-server', 'ssh_endpoint_main'),
+          isNull,
+        );
+      },
+    );
   });
 }

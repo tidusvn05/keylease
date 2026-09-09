@@ -16,9 +16,14 @@ import 'password_generator.dart';
 /// route list → detail and keep the same selection and search state, because
 /// both live in the controller rather than in either screen.
 class VaultPage extends StatelessWidget {
-  const VaultPage({required this.splitView, super.key});
+  const VaultPage({
+    required this.splitView,
+    this.desktopToolbar = false,
+    super.key,
+  });
 
   final bool splitView;
+  final bool desktopToolbar;
 
   @override
   Widget build(BuildContext context) {
@@ -35,6 +40,7 @@ class VaultPage extends StatelessWidget {
           onRefresh: app.refresh,
           refreshing: app.isBusy(AppController.refreshKey),
           onActivate: (id) => _openDetail(context, app),
+          showSearch: !desktopToolbar,
         );
         if (!splitView) return list;
         return SplitPane(

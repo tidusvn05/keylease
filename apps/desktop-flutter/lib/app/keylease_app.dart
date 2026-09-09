@@ -65,7 +65,7 @@ class _KeyLeaseAppState extends State<KeyLeaseApp> {
       case MenuAction.newItem:
         _newItem();
       case MenuAction.settings:
-        controller.selectSection(AppSection.settings);
+        unawaited(controller.openSettings());
       case MenuAction.lock:
         _lock();
       case MenuAction.refresh:
@@ -124,7 +124,7 @@ class _KeyLeaseAppState extends State<KeyLeaseApp> {
     ),
     SettingsIntent: CallbackAction<SettingsIntent>(
       onInvoke: (_) {
-        controller.selectSection(AppSection.settings);
+        unawaited(controller.openSettings());
         return null;
       },
     ),

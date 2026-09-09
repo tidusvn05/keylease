@@ -218,6 +218,7 @@ class EntryDetailView {
     required this.metadata,
     required this.templateVersion,
     required this.tags,
+    required this.sections,
     required this.fields,
     this.projectId,
     this.hasNotes = false,
@@ -231,6 +232,7 @@ class EntryDetailView {
         templateVersion: (json['template_version'] as num?)?.toInt() ?? 1,
         projectId: _string<String>(json['project_id']),
         tags: _strings(json['tags']),
+        sections: parseList(json['sections'], EntrySectionView.fromJson),
         fields: parseList(json['fields'], EntryFieldView.fromJson),
         hasNotes: json['has_notes'] == true,
       );
@@ -239,8 +241,39 @@ class EntryDetailView {
   final int templateVersion;
   final String? projectId;
   final List<String> tags;
+  final List<EntrySectionView> sections;
   final List<EntryFieldView> fields;
   final bool hasNotes;
+}
+
+@immutable
+class EntrySectionView {
+  const EntrySectionView({
+    required this.id,
+    required this.label,
+    required this.fieldIds,
+    this.semanticRole,
+  });
+
+  factory EntrySectionView.fromJson(Map<String, dynamic> json) =>
+      EntrySectionView(
+        id: '${json['id']}',
+        label: _string<String>(json['label']) ?? 'Details',
+        fieldIds: _strings(json['field_ids']),
+        semanticRole: _string<String>(json['semantic_role']),
+      );
+
+  final String id;
+  final String label;
+  final List<String> fieldIds;
+  final String? semanticRole;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'label': label,
+    'field_ids': fieldIds,
+    'semantic_role': semanticRole,
+  };
 }
 
 @immutable

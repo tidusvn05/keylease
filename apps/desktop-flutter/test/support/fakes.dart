@@ -17,8 +17,16 @@ class FakeSecurityAdapter implements SecurityAdapter {
   int clipboardClears = 0;
   String? tokenToReturn;
   String? qrCodeToReturn;
+  String? screenQrCodeToReturn;
+  Object? screenQrScanError;
+  int screenQrScanRequests = 0;
+  int screenRecordingSettingsRequests = 0;
   bool clipboardSupported = true;
   bool browserOpens = true;
+  bool settingsWindowOpens = false;
+  int settingsWindowRequests = 0;
+  List<SshPrivateKeyCandidate> sshKeys = const [];
+  String? sshKeyToReturn;
 
   void requestLock([LockTrigger trigger = LockTrigger.systemSleep]) =>
       _lockRequests.add(trigger);
@@ -49,7 +57,27 @@ class FakeSecurityAdapter implements SecurityAdapter {
   Future<String?> selectClientToken() async => tokenToReturn;
 
   @override
+  Future<List<SshPrivateKeyCandidate>> discoverSshPrivateKeys() async =>
+      sshKeys;
+
+  @override
+  Future<String?> selectSshPrivateKey() async => sshKeyToReturn;
+
+  @override
   Future<String?> scanTotpQrCode() async => qrCodeToReturn;
+
+  @override
+  Future<String?> scanTotpQrCodeFromScreen() async {
+    screenQrScanRequests++;
+    if (screenQrScanError case final error?) throw error;
+    return screenQrCodeToReturn;
+  }
+
+  @override
+  Future<bool> openScreenRecordingSettings() async {
+    screenRecordingSettingsRequests++;
+    return true;
+  }
 
   @override
   Future<bool> openGoogleAuthorization(String url) async => browserOpens;
@@ -58,6 +86,12 @@ class FakeSecurityAdapter implements SecurityAdapter {
   Future<bool> openExternalUrl(String url) async {
     openedUrls.add(url);
     return browserOpens;
+  }
+
+  @override
+  Future<bool> openSettingsWindow() async {
+    settingsWindowRequests++;
+    return settingsWindowOpens;
   }
 
   @override

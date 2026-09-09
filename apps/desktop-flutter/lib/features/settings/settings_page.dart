@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:forui/forui.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -16,7 +18,9 @@ import '../vault/totp_dialog.dart';
 
 /// User-facing controls only. Runtime paths are managed under `~/.keylease`.
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key});
+  const SettingsPage({this.windowMode = false, super.key});
+
+  final bool windowMode;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -36,185 +40,236 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
     final tokens = KeyLeaseTokens.of(context);
-    if (_destination == _SettingsDestination.connections) {
-      return _SettingsSubpage(
-        title: 'Connections',
-        onBack: () =>
-            setState(() => _destination = _SettingsDestination.general),
-        child: const ConnectionsPage(),
-      );
-    }
-    if (_destination == _SettingsDestination.activity) {
-      return _SettingsSubpage(
-        title: 'Activity',
-        onBack: () =>
-            setState(() => _destination = _SettingsDestination.general),
-        child: const ActivityPage(),
-      );
-    }
-    return KeyLeaseScrollArea(
-      padding: EdgeInsets.all(tokens.gutter * 1.5),
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const SectionLabel('Settings'),
-        FItem(
-          prefix: const Icon(FLucideIcons.vault, size: 18),
-          title: const Text('Vaults'),
-          subtitle: const Text('Current vault and local storage.'),
-          suffix: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              FButton(
-                variant: FButtonVariant.outline,
-                onPress: () => _importVault(context, app),
-                child: const Text('Import'),
+        SizedBox(
+          width: 190,
+          child: ColoredBox(
+            color: context.theme.colors.muted.withValues(alpha: 0.35),
+            child: KeyLeaseScrollArea(
+              padding: EdgeInsets.fromLTRB(
+                tokens.gutterSmall,
+                widget.windowMode ? 14 : tokens.gutter,
+                tokens.gutterSmall,
+                tokens.gutter,
               ),
-              const SizedBox(width: 8),
-              FButton(
-                onPress: () => _createVault(context, app),
-                child: const Text('New vault'),
-              ),
-            ],
-          ),
-        ),
-        for (final profile in app.vaultProfiles)
-          FItem(
-            prefix: Icon(
-              profile.active ? FLucideIcons.circleCheck : FLucideIcons.circle,
-              size: 17,
-            ),
-            title: Text(profile.name),
-            subtitle: Text(
-              profile.active ? 'Active vault' : 'Locked until selected',
-            ),
-            suffix: Row(
-              mainAxisSize: MainAxisSize.min,
               children: [
-                IconAction(
-                  label: 'Rename ${profile.name}',
-                  icon: FLucideIcons.squarePen,
-                  onPress: () =>
-                      _renameVault(context, app, profile.id, profile.name),
-                ),
-                if (!profile.active) ...[
-                  const SizedBox(width: 8),
-                  FButton(
-                    variant: FButtonVariant.outline,
-                    onPress: () async {
-                      try {
-                        await app.switchManagedVault(profile.id);
-                      } catch (caught) {
-                        if (context.mounted) showFailure(context, caught);
-                      }
-                    },
-                    child: const Text('Switch'),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 4, 10, 12),
+                  child: Text(
+                    'Settings',
+                    style: context.theme.typography.body.lg.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
+                ),
+                for (final destination in _SettingsDestination.values) ...[
+                  _SettingsNavigationItem(
+                    key: ValueKey('settings-${destination.name}'),
+                    icon: destination.icon,
+                    label: destination.label,
+                    selected: _destination == destination,
+                    onPress: () => _select(app, destination),
+                  ),
+                  if (destination != _SettingsDestination.values.last)
+                    const SizedBox(height: 4),
                 ],
               ],
             ),
           ),
-        FItem(
-          prefix: const Icon(FLucideIcons.link, size: 18),
-          title: const Text('Connections'),
-          subtitle: const Text('Services and connector credentials.'),
-          suffix: const Icon(FLucideIcons.chevronRight, size: 16),
-          onPress: () =>
-              setState(() => _destination = _SettingsDestination.connections),
         ),
-        FItem(
-          prefix: const Icon(FLucideIcons.clock, size: 18),
-          title: const Text('Activity'),
-          subtitle: const Text('Audit and recent vault activity.'),
-          suffix: const Icon(FLucideIcons.chevronRight, size: 16),
-          onPress: () =>
-              setState(() => _destination = _SettingsDestination.activity),
+        ColoredBox(
+          color: context.theme.colors.border,
+          child: const SizedBox(width: 1),
         ),
-        SizedBox(height: tokens.gutter * 1.5),
-        const SectionLabel('KeyLease on this Mac'),
-        FItem(
-          prefix: const Icon(FLucideIcons.hardDrive, size: 18),
-          title: const Text('Managed vault'),
-          subtitle: const Text(
-            'Vault, local credential, backups, and runtime files are kept privately in ~/.keylease.',
-          ),
-          suffix: FButton(
-            variant: FButtonVariant.outline,
-            onPress: app.openDataFolder,
-            child: const Text('Open folder'),
-          ),
-        ),
-        if (app.isReady)
-          FItem(
-            prefix: const Icon(FLucideIcons.databaseBackup, size: 18),
-            title: const Text('Vault migrations'),
-            subtitle: Text(
-              (app.vault.migrationStatus?.pending.isNotEmpty ?? false)
-                  ? '${app.vault.migrationStatus!.pending.first.proposals.length} items need review.'
-                  : 'Review migration history and rollback checkpoints.',
-            ),
-            suffix: FButton(
-              variant: FButtonVariant.outline,
-              onPress: () => openMigrationCenter(context, app),
-              child: const Text('Manage'),
-            ),
-          ),
-        FItem(
-          prefix: const Icon(FLucideIcons.activity, size: 18),
-          title: const Text('Background service'),
-          subtitle: Text(
-            app.serviceVersion == null
-                ? 'Runs automatically while you are signed in.'
-                : 'Version ${app.serviceVersion} · runs automatically while you are signed in.',
-          ),
-          suffix: FButton(
-            variant: FButtonVariant.outline,
-            onPress: app.restartService,
-            child: const Text('Restart'),
-          ),
-        ),
-        if (app.phase == AppPhase.repairRequired) ...[
-          SizedBox(height: tokens.gutter),
-          const SectionLabel('Repair'),
-          const Text(
-            'Enter your vault password to recreate this Mac’s local desktop credential. Vault data is unchanged.',
-          ),
-          SizedBox(height: tokens.gutterSmall),
-          FTextField(
-            label: const Text('Master password'),
-            obscureText: true,
-            control: FTextFieldControl.managed(controller: _repairPassword),
-          ),
-          SizedBox(height: tokens.gutterSmall),
-          FButton(
-            onPress: () async {
-              final password = _repairPassword.text;
-              if (password.isEmpty) return;
-              await app.provision({
-                'mode': 'repair_desktop_client',
-                'password': password,
-              });
-              _repairPassword.clear();
-            },
-            child: const Text('Repair connection'),
-          ),
-        ],
-        SizedBox(height: tokens.gutter * 1.5),
-        const SectionLabel('Security'),
-        FItem(
-          prefix: const Icon(FLucideIcons.clipboard, size: 18),
-          title: const Text('Clipboard'),
-          subtitle: const Text(
-            'Copied secrets are cleared after 30 seconds if nothing else has replaced them.',
-          ),
-        ),
-        FItem(
-          prefix: const Icon(FLucideIcons.moon, size: 18),
-          title: const Text('Sleep and screen lock'),
-          subtitle: const Text(
-            'KeyLease locks the vault and hides revealed secrets when this Mac sleeps or locks.',
-          ),
-        ),
+        Expanded(child: _content(context, app, tokens)),
       ],
     );
+  }
+
+  void _select(AppController app, _SettingsDestination destination) {
+    if (_destination == destination) return;
+    setState(() => _destination = destination);
+    if (!app.isReady) return;
+    switch (destination) {
+      case _SettingsDestination.connections:
+        unawaited(app.connections.load());
+      case _SettingsDestination.activity:
+        unawaited(app.activity.load());
+      default:
+        break;
+    }
+  }
+
+  Widget _content(
+    BuildContext context,
+    AppController app,
+    KeyLeaseTokens tokens,
+  ) => switch (_destination) {
+    _SettingsDestination.general => _settingsScroll(tokens, [
+      const SectionLabel('General'),
+      _SettingsCard(
+        icon: FLucideIcons.hardDrive,
+        title: const Text('KeyLease data'),
+        subtitle: const Text(
+          'Vault, backups, and runtime files are kept privately in ~/.keylease.',
+        ),
+        trailing: FButton(
+          variant: FButtonVariant.outline,
+          size: FButtonSizeVariant.sm,
+          mainAxisSize: MainAxisSize.min,
+          onPress: app.openDataFolder,
+          child: const Text('Open folder'),
+        ),
+      ),
+      SizedBox(height: tokens.gutterSmall),
+      if (app.isReady)
+        _SettingsCard(
+          icon: FLucideIcons.databaseBackup,
+          title: const Text('Vault migrations'),
+          subtitle: Text(
+            (app.vault.migrationStatus?.pending.isNotEmpty ?? false)
+                ? '${app.vault.migrationStatus!.pending.first.proposals.length} items need review.'
+                : 'Review migration history and rollback checkpoints.',
+          ),
+          trailing: FButton(
+            variant: FButtonVariant.outline,
+            size: FButtonSizeVariant.sm,
+            mainAxisSize: MainAxisSize.min,
+            onPress: () => openMigrationCenter(context, app),
+            child: const Text('Manage'),
+          ),
+        ),
+      if (app.isReady) SizedBox(height: tokens.gutterSmall),
+      _SettingsCard(
+        icon: FLucideIcons.activity,
+        title: const Text('Background service'),
+        subtitle: Text(
+          app.serviceVersion == null
+              ? 'Runs automatically while you are signed in.'
+              : 'Version ${app.serviceVersion} · runs automatically while you are signed in.',
+        ),
+        trailing: FButton(
+          variant: FButtonVariant.outline,
+          size: FButtonSizeVariant.sm,
+          mainAxisSize: MainAxisSize.min,
+          onPress: app.restartService,
+          child: const Text('Restart'),
+        ),
+      ),
+      if (app.phase == AppPhase.repairRequired) ...[
+        SizedBox(height: tokens.gutter),
+        const SectionLabel('Repair'),
+        const Text(
+          'Enter your vault password to recreate this Mac’s local desktop credential. Vault data is unchanged.',
+        ),
+        SizedBox(height: tokens.gutterSmall),
+        FTextField(
+          label: const Text('Master password'),
+          obscureText: true,
+          control: FTextFieldControl.managed(controller: _repairPassword),
+        ),
+        SizedBox(height: tokens.gutterSmall),
+        FButton(
+          onPress: () async {
+            final password = _repairPassword.text;
+            if (password.isEmpty) return;
+            await app.provision({
+              'mode': 'repair_desktop_client',
+              'password': password,
+            });
+            _repairPassword.clear();
+          },
+          child: const Text('Repair connection'),
+        ),
+      ],
+    ]),
+    _SettingsDestination.vaults => _settingsScroll(tokens, [
+      Row(
+        children: [
+          const Expanded(child: SectionLabel('Vaults')),
+          FButton(
+            variant: FButtonVariant.outline,
+            onPress: () => _importVault(context, app),
+            child: const Text('Import'),
+          ),
+          const SizedBox(width: 8),
+          FButton(
+            onPress: () => _createVault(context, app),
+            child: const Text('New vault'),
+          ),
+        ],
+      ),
+      for (final profile in app.vaultProfiles)
+        FItem(
+          prefix: Icon(
+            profile.active ? FLucideIcons.circleCheck : FLucideIcons.circle,
+            size: 17,
+          ),
+          title: Text(profile.name),
+          subtitle: Text(
+            profile.active ? 'Active vault' : 'Locked until selected',
+          ),
+          suffix: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconAction(
+                label: 'Rename ${profile.name}',
+                icon: FLucideIcons.squarePen,
+                onPress: () =>
+                    _renameVault(context, app, profile.id, profile.name),
+              ),
+              if (!profile.active) ...[
+                const SizedBox(width: 8),
+                FButton(
+                  variant: FButtonVariant.outline,
+                  onPress: () => _switchVault(context, app, profile.id),
+                  child: const Text('Switch'),
+                ),
+              ],
+            ],
+          ),
+        ),
+    ]),
+    _SettingsDestination.connections => const ConnectionsPage(),
+    _SettingsDestination.security => _settingsScroll(tokens, [
+      const SectionLabel('Security'),
+      _SettingsCard(
+        icon: FLucideIcons.clipboard,
+        title: const Text('Clipboard'),
+        subtitle: const Text(
+          'Copied secrets are cleared after 30 seconds if nothing else has replaced them.',
+        ),
+      ),
+      SizedBox(height: tokens.gutterSmall),
+      _SettingsCard(
+        icon: FLucideIcons.moon,
+        title: const Text('Sleep and screen lock'),
+        subtitle: const Text(
+          'KeyLease locks the vault and hides revealed secrets when this Mac sleeps or locks.',
+        ),
+      ),
+    ]),
+    _SettingsDestination.activity => const ActivityPage(),
+  };
+
+  Widget _settingsScroll(KeyLeaseTokens tokens, List<Widget> children) =>
+      KeyLeaseScrollArea(
+        padding: EdgeInsets.all(tokens.gutter * 1.5),
+        children: children,
+      );
+
+  Future<void> _switchVault(
+    BuildContext context,
+    AppController app,
+    String id,
+  ) async {
+    try {
+      await app.switchManagedVault(id);
+    } catch (caught) {
+      if (context.mounted) showFailure(context, caught);
+    }
   }
 
   Future<void> _createVault(BuildContext context, AppController app) async {
@@ -386,44 +441,169 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 }
 
-enum _SettingsDestination { general, connections, activity }
-
-class _SettingsSubpage extends StatelessWidget {
-  const _SettingsSubpage({
-    required this.title,
-    required this.onBack,
-    required this.child,
+class _SettingsNavigationItem extends StatefulWidget {
+  const _SettingsNavigationItem({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onPress,
+    super.key,
   });
 
-  final String title;
-  final VoidCallback onBack;
-  final Widget child;
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onPress;
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          children: [
-            IconAction(
-              label: 'Back to Settings',
-              icon: FLucideIcons.arrowLeft,
-              onPress: onBack,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              title,
-              style: context.theme.typography.body.lg.copyWith(
-                fontWeight: FontWeight.w600,
+  State<_SettingsNavigationItem> createState() =>
+      _SettingsNavigationItemState();
+}
+
+class _SettingsNavigationItemState extends State<_SettingsNavigationItem> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.theme;
+    final tokens = KeyLeaseTokens.of(context);
+    final selected = widget.selected;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: widget.label,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onPress,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            height: 38,
+            padding: const EdgeInsets.symmetric(horizontal: 11),
+            decoration: BoxDecoration(
+              color: selected
+                  ? theme.colors.muted
+                  : _hovered
+                  ? theme.colors.muted.withValues(alpha: 0.55)
+                  : null,
+              border: Border.all(
+                color: selected
+                    ? tokens.accent.withValues(alpha: 0.28)
+                    : const Color(0x00000000),
               ),
+              borderRadius: BorderRadius.circular(8),
             ),
-          ],
+            child: Row(
+              children: [
+                Icon(
+                  widget.icon,
+                  size: 17,
+                  color: selected ? tokens.accent : theme.colors.foreground,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    widget.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.typography.body.sm.copyWith(
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
-      const Divider(height: 1),
-      Expanded(child: child),
-    ],
-  );
+    );
+  }
+}
+
+class _SettingsCard extends StatelessWidget {
+  const _SettingsCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    this.trailing,
+  });
+
+  final IconData icon;
+  final Widget title;
+  final Widget subtitle;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.theme;
+    final tokens = KeyLeaseTokens.of(context);
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: theme.colors.muted.withValues(alpha: 0.22),
+        border: Border.all(color: theme.colors.border),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: tokens.accent.withValues(alpha: 0.11),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, size: 18, color: tokens.accent),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                DefaultTextStyle(
+                  style: theme.typography.body.sm.copyWith(
+                    color: theme.colors.foreground,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  child: title,
+                ),
+                const SizedBox(height: 4),
+                DefaultTextStyle(
+                  style: theme.typography.body.xs.copyWith(
+                    color: theme.colors.mutedForeground,
+                  ),
+                  child: subtitle,
+                ),
+              ],
+            ),
+          ),
+          if (trailing != null) ...[const SizedBox(width: 16), trailing!],
+        ],
+      ),
+    );
+  }
+}
+
+enum _SettingsDestination { general, vaults, connections, security, activity }
+
+extension on _SettingsDestination {
+  String get label => switch (this) {
+    _SettingsDestination.general => 'General',
+    _SettingsDestination.vaults => 'Vaults',
+    _SettingsDestination.connections => 'Connections',
+    _SettingsDestination.security => 'Security',
+    _SettingsDestination.activity => 'Activity',
+  };
+
+  IconData get icon => switch (this) {
+    _SettingsDestination.general => FLucideIcons.slidersHorizontal,
+    _SettingsDestination.vaults => FLucideIcons.vault,
+    _SettingsDestination.connections => FLucideIcons.link,
+    _SettingsDestination.security => FLucideIcons.shieldCheck,
+    _SettingsDestination.activity => FLucideIcons.clock,
+  };
 }

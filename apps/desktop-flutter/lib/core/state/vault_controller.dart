@@ -400,6 +400,26 @@ class VaultController extends ChangeNotifier with BusyRegistry {
     return value;
   }
 
+  Future<Map<String, String>> fetchFields(
+    EntrySummary entry,
+    List<EntryFieldView> fields,
+  ) async =>
+      await track<Map<String, String>>('reveal.${entry.id}/batch', () async {
+        final response = await clientOf().authorized({
+          'command': 'entries_reveal_many',
+          'id': entry.id,
+          'field_ids': fields.map((field) => field.id).toList(growable: false),
+        });
+        final raw = response is Map ? response['values'] : null;
+        if (raw is! Map) return const {};
+        return {
+          for (final field in fields)
+            if (raw.containsKey(field.id))
+              field.id: field.withValue(raw[field.id]).displayValue,
+        };
+      }, onError: (caught) => error = UserMessage.from(caught)) ??
+      const {};
+
   void hideSecret(String entryId, String field) {
     _revealed.remove('$entryId/$field');
     if (_revealed.isEmpty) {
@@ -488,8 +508,9 @@ class VaultController extends ChangeNotifier with BusyRegistry {
       'desktop-${DateTime.now().microsecondsSinceEpoch}';
 
   /// Saves [draft]. On failure the draft is untouched so the editor can retry.
-  Future<void> save(EntryDraft draft) async {
+  Future<String?> save(EntryDraft draft) async {
     final client = clientOf();
+    String? savedId = draft.entryId;
     if (draft.isNew) {
       if (draft.isAgentContent) {
         final created = await client.authorized({
@@ -500,6 +521,7 @@ class VaultController extends ChangeNotifier with BusyRegistry {
         if (draft.agentAccess != 'none' && created is Map) {
           final summary = created['summary'];
           if (summary is Map) {
+            savedId = summary['id']?.toString();
             await client.authorized({
               'command': 'content_set_access',
               'id': summary['id'],
@@ -508,14 +530,17 @@ class VaultController extends ChangeNotifier with BusyRegistry {
               'idempotency_key': _idempotencyKey(),
             });
           }
+        } else if (created is Map && created['summary'] is Map) {
+          savedId = (created['summary'] as Map)['id']?.toString();
         }
       } else {
-        await client.authorized({
+        final created = await client.authorized({
           'command': 'entries_create',
           'input': draft.toCreateInput(),
           'idempotency_key': _idempotencyKey(),
           'dry_run': false,
         });
+        if (created is Map) savedId = created['id']?.toString();
       }
     } else if (draft.isAgentContent) {
       await client.authorized({
@@ -536,6 +561,7 @@ class VaultController extends ChangeNotifier with BusyRegistry {
       });
     }
     await _search();
+    return savedId;
   }
 
   Future<void> toggleFavorite(EntrySummary entry) async {

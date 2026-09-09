@@ -328,6 +328,7 @@ fn convert_item(
                 id: format!("section_1p_login_{item_index}"),
                 label: "Login".into(),
                 field_ids,
+                semantic_role: None,
             });
         }
     }
@@ -371,6 +372,7 @@ fn convert_item(
                     .filter(|value| !value.is_empty())
                     .unwrap_or_else(|| format!("Section {}", section_index + 1)),
                 field_ids,
+                semantic_role: None,
             });
         }
     }

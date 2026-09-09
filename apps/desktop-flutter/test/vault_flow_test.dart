@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keylease_desktop/app/keylease_app.dart';
+import 'package:keylease_desktop/core/platform/security_adapter.dart';
 import 'package:keylease_desktop/core/rpc/keylease_rpc.dart';
 import 'package:keylease_desktop/core/state/app_controller.dart';
 import 'package:keylease_desktop/core/state/app_phase.dart';
@@ -339,11 +340,24 @@ void main() {
     harness.app.selectSection(AppSection.settings);
     await tester.pumpAndSettle();
 
-    expect(find.text('Managed vault'), findsOneWidget);
+    expect(find.text('KeyLease data'), findsOneWidget);
     expect(find.text('Background service'), findsOneWidget);
     expect(find.text('Unix socket'), findsNothing);
     expect(find.text('Client ID'), findsNothing);
     expect(find.textContaining('token'), findsNothing);
+
+    final general = tester.getRect(
+      find.byKey(const ValueKey('settings-general')),
+    );
+    final vaults = tester.getRect(
+      find.byKey(const ValueKey('settings-vaults')),
+    );
+    expect(vaults.top - general.bottom, greaterThanOrEqualTo(3));
+
+    await tester.tap(find.byKey(const ValueKey('settings-security')));
+    await tester.pumpAndSettle();
+    expect(find.text('Clipboard'), findsOneWidget);
+    expect(find.text('Sleep and screen lock'), findsOneWidget);
   });
 
   testWidgets('standalone generator copies and creates a prefilled Login', (
@@ -427,5 +441,40 @@ void main() {
       ),
     );
     expect(editable.controller.text, uri);
+  });
+
+  testWidgets('Login editor scans a TOTP QR code from the screen', (
+    tester,
+  ) async {
+    final harness = await pumpVault(tester);
+    const uri =
+        'otpauth://totp/Screen:alice?secret=JBSWY3DPEHPK3PXP&issuer=Screen';
+    harness.adapter.screenQrCodeToReturn = uri;
+
+    await tester.tap(find.byKey(const ValueKey('action-New item')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('entry-totp-scan-screen')));
+    await tester.pumpAndSettle();
+
+    expect(harness.adapter.screenQrScanRequests, 1);
+    expect(harness.app.vault.activeDraft?.totp, uri);
+  });
+
+  testWidgets('Screen scan permission error links to System Settings', (
+    tester,
+  ) async {
+    final harness = await pumpVault(tester);
+    harness.adapter.screenQrScanError =
+        const ScreenRecordingPermissionRequired();
+
+    await tester.tap(find.byKey(const ValueKey('action-New item')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('entry-totp-scan-screen')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Screen Recording permission needed'), findsOneWidget);
+    await tester.tap(find.text('Open System Settings'));
+    await tester.pumpAndSettle();
+    expect(harness.adapter.screenRecordingSettingsRequests, 1);
   });
 }

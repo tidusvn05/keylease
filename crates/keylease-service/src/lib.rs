@@ -146,6 +146,8 @@ pub struct NewEntryInput {
     #[serde(default)]
     pub custom_fields: Vec<ItemField>,
     #[serde(default)]
+    pub sections: Vec<ItemSection>,
+    #[serde(default)]
     pub totp: Option<TotpConfig>,
     #[serde(default)]
     pub totp_uri: Option<String>,
@@ -176,6 +178,9 @@ pub struct EntryPatch {
     pub custom_fields: Option<Vec<ItemField>>,
     #[serde(default)]
     pub field_updates: Vec<ItemField>,
+    pub sections: Option<Vec<ItemSection>>,
+    #[serde(default)]
+    pub remove_field_ids: Vec<FieldId>,
     pub favorite: Option<bool>,
 }
 
@@ -988,6 +993,8 @@ impl KeyLeaseService {
             normalize_totp(&mut input.totp, &mut input.totp_uri)?;
             canonicalize_template_fields(&input.kind, &mut input.custom_fields);
             validate_custom_fields(&input.custom_fields)?;
+            validate_sections(&input.sections, &input.custom_fields)?;
+            validate_specialized_item(&input.kind, &input.sections, &input.custom_fields)?;
             validate_item_title(&input.title)?;
             validate_idempotency_key(idempotency_key)?;
             let request_value = serde_json::to_value(&input).map_err(|_| KeyLeaseError::Storage)?;
@@ -1077,7 +1084,7 @@ impl KeyLeaseService {
                 group_id: input.group_id.clone(),
                 kind: validate_kind(&input.kind)?,
                 title: input.title.clone(),
-                sections: vec![],
+                sections: input.sections.clone(),
                 fields,
                 urls: input
                     .url
@@ -1091,7 +1098,9 @@ impl KeyLeaseService {
                 favorite: input.favorite,
                 attachments: vec![],
                 notes: input.notes.clone(),
-                template_version: 1,
+                template_version: item_kind(&input.kind)
+                    .map(|definition| definition.template_version)
+                    .unwrap_or(1),
                 project_id: None,
                 agent_access: AgentAccess::None,
                 content_metadata: None,
@@ -1154,15 +1163,25 @@ impl KeyLeaseService {
         self.with_vault(|vault| {
             normalize_totp(&mut patch.totp, &mut patch.totp_uri)?;
             validate_idempotency_key(idempotency_key)?;
+            let current_item = self.store.get_item(vault, id)?;
             if let Some(fields) = &mut patch.custom_fields {
-                let kind = self.store.get_item(vault, id)?.kind;
-                canonicalize_template_fields(&kind, fields);
+                canonicalize_template_fields(&current_item.kind, fields);
                 validate_custom_fields(fields)?;
             }
             if !patch.field_updates.is_empty() {
-                let kind = self.store.get_item(vault, id)?.kind;
-                canonicalize_template_fields(&kind, &mut patch.field_updates);
+                canonicalize_template_fields(&current_item.kind, &mut patch.field_updates);
                 validate_custom_fields(&patch.field_updates)?;
+            }
+            validate_removed_field_ids(&patch.remove_field_ids)?;
+            if let Some(missing) = patch.remove_field_ids.iter().find(|field_id| {
+                !current_item
+                    .fields
+                    .iter()
+                    .any(|field| &field.id == *field_id)
+            }) {
+                return Err(KeyLeaseError::NotFound {
+                    resource: missing.0.clone(),
+                });
             }
             if let Some(title) = &patch.title {
                 validate_item_title(title)?;
@@ -1187,13 +1206,40 @@ impl KeyLeaseService {
                 || patch
                     .field_updates
                     .iter()
-                    .any(|field| !field_requires_protection(field));
+                    .any(|field| !field_requires_protection(field))
+                || patch.sections.is_some()
+                || !patch.remove_field_ids.is_empty();
+            let replacement_removes_protected =
+                patch.custom_fields.as_ref().is_some_and(|fields| {
+                    current_item.fields.iter().any(|existing| {
+                        !matches!(existing.key.as_str(), "username" | "password" | "otp")
+                            && field_requires_protection(existing)
+                            && fields
+                                .iter()
+                                .find(|field| field.id == existing.id)
+                                .is_none_or(|field| !field_requires_protection(field))
+                    })
+                });
+            let updates_downgrade_protected = patch.field_updates.iter().any(|updated| {
+                !field_requires_protection(updated)
+                    && current_item
+                        .fields
+                        .iter()
+                        .find(|existing| existing.id == updated.id)
+                        .is_some_and(field_requires_protection)
+            });
+            let explicitly_removes_protected = current_item.fields.iter().any(|field| {
+                field_requires_protection(field) && patch.remove_field_ids.contains(&field.id)
+            });
             let has_protected_fields = patch.password.is_some()
                 || patch
                     .custom_fields
                     .as_ref()
                     .is_some_and(|fields| fields.iter().any(field_requires_protection))
-                || patch.field_updates.iter().any(field_requires_protection);
+                || patch.field_updates.iter().any(field_requires_protection)
+                || replacement_removes_protected
+                || updates_downgrade_protected
+                || explicitly_removes_protected;
             if !has_standard_fields
                 && !has_protected_fields
                 && patch.totp.is_none()
@@ -1238,7 +1284,7 @@ impl KeyLeaseService {
                     resource: group_id.0.clone(),
                 });
             }
-            let mut item = self.store.get_item(vault, id)?;
+            let mut item = current_item;
             if item.revision != expected_revision {
                 return Err(KeyLeaseError::RevisionConflict {
                     expected: expected_revision,
@@ -1320,6 +1366,29 @@ impl KeyLeaseService {
                     item.fields.push(field);
                 }
             }
+            if !patch.remove_field_ids.is_empty() {
+                item.fields
+                    .retain(|field| !patch.remove_field_ids.contains(&field.id));
+                for section in &mut item.sections {
+                    section
+                        .field_ids
+                        .retain(|field_id| !patch.remove_field_ids.contains(field_id));
+                }
+                changed.push("removed_fields".into());
+            }
+            if let Some(sections) = patch.sections {
+                item.sections = sections;
+                changed.push("sections".into());
+            }
+            let custom_fields = item
+                .fields
+                .iter()
+                .filter(|field| !matches!(field.key.as_str(), "username" | "password" | "otp"))
+                .cloned()
+                .collect::<Vec<_>>();
+            validate_custom_fields(&custom_fields)?;
+            validate_sections(&item.sections, &item.fields)?;
+            validate_specialized_item(&item.kind, &item.sections, &item.fields)?;
             item.revision += 1;
             item.updated_at = Utc::now();
             if !dry_run {
@@ -1674,6 +1743,75 @@ impl KeyLeaseService {
                 vec!["field".into()],
             )?;
             Ok(value)
+        })
+    }
+
+    /// Reveals an exact, bounded set of fields as one atomic disclosure.
+    /// Every field resource is authorized before any value is returned.
+    pub fn reveal_fields_by_id_authorized(
+        &self,
+        actor: &ActorContext,
+        id: &ItemId,
+        field_ids: &[FieldId],
+    ) -> Result<BTreeMap<String, FieldValue>> {
+        if field_ids.is_empty() || field_ids.len() > 500 {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "batch reveal requires 1..=500 fields".into(),
+            });
+        }
+        let mut unique = std::collections::HashSet::new();
+        if field_ids.iter().any(|field_id| {
+            field_id.0.is_empty()
+                || field_id.0.len() > 128
+                || field_id.0.chars().any(char::is_control)
+                || !unique.insert(field_id.clone())
+        }) {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "batch reveal field IDs must be unique and valid".into(),
+            });
+        }
+        self.with_vault(|vault| {
+            for field_id in field_ids {
+                let resource = format!("kl://{}/{}/{}", vault.vault_id.0, id.0, field_id.0);
+                self.authorize_vault(
+                    actor,
+                    "entry:read_secret",
+                    &resource,
+                    serde_json::json!({"field_id":field_id,"batch":true}),
+                )?;
+            }
+            let item = self.store.get_item(vault, id)?;
+            let by_id = item
+                .fields
+                .into_iter()
+                .map(|field| (field.id.0, field.value))
+                .collect::<HashMap<_, _>>();
+            let mut values = BTreeMap::new();
+            for field_id in field_ids {
+                let value =
+                    by_id
+                        .get(&field_id.0)
+                        .cloned()
+                        .ok_or_else(|| KeyLeaseError::NotFound {
+                            resource: field_id.0.clone(),
+                        })?;
+                values.insert(field_id.0.clone(), value);
+            }
+            let encoded = serde_json::to_vec(&values).map_err(|_| KeyLeaseError::Storage)?;
+            if encoded.len() > 1024 * 1024 {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "batch reveal response exceeds 1 MiB".into(),
+                });
+            }
+            self.audit_vault(
+                actor,
+                "entry:read_secret",
+                &format!("kl://{}/{}", vault.vault_id.0, id.0),
+                "allow",
+                "success",
+                vec![format!("fields:{}", values.len())],
+            )?;
+            Ok(values)
         })
     }
 
@@ -4803,6 +4941,298 @@ fn validate_custom_fields(fields: &[ItemField]) -> Result<()> {
     }
     Ok(())
 }
+
+fn validate_removed_field_ids(field_ids: &[FieldId]) -> Result<()> {
+    let mut unique = std::collections::HashSet::new();
+    if field_ids.iter().any(|field_id| {
+        field_id.0.is_empty()
+            || field_id.0.len() > 128
+            || field_id.0.chars().any(char::is_control)
+            || !unique.insert(field_id.clone())
+    }) {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "removed field IDs must be unique and valid".into(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_sections(sections: &[ItemSection], fields: &[ItemField]) -> Result<()> {
+    let available = fields
+        .iter()
+        .map(|field| field.id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let mut section_ids = std::collections::HashSet::new();
+    let mut assigned = std::collections::HashSet::new();
+    for section in sections {
+        if section.id.is_empty()
+            || section.id.len() > 128
+            || section.id.chars().any(char::is_control)
+            || section.label.trim().is_empty()
+            || section.label.len() > 200
+            || section.label.chars().any(char::is_control)
+            || !section_ids.insert(section.id.clone())
+        {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "sections must have unique valid IDs and printable labels".into(),
+            });
+        }
+        for field_id in &section.field_ids {
+            if !available.contains(field_id) {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: format!("section {} references a missing field", section.id),
+                });
+            }
+            if !assigned.insert(field_id.clone()) {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "a field may belong to at most one section".into(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn specialized_field_text<'a>(fields: &[&'a ItemField], role: &str) -> Option<&'a str> {
+    fields
+        .iter()
+        .find(|field| field.semantic_role.as_deref() == Some(role))
+        .and_then(|field| match &field.value {
+            FieldValue::Text(value)
+            | FieldValue::Concealed(value)
+            | FieldValue::Url(value)
+            | FieldValue::Reference(value) => Some(value.as_str()),
+            _ => None,
+        })
+}
+
+fn fields_for_section<'a>(section: &ItemSection, fields: &'a [ItemField]) -> Vec<&'a ItemField> {
+    section
+        .field_ids
+        .iter()
+        .filter_map(|id| fields.iter().find(|field| field.id == *id))
+        .collect()
+}
+
+fn valid_ssh_alias(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn valid_env_key(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+fn validate_specialized_item(
+    kind: &str,
+    sections: &[ItemSection],
+    fields: &[ItemField],
+) -> Result<()> {
+    match kind {
+        "core.environment" => validate_environment_item(sections, fields),
+        "core.ssh_server" => validate_ssh_server_item(sections, fields),
+        _ => Ok(()),
+    }
+}
+
+fn validate_environment_item(sections: &[ItemSection], fields: &[ItemField]) -> Result<()> {
+    let metadata = sections
+        .iter()
+        .find(|section| section.semantic_role.as_deref() == Some("environment_metadata"));
+    let variables = sections
+        .iter()
+        .find(|section| section.semantic_role.as_deref() == Some("environment_variables"));
+    let (Some(metadata), Some(variables)) = (metadata, variables) else {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "environment items require metadata and variables sections".into(),
+        });
+    };
+    let metadata_fields = fields_for_section(metadata, fields);
+    for role in [
+        "environment_project",
+        "environment_scope",
+        "environment_source",
+    ] {
+        if specialized_field_text(&metadata_fields, role)
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: format!("environment metadata is missing {role}"),
+            });
+        }
+    }
+    let mut keys = std::collections::HashSet::new();
+    for field in fields_for_section(variables, fields) {
+        let key = field.key.strip_prefix("env.").unwrap_or(&field.label);
+        if field.semantic_role.as_deref() != Some("environment_variable")
+            || !valid_env_key(key)
+            || field.label != key
+            || !keys.insert(key.to_owned())
+        {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "environment variable names must be unique shell-style identifiers".into(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_ssh_server_item(sections: &[ItemSection], fields: &[ItemField]) -> Result<()> {
+    let endpoints = sections
+        .iter()
+        .filter(|section| section.semantic_role.as_deref() == Some("ssh_endpoint"))
+        .collect::<Vec<_>>();
+    if endpoints.is_empty() {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "SSH Server items require at least one endpoint".into(),
+        });
+    }
+    let endpoint_ids = endpoints
+        .iter()
+        .map(|section| section.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mut aliases = std::collections::HashSet::new();
+    let mut parents = HashMap::<String, String>::new();
+    for section in &endpoints {
+        let endpoint_fields = fields_for_section(section, fields);
+        let required = |role: &str| {
+            specialized_field_text(&endpoint_fields, role)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| KeyLeaseError::InvalidRequest {
+                    reason: format!("SSH endpoint {} is missing {role}", section.id),
+                })
+        };
+        required("ssh_display_name")?;
+        let alias = required("ssh_alias")?;
+        if !valid_ssh_alias(alias) || !aliases.insert(alias.to_owned()) {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "SSH aliases must be unique and use only letters, digits, dot, underscore, or hyphen".into(),
+            });
+        }
+        required("ssh_host")?;
+        let port = required("ssh_port")?.parse::<u16>().unwrap_or(0);
+        if port == 0 {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "SSH ports must be in 1..=65535".into(),
+            });
+        }
+        let auth = required("ssh_auth_mode")?;
+        if !matches!(auth, "password" | "private_key" | "ssh_agent") {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "unsupported SSH authentication mode".into(),
+            });
+        }
+        if auth == "password"
+            && specialized_field_text(&endpoint_fields, "ssh_password").is_none_or(str::is_empty)
+        {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "password authentication requires an SSH password".into(),
+            });
+        }
+        for role in [
+            "ssh_password",
+            "ssh_private_key_passphrase",
+            "ssh_sudo_password",
+        ] {
+            if endpoint_fields
+                .iter()
+                .find(|field| field.semantic_role.as_deref() == Some(role))
+                .is_some_and(|field| !field_requires_protection(field))
+            {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: format!("{role} must be stored as a protected secret"),
+                });
+            }
+        }
+        let sudo = specialized_field_text(&endpoint_fields, "ssh_sudo_mode").unwrap_or("none");
+        if !matches!(
+            sudo,
+            "none" | "passwordless" | "same_as_ssh_password" | "separate_password"
+        ) {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "unsupported sudo mode".into(),
+            });
+        }
+        if sudo == "same_as_ssh_password" && auth != "password" {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "sudo may reuse the SSH password only for password authentication".into(),
+            });
+        }
+        if sudo == "separate_password"
+            && specialized_field_text(&endpoint_fields, "ssh_sudo_password")
+                .is_none_or(str::is_empty)
+        {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "separate sudo mode requires a sudo password".into(),
+            });
+        }
+        if let Some(parent) = specialized_field_text(&endpoint_fields, "ssh_connect_via")
+            .filter(|value| !value.is_empty())
+        {
+            if parent == section.id || !endpoint_ids.contains(parent) {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "SSH jump host reference is invalid".into(),
+                });
+            }
+            parents.insert(section.id.clone(), parent.to_owned());
+        }
+    }
+    for endpoint in parents.keys() {
+        let mut seen = std::collections::HashSet::new();
+        let mut cursor = endpoint.as_str();
+        while let Some(parent) = parents.get(cursor) {
+            if !seen.insert(cursor.to_owned()) {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "SSH jump host chain must not contain a cycle".into(),
+                });
+            }
+            cursor = parent;
+        }
+    }
+    for section in sections
+        .iter()
+        .filter(|section| section.semantic_role.as_deref() == Some("ssh_forward"))
+    {
+        let forward_fields = fields_for_section(section, fields);
+        let endpoint =
+            specialized_field_text(&forward_fields, "ssh_forward_endpoint").unwrap_or_default();
+        let kind = specialized_field_text(&forward_fields, "ssh_forward_type").unwrap_or_default();
+        if !endpoint_ids.contains(endpoint) || !matches!(kind, "local" | "remote" | "dynamic") {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "SSH forwarding target or type is invalid".into(),
+            });
+        }
+        for role in ["ssh_bind_port", "ssh_destination_port"] {
+            if role == "ssh_destination_port" && kind == "dynamic" {
+                continue;
+            }
+            let port = specialized_field_text(&forward_fields, role)
+                .and_then(|value| value.parse::<u16>().ok())
+                .unwrap_or(0);
+            if port == 0 {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "SSH forwarding ports must be in 1..=65535".into(),
+                });
+            }
+        }
+        if kind != "dynamic"
+            && specialized_field_text(&forward_fields, "ssh_destination_host")
+                .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "SSH forwarding destination host is required".into(),
+            });
+        }
+    }
+    Ok(())
+}
 fn normalize_totp(config: &mut Option<TotpConfig>, uri: &mut Option<String>) -> Result<()> {
     if config.is_some() && uri.is_some() {
         return Err(KeyLeaseError::InvalidRequest {
@@ -5390,6 +5820,7 @@ mod tests {
                             semantic_role: None,
                         },
                     ],
+                    sections: vec![],
                     totp: None,
                     totp_uri: None,
                 },
@@ -5544,6 +5975,7 @@ mod tests {
             url: Some("https://github.com".into()),
             notes: Some("Recovery instructions".into()),
             custom_fields: vec![],
+            sections: vec![],
             totp: None,
             totp_uri: None,
         };
@@ -6381,6 +6813,177 @@ mod tests {
         assert!(matches!(
             service.list_groups_authorized(&actor),
             Err(KeyLeaseError::Denied { .. })
+        ));
+    }
+
+    #[test]
+    fn environment_sections_preserve_order_and_validate_names() {
+        let make = |key: &str, role: &str, value: &str, protected: bool| {
+            let mut field = field(
+                key,
+                key.strip_prefix("env.").unwrap_or(key),
+                if protected {
+                    FieldValue::Concealed(value.into())
+                } else {
+                    FieldValue::Text(value.into())
+                },
+                if protected {
+                    Sensitivity::HighlySensitive
+                } else {
+                    Sensitivity::PrivateMetadata
+                },
+                protected,
+            );
+            field.semantic_role = Some(role.into());
+            field
+        };
+        let fields = vec![
+            make(
+                "environment.project",
+                "environment_project",
+                "leasegate",
+                false,
+            ),
+            make(
+                "environment.scope",
+                "environment_scope",
+                "development",
+                false,
+            ),
+            make("environment.source", "environment_source", "dotenv", false),
+            make("env.API_TOKEN", "environment_variable", "secret", true),
+            make("env.PORT", "environment_variable", "8080", false),
+        ];
+        let sections = vec![
+            ItemSection {
+                id: "environment_metadata".into(),
+                label: "Environment".into(),
+                field_ids: fields[..3].iter().map(|field| field.id.clone()).collect(),
+                semantic_role: Some("environment_metadata".into()),
+            },
+            ItemSection {
+                id: "environment_variables".into(),
+                label: "Variables".into(),
+                field_ids: fields[3..].iter().map(|field| field.id.clone()).collect(),
+                semantic_role: Some("environment_variables".into()),
+            },
+        ];
+        validate_sections(&sections, &fields).unwrap();
+        validate_specialized_item("core.environment", &sections, &fields).unwrap();
+
+        let mut invalid = fields.clone();
+        invalid[4].key = "env.BAD-NAME".into();
+        invalid[4].label = "BAD-NAME".into();
+        assert!(matches!(
+            validate_specialized_item("core.environment", &sections, &invalid),
+            Err(KeyLeaseError::InvalidRequest { .. })
+        ));
+    }
+
+    #[test]
+    fn ssh_jump_host_cycles_are_rejected() {
+        fn endpoint(id: &str, alias: &str, parent: &str) -> (ItemSection, Vec<ItemField>) {
+            let values = [
+                ("ssh_display_name", alias),
+                ("ssh_alias", alias),
+                ("ssh_host", "example.internal"),
+                ("ssh_port", "22"),
+                ("ssh_auth_mode", "ssh_agent"),
+                ("ssh_sudo_mode", "none"),
+                ("ssh_connect_via", parent),
+            ];
+            let fields = values
+                .into_iter()
+                .map(|(role, value)| {
+                    let mut field = field(
+                        &format!("ssh.{id}.{role}"),
+                        role,
+                        FieldValue::Text(value.into()),
+                        Sensitivity::PrivateMetadata,
+                        false,
+                    );
+                    field.semantic_role = Some(role.into());
+                    field
+                })
+                .collect::<Vec<_>>();
+            let section = ItemSection {
+                id: id.into(),
+                label: alias.into(),
+                field_ids: fields.iter().map(|field| field.id.clone()).collect(),
+                semantic_role: Some("ssh_endpoint".into()),
+            };
+            (section, fields)
+        }
+        let (first, mut fields) = endpoint("bastion", "bastion", "target");
+        let (second, second_fields) = endpoint("target", "target", "bastion");
+        fields.extend(second_fields);
+        assert!(matches!(
+            validate_specialized_item("core.ssh_server", &[first, second], &fields),
+            Err(KeyLeaseError::InvalidRequest { .. })
+        ));
+    }
+
+    #[test]
+    fn batch_reveal_is_bounded_and_returns_only_requested_field_ids() {
+        let (_dir, service, actor) = service();
+        let group = service.create_group("Development", None).unwrap();
+        let field_id = FieldId::new();
+        let created = service
+            .create_entry(
+                &actor,
+                NewEntryInput {
+                    group_id: group.id,
+                    kind: "core.api_credential".into(),
+                    title: "Deploy token".into(),
+                    favorite: false,
+                    username: None,
+                    password: None,
+                    url: None,
+                    notes: None,
+                    custom_fields: vec![ItemField {
+                        id: field_id.clone(),
+                        key: "credential".into(),
+                        label: "Token".into(),
+                        value: FieldValue::Concealed("secret-token".into()),
+                        sensitivity: Sensitivity::HighlySensitive,
+                        protected: true,
+                        semantic_role: Some("credential".into()),
+                    }],
+                    sections: vec![],
+                    totp: None,
+                    totp_uri: None,
+                },
+                "batch-create",
+                false,
+            )
+            .unwrap();
+        service
+            .add_grant(PolicyRule {
+                id: "batch-read-secret".into(),
+                version: 1,
+                effect: PolicyEffect::Allow,
+                agent_id: Some(actor.agent_id.clone()),
+                connection_id: None,
+                resource_prefix: format!("kl://{}", group.vault_id.0),
+                actions: vec!["entry:read_secret".into()],
+                argument_equals: Default::default(),
+                not_before: None,
+                expires_at: None,
+                max_lease_ttl_seconds: 60,
+                max_uses: 10,
+                budget: Default::default(),
+            })
+            .unwrap();
+        let values = service
+            .reveal_fields_by_id_authorized(&actor, &created.id, std::slice::from_ref(&field_id))
+            .unwrap();
+        assert_eq!(
+            values.get(&field_id.0),
+            Some(&FieldValue::Concealed("secret-token".into()))
+        );
+        assert!(matches!(
+            service.reveal_fields_by_id_authorized(&actor, &created.id, &[]),
+            Err(KeyLeaseError::InvalidRequest { .. })
         ));
     }
 }

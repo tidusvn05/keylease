@@ -165,6 +165,15 @@ impl KdbxAdapter for KeepassRsAdapter {
             }
             entry.set_protected("KeyLease.Kind", &item.kind);
             entry.set_protected("KeyLease.SchemaVersion", item.schema_version.to_string());
+            entry.set_protected(
+                "KeyLease.TemplateVersion",
+                item.template_version.to_string(),
+            );
+            if !item.sections.is_empty() {
+                let sections =
+                    serde_json::to_string(&item.sections).map_err(|_| KeyLeaseError::Storage)?;
+                entry.set_protected("KeyLease.Sections", sections);
+            }
             entry.tags = item.tags.clone();
             for field in &item.fields {
                 let key = match field.key.as_str() {
@@ -185,6 +194,9 @@ impl KdbxAdapter for KeepassRsAdapter {
                     entry.set_unprotected(key, value)
                 }
                 entry.set_protected(format!("KeyLease.FieldId.{}", field.key), &field.id.0);
+                if let Some(role) = &field.semantic_role {
+                    entry.set_protected(format!("KeyLease.SemanticRole.{}", field.key), role);
+                }
             }
             if !item.attachments.is_empty() {
                 report.attachment_count += item.attachments.len() as u64;
@@ -244,7 +256,10 @@ fn walk_group(
             group_id: group_id.clone(),
             kind: entry.get("KeyLease.Kind").unwrap_or("core.login").into(),
             title: entry.get_title().unwrap_or("Untitled").into(),
-            sections: vec![],
+            sections: entry
+                .get("KeyLease.Sections")
+                .and_then(|value| serde_json::from_str(value).ok())
+                .unwrap_or_default(),
             fields: vec![],
             urls: entry
                 .get_url()
@@ -260,7 +275,10 @@ fn walk_group(
             favorite: false,
             attachments: vec![],
             notes: entry.get(fields::NOTES).map(str::to_owned),
-            template_version: 1,
+            template_version: entry
+                .get("KeyLease.TemplateVersion")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(1),
             project_id: None,
             agent_access: AgentAccess::None,
             content_metadata: None,
@@ -331,9 +349,12 @@ fn walk_group(
                 fields::NOTES,
                 "KeyLease.Kind",
                 "KeyLease.SchemaVersion",
+                "KeyLease.TemplateVersion",
+                "KeyLease.Sections",
             ]
             .contains(&name.as_str())
                 || name.starts_with("KeyLease.FieldId.")
+                || name.starts_with("KeyLease.SemanticRole.")
                 || (!has_otp
                     && matches!(
                         name.as_str(),
@@ -374,14 +395,18 @@ fn walk_group(
                 value: field_value,
                 sensitivity,
                 protected: value.is_protected(),
-                semantic_role: None,
+                semantic_role: entry
+                    .get(&format!("KeyLease.SemanticRole.{key}"))
+                    .map(str::to_owned),
             });
         }
         if entry.get("KeyLease.Kind").is_none() {
             item.kind = infer_kdbx_kind(&item);
         }
         for field in &mut item.fields {
-            field.semantic_role = semantic_role_for(&item.kind, &field.key, &field.label);
+            if field.semantic_role.is_none() {
+                field.semantic_role = semantic_role_for(&item.kind, &field.key, &field.label);
+            }
             harden_semantic_field(field);
         }
         for (name, attachment) in entry.attachments_named() {
@@ -579,16 +604,23 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
+        let credential_id = FieldId::new();
+        let otp_id = FieldId::new();
         let item = VaultItem {
             id: ItemId::new(),
             vault_id: vault.clone(),
             group_id: group.id.clone(),
             kind: "core.api_credential".into(),
             title: "GitHub".into(),
-            sections: vec![],
+            sections: vec![keylease_core::ItemSection {
+                id: "api_credentials".into(),
+                label: "API credentials".into(),
+                field_ids: vec![credential_id.clone(), otp_id.clone()],
+                semantic_role: Some("api_credentials".into()),
+            }],
             fields: vec![
                 ItemField {
-                    id: FieldId::new(),
+                    id: credential_id,
                     key: "credential".into(),
                     label: "Token".into(),
                     value: FieldValue::Concealed("ghp_secret".into()),
@@ -597,7 +629,7 @@ mod tests {
                     semantic_role: Some("credential".into()),
                 },
                 ItemField {
-                    id: FieldId::new(),
+                    id: otp_id,
                     key: "otp".into(),
                     label: "otp".into(),
                     value: parse_totp("otpauth://totp/acme?secret=JBSWY3DPEHPK3PXP&issuer=Acme"),
@@ -611,7 +643,7 @@ mod tests {
             favorite: false,
             attachments: vec![],
             notes: None,
-            template_version: 1,
+            template_version: 2,
             project_id: None,
             agent_access: AgentAccess::None,
             content_metadata: None,
@@ -630,7 +662,12 @@ mod tests {
         };
         let mut bytes = vec![];
         let report = KeepassRsAdapter
-            .export(&mut bytes, "password", &[group], &[item])
+            .export(
+                &mut bytes,
+                "password",
+                &[group],
+                std::slice::from_ref(&item),
+            )
             .unwrap();
         assert_eq!(report.successful_items, 1);
         let imported = KeepassRsAdapter
@@ -638,6 +675,12 @@ mod tests {
             .unwrap();
         assert_eq!(imported.items.len(), 1);
         assert_eq!(imported.items[0].kind, "core.api_credential");
+        assert_eq!(imported.items[0].template_version, 2);
+        assert_eq!(imported.items[0].sections, item.sections);
+        assert_eq!(
+            imported.items[0].fields[0].semantic_role.as_deref(),
+            Some("credential")
+        );
         assert!(
             imported.items[0]
                 .fields

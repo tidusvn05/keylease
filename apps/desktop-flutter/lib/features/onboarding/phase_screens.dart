@@ -40,7 +40,7 @@ class PhaseScreen extends StatelessWidget {
         message: 'Your vault is here, but the desktop connection needs repair.',
         actions: [
           FButton(
-            onPress: () => app.selectSection(AppSection.settings),
+            onPress: app.openSettings,
             child: const Text('Open Settings'),
           ),
         ],
@@ -71,7 +71,7 @@ class PhaseScreen extends StatelessWidget {
         actions: [
           FButton(
             variant: FButtonVariant.outline,
-            onPress: () => app.selectSection(AppSection.settings),
+            onPress: app.openSettings,
             child: const Text('Open settings'),
           ),
           FButton(
@@ -91,7 +91,7 @@ class PhaseScreen extends StatelessWidget {
             'KeyLease can read vault items.',
         actions: [
           FButton(
-            onPress: () => app.selectSection(AppSection.settings),
+            onPress: app.openSettings,
             child: const Text('Repair in Settings'),
           ),
         ],

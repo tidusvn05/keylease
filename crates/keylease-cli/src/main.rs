@@ -751,6 +751,11 @@ enum RpcRequest {
         id: ItemId,
         field_id: FieldId,
     },
+    EntriesRevealMany {
+        auth: RpcAuth,
+        id: ItemId,
+        field_ids: Vec<FieldId>,
+    },
     EntriesTotp {
         auth: RpcAuth,
         id: ItemId,
@@ -1394,7 +1399,7 @@ async fn desktop_command(command: DesktopCommand) -> Result<()> {
                 .profiles
                 .iter_mut()
                 .find(|profile| profile.id == id)
-                .ok_or_else(|| KeyLeaseError::NotFound { resource: id })?;
+                .ok_or(KeyLeaseError::NotFound { resource: id })?;
             profile.name = name.trim().into();
             save_registry(&root, &registry)
         }
@@ -2652,6 +2657,17 @@ async fn handle_rpc(service: &KeyLeaseService, request: RpcRequest) -> Result<Va
                 "item_id":id,
                 "field_id":field_id,
                 "value":service.reveal_field_by_id_authorized(&actor, &id, &field_id)?,
+            }))
+        }
+        RpcRequest::EntriesRevealMany {
+            auth,
+            id,
+            field_ids,
+        } => {
+            let actor = actor(service, &auth)?;
+            Ok(json!({
+                "item_id":id,
+                "values":service.reveal_fields_by_id_authorized(&actor, &id, &field_ids)?,
             }))
         }
         RpcRequest::EntriesTotp { auth, id } => {

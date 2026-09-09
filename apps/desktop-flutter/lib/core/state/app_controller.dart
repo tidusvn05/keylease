@@ -78,6 +78,7 @@ Keep returned secrets private. If the vault is locked, ask me to unlock KeyLease
   bool _createFirstItemRequested = false;
   PasswordGeneratorSettings passwordGeneratorSettings =
       const PasswordGeneratorSettings();
+  Map<String, String> _sshKeyBindings = const {};
 
   late final VaultController vault;
   late final ConnectionsController connections;
@@ -100,6 +101,13 @@ Keep returned secrets private. If the vault is locked, ask me to unlock KeyLease
     passwordGeneratorSettings = PasswordGeneratorSettings.fromJson(
       stored['password_generator'],
     );
+    final storedBindings = stored['ssh_key_bindings'];
+    _sshKeyBindings = storedBindings is Map
+        ? {
+            for (final entry in storedBindings.entries)
+              if (entry.value is String) '${entry.key}': entry.value as String,
+          }
+        : const {};
     notifyListeners();
     try {
       final inspection = await runtime.inspect();
@@ -137,7 +145,53 @@ Keep returned secrets private. If the vault is locked, ask me to unlock KeyLease
     'sidebar_width': sidebarWidth,
     'list_width': listWidth,
     'password_generator': passwordGeneratorSettings.toJson(),
+    'ssh_key_bindings': _sshKeyBindings,
   });
+
+  String _sshBindingKey(String itemId, String endpointId) =>
+      '${status?.vaultId ?? 'unknown'}/$itemId/$endpointId';
+
+  String? sshKeyBinding(String itemId, String endpointId) =>
+      _sshKeyBindings[_sshBindingKey(itemId, endpointId)];
+
+  Future<void> setSshKeyBinding(
+    String itemId,
+    String endpointId,
+    String? path,
+  ) async {
+    final previous = _sshKeyBindings;
+    final next = {..._sshKeyBindings};
+    final key = _sshBindingKey(itemId, endpointId);
+    if (path == null || path.isEmpty) {
+      next.remove(key);
+    } else {
+      next[key] = path;
+    }
+    _sshKeyBindings = next;
+    notifyListeners();
+    await persistPreferences();
+    final stored = await preferences.load();
+    final bindings = stored['ssh_key_bindings'];
+    final persisted = bindings is Map ? bindings[key]?.toString() : null;
+    if (persisted != (path == null || path.isEmpty ? null : path)) {
+      _sshKeyBindings = previous;
+      notifyListeners();
+      throw StateError(
+        'The SSH private key binding could not be saved on this device.',
+      );
+    }
+  }
+
+  Future<void> removeSshBindingsForItem(String itemId) async {
+    final marker = '/$itemId/';
+    final next = {
+      for (final entry in _sshKeyBindings.entries)
+        if (!entry.key.contains(marker)) entry.key: entry.value,
+    };
+    if (next.length == _sshKeyBindings.length) return;
+    _sshKeyBindings = next;
+    await persistPreferences();
+  }
 
   Future<void> updatePasswordGeneratorSettings(
     PasswordGeneratorSettings value,
@@ -275,6 +329,13 @@ Keep returned secrets private. If the vault is locked, ask me to unlock KeyLease
   Future<void> openLoginItemsSettings() => runtime.openLoginItemsSettings();
 
   Future<void> openDataFolder() => runtime.openDataFolder();
+
+  /// Uses a dedicated settings window on desktop hosts that provide one, and
+  /// retains the in-shell destination as the cross-platform fallback.
+  Future<void> openSettings() async {
+    if (await adapter.openSettingsWindow()) return;
+    selectSection(AppSection.settings);
+  }
 
   Future<void> reloadVaultProfiles() async {
     vaultProfiles = await runtime.listVaults();

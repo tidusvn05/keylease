@@ -23,6 +23,25 @@ class UserMessage {
         detail: '$error',
       );
     }
+    if (error is ScreenRecordingPermissionRequired) {
+      return const UserMessage(
+        title: 'Screen Recording permission needed',
+        detail:
+            'Allow KeyLease in Privacy & Security > Screen Recording, then '
+            'scan again. KeyLease processes the screenshot locally and does '
+            'not save it.',
+        actionLabel: 'Open System Settings',
+      );
+    }
+    if (error is TotpQrCodeNotFound) {
+      return UserMessage(
+        title: 'No TOTP QR code found',
+        detail:
+            'Make sure the QR code is visible and unobstructed, then try '
+            'again. You can also choose an image file.',
+        diagnostics: '$error',
+      );
+    }
     if (error is! KeyLeaseException) {
       return UserMessage(
         title: 'Something went wrong',

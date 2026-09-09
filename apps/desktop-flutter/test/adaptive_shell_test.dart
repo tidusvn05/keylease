@@ -121,6 +121,18 @@ void main() {
       expect(find.byKey(const ValueKey('entry-entry-github')), findsOneWidget);
       // The detail pane is present without opening a dialog.
       expect(find.byKey(const ValueKey('detail-entry-github')), findsOneWidget);
+
+      final generator = tester.getRect(
+        find.byKey(const ValueKey('action-Password generator')),
+      );
+      final newItem = tester.getRect(
+        find.byKey(const ValueKey('action-New item')),
+      );
+      expect(newItem.left - generator.right, greaterThanOrEqualTo(5));
+
+      // With search in the unified title bar, the item count still needs
+      // breathing room below the top edge of its pane.
+      expect(tester.getTopLeft(find.text('1 item')).dy, greaterThan(56));
       expect(tester.takeException(), isNull);
     });
 
@@ -227,6 +239,7 @@ void main() {
       expect(app.phase, AppPhase.locked);
       expect(find.byKey(const ValueKey('unlock-password')), findsOneWidget);
       expect(find.text('Welcome back'), findsOneWidget);
+      expect(find.byKey(const ValueKey('group-all')), findsNothing);
     });
 
     testWidgets('a wrong master password explains itself and stays locked', (
@@ -272,7 +285,7 @@ void main() {
       app.selectSection(AppSection.settings);
       await tester.pumpAndSettle();
 
-      expect(find.text('Managed vault'), findsOneWidget);
+      expect(find.text('KeyLease data'), findsOneWidget);
       expect(find.text('Unix socket'), findsNothing);
     });
   });
@@ -316,6 +329,22 @@ void main() {
       harness.adapter.selectMenu(MenuAction.lock);
       await tester.pumpAndSettle();
       expect(app.phase, AppPhase.locked);
+    });
+
+    testWidgets('macOS settings window keeps the main vault destination', (
+      tester,
+    ) async {
+      final harness = buildController();
+      harness.adapter.settingsWindowOpens = true;
+      addTearDown(harness.app.dispose);
+      final app = await pumpApp(tester, controller: harness.app);
+
+      harness.adapter.selectMenu(MenuAction.settings);
+      await tester.pumpAndSettle();
+
+      expect(harness.adapter.settingsWindowRequests, 1);
+      expect(app.section, AppSection.vault);
+      expect(find.byKey(const ValueKey('vault-search')), findsOneWidget);
     });
 
     testWidgets('arrow keys move the selection from the search field', (
