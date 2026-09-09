@@ -319,7 +319,19 @@ class _UnlockScreenState extends State<UnlockScreen> {
   final _focus = FocusNode(debugLabel: 'unlock.password');
 
   @override
+  void initState() {
+    super.initState();
+    _password.addListener(_clearErrorWhenTyping);
+  }
+
+  void _clearErrorWhenTyping() {
+    if (!mounted || _password.text.isEmpty) return;
+    AppScope.of(context).clearUnlockMessage();
+  }
+
+  @override
   void dispose() {
+    _password.removeListener(_clearErrorWhenTyping);
     _password
       ..clear()
       ..dispose();
@@ -331,7 +343,8 @@ class _UnlockScreenState extends State<UnlockScreen> {
     final value = _password.text;
     if (value.isEmpty) return;
     _password.clear();
-    await app.unlock(value);
+    final unlocked = await app.unlock(value);
+    if (!unlocked && mounted) _focus.requestFocus();
   }
 
   @override
@@ -353,6 +366,13 @@ class _UnlockScreenState extends State<UnlockScreen> {
           FTextField(
             key: const ValueKey('unlock-password'),
             label: const Text('Master password'),
+            error: app.unlockMessage == null
+                ? null
+                : Text(
+                    app.unlockMessage!.title == 'Incorrect master password'
+                        ? 'Incorrect master password. Try again.'
+                        : app.unlockMessage!.detail,
+                  ),
             obscureText: true,
             autofocus: true,
             focusNode: _focus,

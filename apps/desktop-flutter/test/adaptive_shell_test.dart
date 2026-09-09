@@ -263,9 +263,23 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(app.phase, AppPhase.locked);
-      expect(find.text('Incorrect master password'), findsOneWidget);
-      expect(find.text('Check your password and try again.'), findsOneWidget);
+      expect(
+        find.text('Incorrect master password. Try again.'),
+        findsOneWidget,
+      );
+      expect(find.text('Show technical details'), findsNothing);
+      expect(find.text('Dismiss'), findsNothing);
+      expect(app.banner, isNull);
+      expect(app.unlockMessage?.title, 'Incorrect master password');
       expect(find.byKey(const ValueKey('unlock-submit')), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const ValueKey('unlock-password')),
+        'correct',
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Incorrect master password. Try again.'), findsNothing);
+      expect(app.unlockMessage, isNull);
     });
 
     testWidgets('settings stays reachable while the vault is unreachable', (

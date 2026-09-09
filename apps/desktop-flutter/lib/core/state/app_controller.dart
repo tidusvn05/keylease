@@ -85,6 +85,7 @@ Keep returned content and secrets private. If the vault is locked, ask me to unl
   VaultStatus? status;
   UserMessage? phaseMessage;
   UserMessage? banner;
+  UserMessage? unlockMessage;
   double sidebarWidth = KeyLeaseLayout.sidebarWidth;
   double listWidth = KeyLeaseLayout.listWidth;
   bool legacyAvailable = false;
@@ -234,6 +235,12 @@ Keep returned content and secrets private. If the vault is locked, ask me to unl
   void dismissBanner() {
     if (banner == null) return;
     banner = null;
+    notifyListeners();
+  }
+
+  void clearUnlockMessage() {
+    if (unlockMessage == null) return;
+    unlockMessage = null;
     notifyListeners();
   }
 
@@ -456,6 +463,7 @@ Keep returned content and secrets private. If the vault is locked, ask me to unl
 
   Future<bool> unlock(String password) async {
     var unlocked = false;
+    unlockMessage = null;
     await track(
       unlockKey,
       () async {
@@ -467,10 +475,13 @@ Keep returned content and secrets private. If the vault is locked, ask me to unl
         unlocked = true;
       },
       onError: (caught) {
-        banner = UserMessage.fromUnlock(caught);
+        unlockMessage = UserMessage.fromUnlock(caught);
       },
     );
-    if (unlocked) await refresh();
+    if (unlocked) {
+      unlockMessage = null;
+      await refresh();
+    }
     return unlocked;
   }
 
