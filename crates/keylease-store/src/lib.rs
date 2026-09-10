@@ -4,8 +4,8 @@ use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
 use chrono::{DateTime, Utc};
 use keylease_core::{
     AccessLease, AccountId, AgentId, ApprovalRecord, ApprovalState, AuditEvent, ConnectionId,
-    ConnectionRecord, DataBudget, DataUsage, GroupId, ItemId, KeyLeaseError, PolicyRule, ProjectId,
-    Result, VaultGroup, VaultId, VaultItem, VaultProject,
+    ConnectionRecord, DataBudget, DataUsage, GroupId, ItemId, KeyLeaseError, LocalOwnerRole,
+    PolicyRule, ProjectId, Result, VaultGroup, VaultId, VaultItem, VaultProject,
 };
 use keylease_crypto::{
     EncryptedItem, PasswordSlot, SecretKey, WrappedKey, create_password_slot, decrypt_item,
@@ -227,6 +227,21 @@ impl NativeStore {
     }
 
     pub fn export_native_backup(&self, unlocked: &UnlockedVault) -> Result<Vec<u8>> {
+        self.export_native_backup_filtered(unlocked, true)
+    }
+
+    /// Exports a backup, optionally omitting stored connector credentials.
+    ///
+    /// The `connections` table holds live OAuth and API credentials for
+    /// Google, GitHub, Linear and Notion. ADR 0002 confines those to the local
+    /// service that owns them, so moving a backup onto a second device — a
+    /// phone in particular — should not silently carry them along. Restore
+    /// still accepts either shape.
+    pub fn export_native_backup_filtered(
+        &self,
+        unlocked: &UnlockedVault,
+        include_connections: bool,
+    ) -> Result<Vec<u8>> {
         let _ = self.list_items(unlocked)?;
         let _ = self.list_groups(unlocked)?;
         let _ = self.list_projects(unlocked)?;
@@ -264,11 +279,15 @@ impl NativeStore {
         let mut statement = connection
             .prepare("SELECT record_json FROM connections")
             .map_err(|_| KeyLeaseError::Storage)?;
-        let connections = statement
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|_| KeyLeaseError::Storage)?
-            .map(|row| row.map_err(|_| KeyLeaseError::Storage))
-            .collect::<Result<Vec<_>>>()?;
+        let connections = if include_connections {
+            statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|_| KeyLeaseError::Storage)?
+                .map(|row| row.map_err(|_| KeyLeaseError::Storage))
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            Vec::new()
+        };
         let mut backup = NativeBackup {
             format: "keylease-native-backup".into(),
             format_version: 3,
@@ -1583,9 +1602,25 @@ impl NativeStore {
             })?;
         Ok(token)
     }
-    /// Creates or rotates the private local desktop credential and records its
-    /// role separately from session-scoped policy grants.
+    /// Creates or rotates the private local desktop credential.
+    ///
+    /// Kept for callers that only ever mean the desktop; see
+    /// [`Self::register_local_owner_client`] for the general form.
     pub fn register_desktop_client(&self, agent_id: &AgentId) -> Result<String> {
+        self.register_local_owner_client(agent_id, LocalOwnerRole::DesktopOwner)
+    }
+
+    /// Creates or rotates a private local owner credential and records its role
+    /// separately from session-scoped policy grants.
+    ///
+    /// This is an upsert, so unlocking rotates the token rather than reusing
+    /// one: the desktop's broad UI authority exists only while the vault is
+    /// unlocked and is rebuilt on every unlock.
+    pub fn register_local_owner_client(
+        &self,
+        agent_id: &AgentId,
+        role: LocalOwnerRole,
+    ) -> Result<String> {
         let mut raw = [0_u8; 32];
         rand::rng().fill_bytes(&mut raw);
         let token = format!("kl_client_{}", STANDARD_NO_PAD.encode(raw));
@@ -1602,23 +1637,75 @@ impl NativeStore {
             .map_err(|_| KeyLeaseError::Storage)?;
         transaction
             .execute(
-                "INSERT OR REPLACE INTO local_client_roles(agent_id,role) VALUES(?1,'desktop_owner')",
-                [&agent_id.0],
+                "INSERT OR REPLACE INTO local_client_roles(agent_id,role) VALUES(?1,?2)",
+                params![agent_id.0, role.wire()],
             )
             .map_err(|_| KeyLeaseError::Storage)?;
         transaction.commit().map_err(|_| KeyLeaseError::Storage)?;
         Ok(token)
     }
 
-    pub fn is_desktop_client(&self, agent_id: &AgentId) -> Result<bool> {
-        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
-        connection
+    /// This device's stable identity for this vault, minting one if needed.
+    ///
+    /// Reserved now even though sync is not built. `SyncMutationEnvelope`
+    /// (crates/leasegate-control) is signed per device, so every device needs a
+    /// stable id before it makes its first mutation. Adding one later would
+    /// mean a schema migration plus re-provisioning every existing device;
+    /// minting it here costs nothing.
+    ///
+    /// [`provenance`] records whether this vault was created standalone or
+    /// restored from a backup. A standalone vault has its own random account
+    /// root key and can never be merged with another device, so a future sync
+    /// engine must be able to refuse to enrol one rather than silently produce
+    /// an unmergeable pair.
+    pub fn device_identity(&self, provenance: &str) -> Result<(String, String)> {
+        let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let existing: Option<(String, String)> = transaction
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM local_client_roles WHERE agent_id=?1 AND role='desktop_owner')",
+                "SELECT device_id,provenance FROM device_identity LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|_| KeyLeaseError::Storage)?;
+        if let Some(found) = existing {
+            return Ok(found);
+        }
+        let mut raw = [0_u8; 16];
+        rand::rng().fill_bytes(&mut raw);
+        let device_id = format!("dev_{}", hex_lower(&raw));
+        transaction
+            .execute(
+                "INSERT INTO device_identity(device_id,provenance,created_at) VALUES(?1,?2,?3)",
+                params![device_id, provenance, Utc::now().to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        transaction.commit().map_err(|_| KeyLeaseError::Storage)?;
+        Ok((device_id, provenance.to_owned()))
+    }
+
+    /// The local owner role held by `agent_id`, if any.
+    ///
+    /// This deliberately replaced an `is_desktop_client` predicate. A boolean
+    /// cannot express "the owner, but from a phone", and every caller of the
+    /// old predicate had to be re-read to decide whether it meant *the human
+    /// owner* or *the desktop specifically*.
+    pub fn local_owner_role(&self, agent_id: &AgentId) -> Result<Option<LocalOwnerRole>> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let stored: Option<String> = connection
+            .query_row(
+                "SELECT role FROM local_client_roles WHERE agent_id=?1",
                 [&agent_id.0],
                 |row| row.get(0),
             )
-            .map_err(|_| KeyLeaseError::Storage)
+            .optional()
+            .map_err(|_| KeyLeaseError::Storage)?;
+        // An unknown role string is treated as no authority rather than as the
+        // desktop: an older binary reading a newer vault must fail closed.
+        Ok(stored.as_deref().and_then(LocalOwnerRole::from_wire))
     }
     pub fn authenticate_client(&self, agent_id: &AgentId, token: &str) -> Result<()> {
         let hash = hex_digest(token.as_bytes());
@@ -2134,6 +2221,9 @@ fn json<T: serde::Serialize>(value: &T) -> Result<String> {
 fn from_json<T: serde::de::DeserializeOwned>(value: &str) -> Result<T> {
     serde_json::from_str(value).map_err(|_| KeyLeaseError::Storage)
 }
+fn hex_lower(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
 fn hex_digest(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -2218,6 +2308,7 @@ CREATE TABLE IF NOT EXISTS clients(agent_id TEXT PRIMARY KEY,token_hash TEXT NOT
 CREATE TABLE IF NOT EXISTS local_client_roles(agent_id TEXT PRIMARY KEY,role TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS policy_rules(rule_id TEXT PRIMARY KEY,record_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS connections(connection_id TEXT PRIMARY KEY,record_json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS device_identity(device_id TEXT PRIMARY KEY,provenance TEXT NOT NULL,created_at TEXT NOT NULL);
 "#;
 
 #[cfg(test)]

@@ -1,0 +1,28 @@
+[package]
+name = "keylease-mobile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+# cdylib   -> libkeylease_mobile.so for Android.
+# staticlib-> a future iOS build; free to keep now.
+# rlib     -> lets tests/ffi.rs call the extern "C" surface directly on the
+#             host, which is how this layer is verified without a device.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+# default-features = false drops the agent handoff dispatch arms. The wire type
+# is unchanged; the two commands answer `denied` instead.
+keylease-rpc = { path = "../keylease-rpc", default-features = false, features = ["provisioning"] }
+keylease-core = { path = "../keylease-core" }
+keylease-service = { path = "../keylease-service" }
+keylease-store = { path = "../keylease-store" }
+serde_json.workspace = true
+tokio = { workspace = true }
+zeroize.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+tempfile.workspace = true

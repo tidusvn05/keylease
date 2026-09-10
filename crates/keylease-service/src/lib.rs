@@ -612,9 +612,44 @@ impl KeyLeaseService {
     /// deliberately distinct from registering an agent: the desktop's broad
     /// UI authority exists only while the vault is unlocked and is rebuilt
     /// after every successful desktop unlock.
+    /// This device's stable identity for the open vault.
+    ///
+    /// See [`NativeStore::device_identity`] for why it is minted before sync
+    /// exists.
+    pub fn device_identity(&self, provenance: &str) -> Result<(String, String)> {
+        self.store.device_identity(provenance)
+    }
+
+    /// Whether `agent_id` is a local owner client at all — desktop or phone.
+    ///
+    /// Use this where the question is "is this the human who owns the vault,
+    /// rather than an agent", which is most places.
+    fn is_local_owner(&self, agent_id: &AgentId) -> Result<bool> {
+        Ok(self.store.local_owner_role(agent_id)?.is_some())
+    }
+
+    /// Whether `agent_id` is specifically the desktop owner.
+    ///
+    /// Use this only where the operation genuinely needs the desktop: the agent
+    /// handoff and vault migrations.
+    fn desktop_owner_only(&self, agent_id: &AgentId) -> Result<bool> {
+        Ok(self.store.local_owner_role(agent_id)? == Some(LocalOwnerRole::DesktopOwner))
+    }
+
     pub fn register_desktop_client(&self) -> Result<(AgentId, String)> {
-        let id = AgentId("agent_desktop".into());
-        let token = self.store.register_desktop_client(&id)?;
+        self.register_local_owner_client(LocalOwnerRole::DesktopOwner)
+    }
+
+    /// Registers (or rotates) the local owner credential for `role`.
+    ///
+    /// The agent id is derived from the role so a desktop and a phone opening
+    /// the same vault file hold distinct credentials and distinct authority.
+    pub fn register_local_owner_client(&self, role: LocalOwnerRole) -> Result<(AgentId, String)> {
+        let id = match role {
+            LocalOwnerRole::DesktopOwner => AgentId("agent_desktop".into()),
+            LocalOwnerRole::MobileOwner => AgentId("agent_mobile".into()),
+        };
+        let token = self.store.register_local_owner_client(&id, role)?;
         Ok((id, token))
     }
     pub fn list_clients(&self) -> Result<Vec<AgentId>> {
@@ -821,7 +856,7 @@ impl KeyLeaseService {
         mut input: AgentNewItemHandoffInput,
     ) -> Result<AgentNewItemHandoffReceipt> {
         self.with_vault(|vault| {
-            if !self.store.is_desktop_client(&actor.agent_id)? {
+            if !self.desktop_owner_only(&actor.agent_id)? {
                 return Err(KeyLeaseError::Denied {
                     reason: "only the local desktop owner may create an agent handoff".into(),
                 });
@@ -869,6 +904,14 @@ impl KeyLeaseService {
         handoff_id: &str,
     ) -> Result<AgentNewItemGuide> {
         self.with_vault(|vault| {
+            // Matches the check on the create side. The guide echoes the recipe
+            // and context the handoff was created with, so reading one is part
+            // of the same desktop-only workflow.
+            if !self.desktop_owner_only(&actor.agent_id)? {
+                return Err(KeyLeaseError::Denied {
+                    reason: "only the local desktop owner may read an agent handoff".into(),
+                });
+            }
             let (input, expires_at) = {
                 let mut handoffs = self
                     .agent_handoffs
@@ -1840,9 +1883,9 @@ impl KeyLeaseService {
     }
 
     fn ensure_migration_owner(&self, actor: &ActorContext) -> Result<()> {
-        if !self.store.is_desktop_client(&actor.agent_id)? {
+        if !self.desktop_owner_only(&actor.agent_id)? {
             return Err(KeyLeaseError::Denied {
-                reason: "only the local owner may manage vault migrations".into(),
+                reason: "only the local desktop owner may manage vault migrations".into(),
             });
         }
         Ok(())
@@ -2119,7 +2162,7 @@ impl KeyLeaseService {
     ) -> Result<Vec<ContentSummary>> {
         self.with_vault(|vault| {
             self.ensure_agent_content_channel(actor)?;
-            let owner = self.store.is_desktop_client(&actor.agent_id)?;
+            let owner = self.is_local_owner(&actor.agent_id)?;
             let projects = self.store.list_projects(vault)?;
             let project_by_id = projects
                 .iter()
@@ -2186,7 +2229,7 @@ impl KeyLeaseService {
         self.with_vault(|vault| {
             self.ensure_agent_content_channel(actor)?;
             let item = self.store.get_item(vault, id)?;
-            let owner = self.store.is_desktop_client(&actor.agent_id)?;
+            let owner = self.is_local_owner(&actor.agent_id)?;
             if !is_agent_content_kind(&item.kind)
                 || (!owner && item.agent_access == AgentAccess::None)
             {
@@ -2237,7 +2280,7 @@ impl KeyLeaseService {
                 )?;
                 return content_document(item, self.store.list_projects(vault)?);
             }
-            let owner = self.store.is_desktop_client(&actor.agent_id)?;
+            let owner = self.is_local_owner(&actor.agent_id)?;
             let project_id = resolve_project_id(
                 &self.store.list_projects(vault)?,
                 input.project_slug.as_deref(),
@@ -2359,7 +2402,7 @@ impl KeyLeaseService {
                 return content_document(item, self.store.list_projects(vault)?);
             }
             let mut item = self.store.get_item(vault, id)?;
-            let owner = self.store.is_desktop_client(&actor.agent_id)?;
+            let owner = self.is_local_owner(&actor.agent_id)?;
             if !is_agent_content_kind(&item.kind)
                 || (!owner && item.agent_access != AgentAccess::ReadWrite)
             {
@@ -2445,7 +2488,7 @@ impl KeyLeaseService {
         idempotency_key: &str,
     ) -> Result<ContentDocument> {
         self.with_vault(|vault| {
-            if !self.store.is_desktop_client(&actor.agent_id)? {
+            if !self.is_local_owner(&actor.agent_id)? {
                 return Err(KeyLeaseError::Denied {
                     reason: "only the local owner may change agent access".into(),
                 });
@@ -2512,7 +2555,7 @@ impl KeyLeaseService {
         idempotency_key: &str,
     ) -> Result<ContentDocument> {
         self.with_vault(|vault| {
-            if !self.store.is_desktop_client(&actor.agent_id)? {
+            if !self.is_local_owner(&actor.agent_id)? {
                 return Err(KeyLeaseError::Denied {
                     reason: "only the local owner may review content".into(),
                 });
@@ -2578,7 +2621,7 @@ impl KeyLeaseService {
     }
 
     fn ensure_agent_content_channel(&self, actor: &ActorContext) -> Result<()> {
-        if !self.store.is_desktop_client(&actor.agent_id)? && self.store.kill_switch_enabled()? {
+        if !self.is_local_owner(&actor.agent_id)? && self.store.kill_switch_enabled()? {
             return Err(KeyLeaseError::Denied {
                 reason: "global kill switch is active".into(),
             });
@@ -3662,7 +3705,34 @@ impl KeyLeaseService {
         })
     }
     pub fn export_native_backup(&self) -> Result<Vec<u8>> {
-        self.with_vault(|vault| self.store.export_native_backup(vault))
+        self.export_native_backup_filtered(true)
+    }
+
+    /// Exports a backup, optionally omitting stored connector credentials.
+    ///
+    /// See [`NativeStore::export_native_backup_filtered`] for why a mobile
+    /// export leaves them out.
+    pub fn export_native_backup_filtered(&self, include_connections: bool) -> Result<Vec<u8>> {
+        self.with_vault(|vault| {
+            self.store
+                .export_native_backup_filtered(vault, include_connections)
+        })
+    }
+
+    /// Rotates the master password after verifying the current one.
+    ///
+    /// Only the password slot is rewritten: the account root key is unchanged,
+    /// so item ciphertext is untouched and other devices keep working.
+    pub fn change_master_password(&self, current: &[u8], next: &[u8]) -> Result<()> {
+        if next.len() < 10 {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "new password must contain at least 10 characters".into(),
+            });
+        }
+        // Unlocking with the current password is the verification step; a wrong
+        // one fails here rather than silently rewriting the slot.
+        let unlocked = self.store.unlock(current)?;
+        self.store.change_password(&unlocked, next)
     }
     pub fn restore_native_backup(
         &self,
@@ -4209,8 +4279,14 @@ impl KeyLeaseService {
     }
     fn reload_policy_for_client(&self, agent_id: &AgentId, vault_id: &VaultId) -> Result<()> {
         let mut rules = self.store.load_policy_rules()?;
-        if self.store.is_desktop_client(agent_id)? {
-            rules.push(desktop_owner_rule(agent_id.clone(), vault_id));
+        match self.store.local_owner_role(agent_id)? {
+            Some(LocalOwnerRole::DesktopOwner) => {
+                rules.push(desktop_owner_rule(agent_id.clone(), vault_id))
+            }
+            Some(LocalOwnerRole::MobileOwner) => {
+                rules.push(mobile_owner_rule(agent_id.clone(), vault_id))
+            }
+            None => {}
         }
         *self.policy.write().map_err(|_| KeyLeaseError::Storage)? = RulePolicyEngine::new(rules);
         Ok(())
@@ -4440,6 +4516,70 @@ fn desktop_owner_rule(agent_id: AgentId, vault_id: &VaultId) -> PolicyRule {
             "connection:add",
             "connection:enroll",
             "connection:unenroll",
+            "connection:test",
+            "connection:refresh",
+            "connection:disconnect",
+            "connection:revoke",
+            "approval:list",
+            "approval:decide",
+            "audit:query",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
+        argument_equals: Default::default(),
+        not_before: None,
+        expires_at: None,
+        max_lease_ttl_seconds: 600,
+        max_uses: 100,
+        budget: DataBudget {
+            max_items: Some(100),
+            max_cells: Some(10_000),
+            max_response_bytes: Some(1_048_576),
+            max_rows_changed: Some(1_000),
+            max_concurrent: Some(1),
+            ..Default::default()
+        },
+    }
+}
+
+/// The authority a phone gets over its own vault.
+///
+/// Deliberately narrower than [`desktop_owner_rule`]. A phone is more easily
+/// lost and less easily inspected than a desktop, so it may use and defend the
+/// vault but not widen it. Compared with the desktop rule this drops:
+///
+/// - `connection:add` and `connection:enroll` — a stolen unlocked phone must not
+///   be able to mint new connector credentials.
+/// - the lease and gate actions — connector execution belongs on the machine
+///   that hosts the Gateway.
+///
+/// It keeps `connection:disconnect` and `connection:revoke`, because the phone
+/// is often the device you have to hand when you need to cut something off.
+fn mobile_owner_rule(agent_id: AgentId, vault_id: &VaultId) -> PolicyRule {
+    PolicyRule {
+        id: "builtin_mobile_owner".into(),
+        version: 1,
+        effect: PolicyEffect::Allow,
+        agent_id: Some(agent_id),
+        connection_id: None,
+        resource_prefix: format!("kl://{}", vault_id.0),
+        actions: [
+            "entry:search",
+            "entry:read_metadata",
+            "entry:read_fields",
+            "entry:read_username",
+            "entry:read_secret",
+            "entry:create",
+            "entry:update_standard_fields",
+            "entry:update_protected_fields",
+            "entry:update_totp",
+            "entry:move",
+            "entry:delete",
+            "group:create",
+            "group:update",
+            "group:delete",
+            "connection:list",
             "connection:test",
             "connection:refresh",
             "connection:disconnect",

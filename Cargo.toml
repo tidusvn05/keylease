@@ -11,6 +11,8 @@ members = [
   "crates/leasegate-connectors",
   "crates/leasegate-connector-sdk",
   "crates/keylease-service",
+  "crates/keylease-rpc",
+  "crates/keylease-mobile",
   "crates/keylease-cli",
   "crates/leasegate-control",
   "crates/leasegate-policy-bundle",

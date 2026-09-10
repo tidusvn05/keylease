@@ -1,0 +1,31 @@
+[package]
+name = "keylease-rpc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["agent-handoff"]
+# The agent new-item handoff is a desktop-only workflow. Builds without this
+# feature keep the wire type identical and deny the two commands instead, so
+# the protocol never differs between builds.
+agent-handoff = []
+# Vault lifecycle operations (create, restore, unlock-owner, change password,
+# export backup). Off by default: the daemon must never serve these, because
+# they cannot be authenticated. See src/provisioning.rs.
+provisioning = []
+
+[dependencies]
+chrono.workspace = true
+keylease-core = { path = "../keylease-core" }
+keylease-service = { path = "../keylease-service" }
+serde.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+keylease-core = { path = "../keylease-core" }
+keylease-store = { path = "../keylease-store" }
+tempfile.workspace = true
+tokio = { workspace = true }

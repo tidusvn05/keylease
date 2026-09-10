@@ -354,3 +354,57 @@ impl VaultItem {
         format!("kl://{}/{}/{}", self.vault_id.0, self.id.0, field.id.0)
     }
 }
+
+/// Which local client holds owner authority over a vault, and how much of it.
+///
+/// The desktop and the phone are both "the human who owns this vault", but they
+/// are not equally exposed. A phone is more easily lost and less easily
+/// inspected, so it is given the authority needed to use and defend the vault
+/// and not the authority to widen it: it may list, test, refresh, disconnect
+/// and revoke connections, but not create or enrol new ones, run migrations, or
+/// drive the agent workflows.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalOwnerRole {
+    /// The desktop client. The full local surface.
+    DesktopOwner,
+    /// The mobile client.
+    MobileOwner,
+}
+
+impl LocalOwnerRole {
+    /// The value stored in `local_client_roles.role`.
+    ///
+    /// `desktop_owner` predates the mobile client and is what existing vaults
+    /// already contain, so it must not be renamed.
+    pub fn wire(self) -> &'static str {
+        match self {
+            LocalOwnerRole::DesktopOwner => "desktop_owner",
+            LocalOwnerRole::MobileOwner => "mobile_owner",
+        }
+    }
+
+    pub fn from_wire(value: &str) -> Option<Self> {
+        match value {
+            "desktop_owner" => Some(LocalOwnerRole::DesktopOwner),
+            "mobile_owner" => Some(LocalOwnerRole::MobileOwner),
+            _ => None,
+        }
+    }
+
+    /// Whether this role may run the agent new-item handoff.
+    ///
+    /// The workflow hands the user a CLI command to paste into a coding agent
+    /// on the same machine, which a phone has no way to do.
+    pub fn may_use_agent_handoff(self) -> bool {
+        matches!(self, LocalOwnerRole::DesktopOwner)
+    }
+
+    /// Whether this role may apply or roll back vault migrations.
+    ///
+    /// Migrations rewrite the whole vault. That is a deliberate, reviewable
+    /// operation for the machine that holds the backups.
+    pub fn may_manage_migrations(self) -> bool {
+        matches!(self, LocalOwnerRole::DesktopOwner)
+    }
+}

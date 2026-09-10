@@ -1469,6 +1469,7 @@ dependencies = [
  "chrono",
  "clap",
  "keylease-core",
+ "keylease-rpc",
  "keylease-service",
  "keylease-store",
  "leasegate-connectors",
@@ -1565,6 +1566,36 @@ dependencies = [
  "tempfile",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "keylease-mobile"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "keylease-core",
+ "keylease-rpc",
+ "keylease-service",
+ "keylease-store",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
+name = "keylease-rpc"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "keylease-core",
+ "keylease-service",
+ "keylease-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]
