@@ -175,7 +175,7 @@ impl KdbxAdapter for KeepassRsAdapter {
                 entry.set_protected("KeyLease.Sections", sections);
             }
             entry.tags = item.tags.clone();
-            for field in &item.fields {
+            for (index, field) in item.fields.iter().enumerate() {
                 let key = match field.key.as_str() {
                     "username" => fields::USERNAME,
                     "password" => fields::PASSWORD,
@@ -194,6 +194,14 @@ impl KdbxAdapter for KeepassRsAdapter {
                     entry.set_unprotected(key, value)
                 }
                 entry.set_protected(format!("KeyLease.FieldId.{}", field.key), &field.id.0);
+                // KDBX stores custom fields in a map with no ordering, so the
+                // position has to be written down or a round trip loses it.
+                // Same private-metadata convention as the field id above:
+                // other KDBX tools see an extra custom field and ignore it.
+                entry.set_protected(
+                    format!("KeyLease.FieldOrder.{}", field.key),
+                    index.to_string(),
+                );
                 if let Some(role) = &field.semantic_role {
                     entry.set_protected(format!("KeyLease.SemanticRole.{}", field.key), role);
                 }
@@ -342,7 +350,35 @@ fn walk_group(
                 serde_json::json!("keepass_timeotp_fields"),
             );
         }
-        for (name, value) in &entry.fields {
+        // `entry.fields` is a HashMap, and Rust randomises HashMap iteration per
+        // process, so reading it directly gave a different field order on every
+        // import. That is not just a flaky test: it meant a vault round-tripped
+        // through KDBX came back with its fields shuffled, while the migration
+        // report claimed fidelity.
+        //
+        // Files this crate exported carry an explicit position; files from other
+        // tools have none, so those fall back to sorting by name — arbitrary,
+        // but reproducible, which is the property that was missing.
+        let mut ordered: Vec<(&String, &_)> = entry.fields.iter().collect();
+        ordered.sort_by(|(left, _), (right, _)| {
+            let position = |name: &str| {
+                let key = match name {
+                    fields::USERNAME => "username",
+                    fields::PASSWORD => "password",
+                    fields::OTP => "otp",
+                    other => other,
+                };
+                entry
+                    .get(&format!("KeyLease.FieldOrder.{key}"))
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(usize::MAX)
+            };
+            position(left)
+                .cmp(&position(right))
+                .then_with(|| left.cmp(right))
+        });
+
+        for (name, value) in ordered {
             if [
                 fields::TITLE,
                 fields::URL,
@@ -354,6 +390,7 @@ fn walk_group(
             ]
             .contains(&name.as_str())
                 || name.starts_with("KeyLease.FieldId.")
+                || name.starts_with("KeyLease.FieldOrder.")
                 || name.starts_with("KeyLease.SemanticRole.")
                 || (!has_otp
                     && matches!(
@@ -409,7 +446,11 @@ fn walk_group(
             }
             harden_semantic_field(field);
         }
-        for (name, attachment) in entry.attachments_named() {
+        // Attachments are a HashMap too, so both the item's attachment list and
+        // the warnings naming them were arriving in a random order.
+        let mut attachments: Vec<_> = entry.attachments_named().collect();
+        attachments.sort_by_key(|(name, _)| *name);
+        for (name, attachment) in attachments {
             item.attachments.push(name.into());
             preview.report.attachment_count += 1;
             preview.report.warnings.push(format!(
@@ -687,5 +728,192 @@ mod tests {
                 .iter()
                 .any(|f| f.key == "otp" && matches!(f.value, FieldValue::Totp(_)))
         );
+    }
+
+    /// Builds an item whose field order is not alphabetical.
+    ///
+    /// Deliberately reversed relative to sorted order: an implementation that
+    /// merely sorts by name would pass a test built from `a, b, c` while still
+    /// losing the user's ordering.
+    fn item_with_ordered_fields(group: &VaultGroup, vault: &VaultId) -> VaultItem {
+        let keys = ["zulu", "mike", "alpha", "delta"];
+        VaultItem {
+            id: ItemId::new(),
+            vault_id: vault.clone(),
+            group_id: group.id.clone(),
+            kind: "core.login".into(),
+            title: "Ordered".into(),
+            sections: vec![],
+            fields: keys
+                .iter()
+                .map(|key| ItemField {
+                    id: FieldId::new(),
+                    key: (*key).into(),
+                    label: (*key).into(),
+                    value: FieldValue::Text(format!("value-{key}")),
+                    sensitivity: Sensitivity::PrivateMetadata,
+                    protected: false,
+                    semantic_role: None,
+                })
+                .collect(),
+            urls: vec![],
+            tags: vec![],
+            favorite: false,
+            attachments: vec![],
+            notes: None,
+            template_version: 1,
+            project_id: None,
+            agent_access: AgentAccess::None,
+            content_metadata: None,
+            schema_version: 1,
+            revision: 1,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            secret_changed_at: None,
+            expires_at: None,
+            rotation_interval_days: None,
+            issuer: None,
+            environment: None,
+            owner: None,
+            status: ItemStatus::Active,
+            extensions: Default::default(),
+        }
+    }
+
+    fn round_trip_field_keys(item: &VaultItem, group: &VaultGroup, vault: &VaultId) -> Vec<String> {
+        let mut bytes = vec![];
+        KeepassRsAdapter
+            .export(
+                &mut bytes,
+                "password",
+                std::slice::from_ref(group),
+                std::slice::from_ref(item),
+            )
+            .expect("export succeeds");
+        let imported = KeepassRsAdapter
+            .preview_import(&mut bytes.as_slice(), "password", vault)
+            .expect("import succeeds");
+        imported.items[0]
+            .fields
+            .iter()
+            .map(|field| field.key.clone())
+            .collect()
+    }
+
+    fn ordering_fixture() -> (VaultId, VaultGroup) {
+        let vault = VaultId::new();
+        let group = VaultGroup {
+            id: GroupId::new(),
+            vault_id: vault.clone(),
+            parent_id: None,
+            name: "Development".into(),
+            purpose: GroupPurpose::User,
+            sort_order: None,
+            revision: 1,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        (vault, group)
+    }
+
+    #[test]
+    fn a_round_trip_preserves_field_order() {
+        // KDBX keeps custom fields in an unordered map, so the exporter records
+        // each field's position and the importer reads it back. Without that,
+        // a vault came back with its fields shuffled while the migration report
+        // still claimed fidelity.
+        let (vault, group) = ordering_fixture();
+        let item = item_with_ordered_fields(&group, &vault);
+        let expected: Vec<String> = item.fields.iter().map(|f| f.key.clone()).collect();
+
+        assert_eq!(round_trip_field_keys(&item, &group, &vault), expected);
+    }
+
+    #[test]
+    fn importing_the_same_file_twice_gives_the_same_order() {
+        // Rust randomises HashMap iteration per process, so this only fails
+        // across separate runs — which is exactly how it evaded notice. Import
+        // the same bytes repeatedly and require every result to agree.
+        let (vault, group) = ordering_fixture();
+        let item = item_with_ordered_fields(&group, &vault);
+
+        let mut bytes = vec![];
+        KeepassRsAdapter
+            .export(
+                &mut bytes,
+                "password",
+                std::slice::from_ref(&group),
+                std::slice::from_ref(&item),
+            )
+            .expect("export succeeds");
+
+        let first: Vec<String> = KeepassRsAdapter
+            .preview_import(&mut bytes.as_slice(), "password", &vault)
+            .expect("import succeeds")
+            .items[0]
+            .fields
+            .iter()
+            .map(|field| field.key.clone())
+            .collect();
+
+        for attempt in 0..16 {
+            let again: Vec<String> = KeepassRsAdapter
+                .preview_import(&mut bytes.as_slice(), "password", &vault)
+                .expect("import succeeds")
+                .items[0]
+                .fields
+                .iter()
+                .map(|field| field.key.clone())
+                .collect();
+            assert_eq!(again, first, "import {attempt} disagreed with the first");
+        }
+    }
+
+    #[test]
+    fn a_file_from_another_tool_imports_reproducibly() {
+        // KeePassXC and friends write no position metadata, so this path is the
+        // common one for real imports. It cannot preserve an order that was
+        // never recorded — what it must do is produce the same order every
+        // time, which is the property that was missing.
+        //
+        // Built with the keepass API directly rather than through our exporter,
+        // because the whole point is a file without our metadata.
+        let vault = VaultId::new();
+        let mut database = Database::new();
+        database.root_mut().name = "Other Tool".into();
+        let root_id = database.root().id();
+        {
+            let mut root = database.group_mut(root_id).expect("root");
+            let mut entry = root.add_entry();
+            entry.set_unprotected(fields::TITLE, "Ordered");
+            for key in ["zulu", "mike", "alpha", "delta"] {
+                entry.set_unprotected(key, format!("value-{key}"));
+            }
+        }
+        let mut bytes = vec![];
+        database
+            .save(&mut bytes, DatabaseKey::new().with_password("password"))
+            .expect("save succeeds");
+
+        let read = || -> Vec<String> {
+            KeepassRsAdapter
+                .preview_import(&mut bytes.as_slice(), "password", &vault)
+                .expect("import succeeds")
+                .items[0]
+                .fields
+                .iter()
+                .map(|field| field.key.clone())
+                .collect()
+        };
+
+        let first = read();
+        assert_eq!(
+            first,
+            vec!["alpha", "delta", "mike", "zulu"],
+            "with no recorded position the fallback is by name",
+        );
+        for attempt in 0..16 {
+            assert_eq!(read(), first, "import {attempt} disagreed with the first");
+        }
     }
 }
