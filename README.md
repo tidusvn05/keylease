@@ -36,7 +36,14 @@ without going through `KeyLeaseService`.
   offline enforcement and encrypted audit/credential state.
 - `leasegate-mcp`: authenticated Streamable HTTP MCP adapter over the canonical
   service boundary.
+- `keylease-rpc`: the single implementation of the local RPC contract, shared by
+  the CLI daemon and the mobile FFI so the wire format cannot drift.
+- `keylease-mobile`: the in-process C ABI the Android client calls; see
+  `docs/adr/0004-mobile-in-process-boundary.md`.
+- `packages/leasegate_vault_ui`: the shared vault client — models, state, design
+  tokens and feature UI — used by both Flutter apps.
 - `apps/desktop-flutter`: macOS presentation shell (requires Flutter locally).
+- `apps/mobile-flutter`: the Android vault client.
 - `apps/approval-flutter`: responsive remote approval and Edge-health web app.
 
 ## Development
@@ -46,6 +53,17 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p keylease-cli -- --help
 ```
+
+The Flutter side lives in three packages that are checked independently:
+
+```sh
+cd packages/leasegate_vault_ui && flutter analyze && flutter test
+cd apps/desktop-flutter        && flutter analyze && flutter test
+cd apps/mobile-flutter         && flutter analyze && flutter test
+```
+
+Building the Android client needs the toolchain described in
+`apps/mobile-flutter/README.md`; `scripts/build-android.sh` drives it.
 
 See `docs/security/threat-model.md` and `docs/adr/` before changing crypto,
 identity, trust-mode or connector boundaries.

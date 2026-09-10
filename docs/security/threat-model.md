@@ -9,9 +9,17 @@ The protected assets are master passwords, account/vault/item keys, item
 plaintext, connection credentials, dynamic credential material and local
 revocation handles, approval intent and lease-use counters.
 Opaque IDs, encrypted payloads and redacted operational metadata may be stored
-in SQLite. The local service process is the sole trusted plaintext boundary.
-CLI, Flutter, agents, connector responses, imported files and all provider
-content are untrusted. In Edge mode, cloud is outside the decryption boundary.
+in SQLite. On desktop and Edge the local service process is the sole trusted
+plaintext boundary; CLI, Flutter, agents, connector responses, imported files
+and all provider content are untrusted. In Edge mode, cloud is outside the
+decryption boundary.
+
+**On Android that process boundary does not exist.** The platform cannot host a
+persistent daemon, so the Rust core runs inside the app process behind a C ABI
+and the UI shares its address space. The application sandbox replaces the
+socket's uid check as the isolation mechanism. This is a deliberate reduction,
+recorded with what replaces it in
+[ADR 0004](../adr/0004-mobile-in-process-boundary.md).
 LeaseGate-hosted managed gateway mode is explicitly out of scope and is
 rejected; the supported execution mode is `self_hosted/local_gateway` and must
 never fall back when the local Gateway is unavailable.
@@ -35,10 +43,12 @@ never fall back when the local Gateway is unavailable.
 | Concurrent execution | SQLite immediate transactions reserve `max_uses` and idempotency before dispatch | Cross-database copies are outside the boundary |
 | Compromised cloud | Edge mode cloud has ciphertext only; keys are derived/wrapped client-side with domain-separated AAD | Traffic/size metadata remains visible |
 | Compromised Edge | Attacker can access plaintext while the vault is unlocked; lock zeroizes session keys | Full host compromise is not solved |
-| Offline database theft | Argon2id password slot wraps a random root key; per-vault and per-item random keys; AEAD binds identifiers/revision/schema | Weak master passwords remain guessable at KDF cost |
+| Offline database theft | Argon2id password slot wraps a random root key; per-vault and per-item random keys; AEAD binds identifiers/revision/schema. On Android `allowBackup="false"` plus `dataExtractionRules` keep the database out of Google Drive backup and device-to-device transfer, so obtaining it still requires the device | Weak master passwords remain guessable at KDF cost |
 | Rollback/tampering | AEAD AAD plus monotonic revisions and keyed mutation journal; the native backup authenticates its full manifest; malformed state fails closed | Local administrator can restore an internally consistent old database until trusted checkpointing exists |
 | Secret leakage in logs/errors | Structured allowlisted audit fields, redaction at connector boundary, no payload logging, and redacted `Debug` for secrets/requests/provider bodies | OS-level memory/crash capture requires deployment hardening |
-| Clipboard disclosure | macOS writes only an explicitly requested field, remembers the pasteboard generation, clears it after 30 seconds only if unchanged, and clears it on manual lock, sleep and screen lock | Clipboard managers and other same-user processes may copy the value before clearing |
+| Clipboard disclosure | macOS writes only an explicitly requested field, remembers the pasteboard generation, clears it after 30 seconds only if unchanged, and clears it on manual lock, sleep and screen lock. Android does the same in Kotlin, scheduled outside the Flutter engine so the clear survives the engine being killed, and marks the clip sensitive so the system suppresses its paste preview | Clipboard managers and other same-user processes may copy the value before clearing |
+| Mobile device loss | Vault is app-private and excluded from cloud backup and device transfer; `FLAG_SECURE` blocks screenshots and the recents thumbnail; locking on background and on idle drops the session keys; the `mobile_owner` role cannot create connections, run migrations or execute gates, so a stolen unlocked phone cannot mint new connector credentials | A phone unlocked and in the attacker's hands while the vault is open is outside the boundary, as on any platform |
+| Mobile local IPC spoofing | Not applicable: there is no socket. The vault is opened in process, the owner credential is minted per unlock and never leaves the Rust side, and vault provisioning is a separate dispatcher that no request command can reach | Any code running inside the app process shares the address space; see ADR 0004 |
 | OAuth callback interception/forgery | Google setup uses an IPv4 loopback listener on a random port, S256 PKCE, one-time state, exact `drive.file` scope, bounded callback parsing and fixed HTTPS token/metadata origins | A fully compromised browser or unlocked host remains outside the boundary |
 | Local IPC spoofing or lock denial-of-service | Mode-0600 Unix socket, peer-UID validation, registered client token on every operation except status, bounded messages and authentication/unlock rate limits | Same-UID malware remains outside this boundary |
 
@@ -56,6 +66,11 @@ never fall back when the local Gateway is unavailable.
    credentials.
 7. Audits contain no item values or external content.
 8. Lock invalidates the session and all session-bound grants/leases.
+9. Vault provisioning is unauthenticated by construction and therefore never
+   reachable from an authenticated request channel; it lives in a separate
+   request type with its own dispatcher.
+10. A local owner client's authority follows its role: only the desktop owner
+    may run agent handoffs or vault migrations.
 
 ## Explicit non-goals
 
