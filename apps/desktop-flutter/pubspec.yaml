@@ -7,6 +7,12 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # The shared client. A path dependency rather than a pub workspace: a
+  # workspace solves versions once across all members, and this app pins
+  # flutter_lints ^5 while apps/approval-flutter pins ^6, which cannot
+  # co-resolve. Revisit once those agree.
+  leasegate_vault_ui:
+    path: ../../packages/leasegate_vault_ui
   # Production UI library. Forui is 0.x, so the version is pinned exactly and
   # upgrades go through the changelog review recorded in docs/.
   forui: 0.26.0

@@ -4,13 +4,16 @@ import 'dart:ui';
 import 'package:forui/forui.dart';
 import 'package:material_ui/material_ui.dart';
 
-import '../core/platform/local_runtime_adapter.dart';
-import '../core/platform/preferences_store.dart';
-import '../core/platform/security_adapter.dart';
-import '../core/state/app_controller.dart';
-import '../features/settings/settings_page.dart';
-import 'app_scope.dart';
-import 'app_theme.dart';
+import 'package:leasegate_vault_ui/app/app_scope.dart';
+import 'package:leasegate_vault_ui/app/app_theme.dart';
+import 'package:leasegate_vault_ui/core/platform/local_runtime_adapter.dart';
+import 'package:leasegate_vault_ui/core/platform/security_adapter.dart';
+import 'package:leasegate_vault_ui/core/state/app_controller.dart';
+import 'package:leasegate_vault_ui/features/settings/settings_page.dart';
+
+import '../core/platform/desktop_connection_defaults.dart';
+import '../core/platform/file_preferences_store.dart';
+import '../core/rpc/keylease_rpc.dart';
 
 /// Root for the dedicated macOS Settings window.
 ///
@@ -29,6 +32,8 @@ class _KeyLeaseSettingsWindowAppState extends State<KeyLeaseSettingsWindowApp> {
     adapter: MethodChannelSecurityAdapter(),
     runtime: MethodChannelLocalRuntimeAdapter(),
     preferences: FilePreferencesStore(),
+    defaultSettings: desktopConnectionDefaults(),
+    clientFactory: socketClientFactory,
   );
 
   @override

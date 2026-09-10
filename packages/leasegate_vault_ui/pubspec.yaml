@@ -1,0 +1,25 @@
+name: leasegate_vault_ui
+description: Shared vault client for the Leasegate desktop and mobile apps.
+publish_to: none
+version: 0.1.0
+environment:
+  sdk: ">=3.13.0 <4.0.0"
+dependencies:
+  flutter:
+    sdk: flutter
+  # Production UI library. Forui is 0.x, so the version is pinned exactly and
+  # upgrades go through the changelog review recorded in docs/.
+  forui: 0.26.0
+  # Flutter 3.47 moved Material out of the SDK. Forui 0.26 builds on the
+  # package, so the app must use the same one for theme/type compatibility.
+  material_ui: 1.1.1
+  # lib/testing.dart ships the fakes both apps test against, so this is a
+  # regular dependency rather than a dev one: a package's dev_dependencies are
+  # not transitive and its test/ directory is not importable by consumers.
+  # Nothing on the app path imports it, so release builds tree-shake it out.
+  flutter_test:
+    sdk: flutter
+dev_dependencies:
+  flutter_lints: ^5.0.0
+flutter:
+  uses-material-design: true
