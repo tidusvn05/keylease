@@ -131,6 +131,20 @@ The vault must be unlocked in the app. Every entry has a **Prompt** button that
 copies safe, ready-to-paste instructions scoped to that exact item ID, without
 including a token or secret value.
 
+For a new item, the desktop's **Use Agent** mode copies only a short, temporary
+handoff command. The handoff stays in daemon memory for two hours and is cleared
+when the vault locks, switches, or the service restarts. The agent obtains the
+version-matched workflow from the CLI:
+
+```sh
+keylease agent new-item handoff_ID
+keylease agent new-item handoff_ID --json
+```
+
+The first form prints agent-readable Markdown; `--json` exposes the same guide
+as a structured contract. The handoff ID is not a credential, and the command
+still requires the active managed client and an unlocked matching vault.
+
 ## Local flow
 
 ```sh

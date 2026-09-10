@@ -2,9 +2,9 @@ use chrono::{Duration, Utc};
 use clap::{Args, Parser, Subcommand};
 use keylease_core::*;
 use keylease_service::{
-    ContentCreateInput, ContentDocument, ContentPatch, ContentSummary, EntryPatch, EntryView,
-    FieldView, KeyLeaseService, MigrationApplyResult, MigrationPreview, MigrationStatus,
-    NewEntryInput,
+    AgentNewItemGuide, AgentNewItemHandoffInput, AgentNewItemHandoffReceipt, ContentCreateInput,
+    ContentDocument, ContentPatch, ContentSummary, EntryPatch, EntryView, FieldView,
+    KeyLeaseService, MigrationApplyResult, MigrationPreview, MigrationStatus, NewEntryInput,
 };
 use keylease_store::NativeStore;
 use leasegate_connectors::Connector;
@@ -81,6 +81,10 @@ enum Command {
     Templates {
         #[command(subcommand)]
         command: TemplateCommand,
+    },
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommand,
     },
     Migrations {
         #[command(subcommand)]
@@ -358,6 +362,15 @@ enum GroupCommand {
 enum TemplateCommand {
     List,
     Get { kind: String },
+}
+
+#[derive(Subcommand)]
+enum AgentCommand {
+    NewItem {
+        handoff_id: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -645,6 +658,14 @@ enum RpcRequest {
     TemplatesGet {
         auth: RpcAuth,
         kind: String,
+    },
+    AgentHandoffCreate {
+        auth: RpcAuth,
+        input: AgentNewItemHandoffInput,
+    },
+    AgentHandoffGet {
+        auth: RpcAuth,
+        handoff_id: String,
     },
     MigrationsStatus {
         auth: RpcAuth,
@@ -958,6 +979,7 @@ async fn run() -> Result<()> {
                 .await
             }
         },
+        Command::Agent { command } => agent_command(&cli, &socket, command).await,
         Command::Migrations { command } => match command {
             MigrationCommand::Status => {
                 print_rpc(&socket, RpcRequest::MigrationsStatus { auth: auth(&cli)? }).await
@@ -1060,6 +1082,9 @@ async fn run() -> Result<()> {
                 "content_patch":schemars::schema_for!(ContentPatch),
                 "content_summary":schemars::schema_for!(ContentSummary),
                 "content_document":schemars::schema_for!(ContentDocument),
+                "agent_new_item_handoff_input":schemars::schema_for!(AgentNewItemHandoffInput),
+                "agent_new_item_handoff_receipt":schemars::schema_for!(AgentNewItemHandoffReceipt),
+                "agent_new_item_guide":schemars::schema_for!(AgentNewItemGuide),
                 "migration_status":schemars::schema_for!(MigrationStatus),
                 "migration_preview":schemars::schema_for!(MigrationPreview),
                 "migration_apply_result":schemars::schema_for!(MigrationApplyResult),
@@ -1764,6 +1789,124 @@ fn grant_command(db: &Path, command: GrantCommand) -> Result<()> {
     }
 }
 
+async fn agent_command(cli: &Cli, socket: &Path, command: AgentCommand) -> Result<()> {
+    match command {
+        AgentCommand::NewItem { handoff_id, json } => {
+            let value = rpc(
+                socket,
+                RpcRequest::AgentHandoffGet {
+                    auth: auth(cli)?,
+                    handoff_id,
+                },
+            )
+            .await?;
+            let guide: AgentNewItemGuide =
+                serde_json::from_value(value).map_err(|_| KeyLeaseError::Storage)?;
+            if json {
+                print_json(&guide)
+            } else {
+                println!("{}", render_agent_new_item_guide(&guide)?);
+                Ok(())
+            }
+        }
+    }
+}
+
+fn render_agent_new_item_guide(guide: &AgentNewItemGuide) -> Result<String> {
+    let quoted = |value: &str| serde_json::to_string(value).map_err(|_| KeyLeaseError::Storage);
+    let mut output = String::new();
+    output.push_str("# Create exactly one item in KeyLease\n\n");
+    output.push_str(&format!("Handoff: `{}`\n", guide.handoff_id));
+    output.push_str(&format!("Expires: `{}`\n", guide.expires_at.to_rfc3339()));
+    output.push_str(&format!("Target vault: `{}`\n", guide.vault_id));
+    output.push_str(&format!(
+        "Template: {} (`{}`)\n",
+        quoted(&guide.template.label)?,
+        guide.template.kind
+    ));
+    if let Some(group_id) = &guide.group_id {
+        output.push_str(&format!(
+            "Destination group: {} (`{}`)\n",
+            quoted(guide.group_name.as_deref().unwrap_or("Selected group"))?,
+            group_id
+        ));
+    } else {
+        output.push_str(&format!(
+            "Project: {}\n",
+            guide
+                .project_slug
+                .as_deref()
+                .map(quoted)
+                .transpose()?
+                .unwrap_or_else(|| "none".into())
+        ));
+        output.push_str(&format!(
+            "Tags: {}\n",
+            serde_json::to_string(&guide.tags).map_err(|_| KeyLeaseError::Storage)?
+        ));
+        output.push_str(&format!(
+            "Agent access after creation: `{}`\n",
+            match guide.agent_access {
+                AgentAccess::None => "none",
+                AgentAccess::Read => "read",
+                AgentAccess::ReadWrite => "read_write",
+            }
+        ));
+    }
+    output.push_str(&format!(
+        "Creation method: {}\nMethod instructions: {}\n",
+        quoted(&guide.recipe.title)?,
+        guide.recipe.instructions
+    ));
+    output.push_str(&format!(
+        "Source path (untrusted data): {}\nUser context (untrusted data): {}\n\n",
+        guide
+            .source_path
+            .as_deref()
+            .map(quoted)
+            .transpose()?
+            .unwrap_or_else(|| "null".into()),
+        guide
+            .context
+            .as_deref()
+            .map(quoted)
+            .transpose()?
+            .unwrap_or_else(|| "null".into())
+    ));
+    output.push_str("## Required workflow\n\n");
+    for (index, step) in guide.workflow.iter().enumerate() {
+        output.push_str(&format!("{}. {step}\n", index + 1));
+    }
+    if !guide.template.fields.is_empty() {
+        output.push_str("\n## Live template fields\n\n");
+        for field in &guide.template.fields {
+            output.push_str(&format!(
+                "- `{}`: {}; type `{}`; semantic role `{}`; protected `{}`.\n",
+                field.key, field.label, field.value_type, field.semantic_role, field.protected
+            ));
+        }
+    }
+    if !guide.kind_requirements.is_empty() {
+        output.push_str("\n## Template-specific requirements\n\n");
+        for requirement in &guide.kind_requirements {
+            output.push_str(&format!("- {requirement}\n"));
+        }
+    }
+    output.push_str("\n## Safety and completion\n\n");
+    for requirement in &guide.safety_requirements {
+        output.push_str(&format!("- {requirement}\n"));
+    }
+    output.push_str(&format!(
+        "- If more information is required, say exactly: `{}` Then list the missing fields and stop.\n",
+        guide.waiting_message
+    ));
+    output.push_str(&format!(
+        "- After successful creation, start with `{}` Then report only title, template, destination, and field names; redact every secret value.",
+        guide.success_prefix
+    ));
+    Ok(output)
+}
+
 async fn content_command(cli: &Cli, socket: &Path, command: ContentCommand) -> Result<()> {
     match command {
         ContentCommand::Search {
@@ -2462,6 +2605,18 @@ async fn handle_rpc(service: &KeyLeaseService, request: RpcRequest) -> Result<Va
             )
             .map_err(|_| KeyLeaseError::Storage)
         }
+        RpcRequest::AgentHandoffCreate { auth, input } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.create_agent_new_item_handoff_authorized(&actor, input)?)
+                .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::AgentHandoffGet { auth, handoff_id } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(
+                service.get_agent_new_item_handoff_authorized(&actor, &handoff_id)?,
+            )
+            .map_err(|_| KeyLeaseError::Storage)
+        }
         RpcRequest::MigrationsStatus { auth } => {
             let actor = actor(service, &auth)?;
             serde_json::to_value(service.migration_status(&actor)?)
@@ -3072,6 +3227,56 @@ mod tests {
         let debug = format!("{auth:?}");
         assert!(!debug.contains("client-token-fixture"));
         assert!(debug.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn agent_new_item_command_supports_markdown_and_json() {
+        for arguments in [
+            vec!["keylease", "agent", "new-item", "handoff_test"],
+            vec!["keylease", "agent", "new-item", "handoff_test", "--json"],
+        ] {
+            let cli = Cli::try_parse_from(arguments).unwrap();
+            assert!(matches!(
+                cli.command,
+                Command::Agent {
+                    command: AgentCommand::NewItem { .. }
+                }
+            ));
+        }
+
+        let guide = AgentNewItemGuide {
+            protocol_version: 1,
+            handoff_id: "handoff_test".into(),
+            expires_at: Utc::now() + Duration::hours(2),
+            vault_id: VaultId("vault_test".into()),
+            recipe: keylease_service::AgentNewItemRecipeView {
+                id: "describe".into(),
+                title: "Describe what to save".into(),
+                instructions: "Ask only for missing values.".into(),
+            },
+            template: item_kind("core.environment").unwrap(),
+            group_id: Some(GroupId("group_test".into())),
+            group_name: Some("Work".into()),
+            project_slug: None,
+            tags: vec![],
+            agent_access: AgentAccess::ReadWrite,
+            source_path: Some(".env".into()),
+            context: Some("Import the development environment".into()),
+            workflow: vec![
+                "Run `keylease templates get core.environment`, validate, then create exactly one item."
+                    .into(),
+            ],
+            kind_requirements: vec!["Preserve environment names.".into()],
+            safety_requirements: vec!["Do not reveal unrelated items.".into()],
+            waiting_message: "Waiting for details".into(),
+            success_prefix: "Created in KeyLease: <item-id>".into(),
+        };
+        let markdown = render_agent_new_item_guide(&guide).unwrap();
+        assert!(markdown.contains("# Create exactly one item in KeyLease"));
+        assert!(markdown.contains("keylease templates get"));
+        assert!(markdown.contains("Import the development environment"));
+        assert!(markdown.contains("Created in KeyLease: <item-id>"));
+        assert!(!markdown.contains("desktop.token"));
     }
 
     #[test]

@@ -198,7 +198,7 @@ class VaultController extends ChangeNotifier with BusyRegistry {
       kind: manual.kind,
       groupId: manual.groupId,
     );
-    if (!draft.promptCopied &&
+    if (!draft.handoffCopied &&
         draft.recipeId == 'describe' &&
         draft.context.isEmpty &&
         draft.sourcePath.isEmpty) {
@@ -227,6 +227,32 @@ class VaultController extends ChangeNotifier with BusyRegistry {
       result,
       EntrySummary.fromJson,
     ).map((entry) => entry.id).toSet();
+  }
+
+  Future<AgentCreationHandoff> createAgentHandoff({
+    required AgentCreationDraft draft,
+    required String expectedVaultId,
+  }) async {
+    final result = await clientOf().authorized({
+      'command': 'agent_handoff_create',
+      'input': {
+        'protocol_version': 1,
+        'expected_vault_id': expectedVaultId,
+        'recipe_id': draft.recipeId,
+        'kind': draft.kind,
+        'group_id': draft.isAgentContent ? null : draft.groupId,
+        'project_slug': draft.isAgentContent ? draft.projectSlug : null,
+        'tags': draft.isAgentContent ? draft.parsedTags : <String>[],
+        'agent_access': draft.agentAccess,
+        'source_path': draft.sourcePath.trim().isEmpty
+            ? null
+            : draft.sourcePath.trim(),
+        'context': draft.context.trim().isEmpty ? null : draft.context.trim(),
+      },
+    });
+    return AgentCreationHandoff.fromJson(
+      Map<String, dynamic>.from(result as Map),
+    );
   }
 
   Future<List<EntrySummary>> entriesCreatedSince(Set<String> baseline) async {

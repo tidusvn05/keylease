@@ -48,28 +48,6 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
     super.dispose();
   }
 
-  TemplateDefinition? get _template {
-    for (final template in widget.app.vault.templates) {
-      if (template.kind == draft.kind) return template;
-    }
-    return null;
-  }
-
-  String get _vaultName {
-    for (final profile in widget.app.vaultProfiles) {
-      if (profile.active) return profile.name;
-    }
-    return 'Active vault';
-  }
-
-  String? _groupName(String? id) {
-    if (id == null) return null;
-    for (final group in widget.app.vault.groups) {
-      if (group.id == id) return _groupBreadcrumb(group);
-    }
-    return null;
-  }
-
   String _groupBreadcrumb(VaultGroup group) {
     final groups = widget.app.vault.groups;
     final names = <String>[group.name];
@@ -95,7 +73,7 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
       ..context = _context.text
       ..sourcePath = _sourcePath.text
       ..tags = _tags.text
-      ..promptCopied = false;
+      ..invalidateHandoff();
     if (mounted) {
       setState(() {
         _message = null;
@@ -118,7 +96,7 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
     setState(() {
       draft
         ..kind = kind
-        ..promptCopied = false;
+        ..invalidateHandoff();
       _message = null;
       _candidates = const [];
     });
@@ -137,17 +115,11 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
     return null;
   }
 
-  String _prompt() => AgentCreationPromptBuilder.build(
-    draft: draft,
-    vaultId: widget.app.status?.vaultId ?? 'unknown',
-    vaultName: _vaultName,
-    templateLabel: _template?.label ?? widget.app.vault.kindLabel(draft.kind),
-    groupName: _groupName(draft.groupId),
-    template: _template,
-  );
-
-  Future<void> _copyPrompt() async {
-    _sync();
+  Future<void> _copyAgentInstruction() async {
+    draft
+      ..context = _context.text
+      ..sourcePath = _sourcePath.text
+      ..tags = _tags.text;
     final validation = _validationError();
     if (validation != null) {
       setState(() {
@@ -161,18 +133,26 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
     });
     try {
       draft.baselineEntryIds ??= await widget.app.vault.snapshotEntryIds();
+      var handoff = draft.handoff;
+      if (handoff == null || handoff.expired) {
+        handoff = await widget.app.vault.createAgentHandoff(
+          draft: draft,
+          expectedVaultId: widget.app.status!.vaultId!,
+        );
+        draft.handoff = handoff;
+      }
       final copied = await widget.app.copySensitive(
-        _prompt(),
+        handoff.clipboardText,
         clearAfter: const Duration(seconds: 120),
       );
       if (!mounted) return;
       if (copied) {
-        setState(() => draft.promptCopied = true);
+        setState(() => draft.handoffCopied = true);
         showFToast(
           context: context,
-          title: const Text('Agent prompt copied'),
+          title: const Text('Agent command copied'),
           description: const Text(
-            'Paste it into your agent and answer any follow-up questions until it returns an item ID.',
+            'Paste the short instruction into your agent. The CLI will provide the complete workflow.',
           ),
         );
       }
@@ -200,7 +180,8 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
         setState(() {
           _message = const UserMessage(
             title: 'The agent has not created an item yet',
-            detail: 'If the agent asked for a title or fields, reply in that chat first. Refresh only after it says “Created in KeyLease” and returns an item ID.',
+            detail:
+                'If the agent asked for a title or fields, reply in that chat first. Refresh only after it says “Created in KeyLease” and returns an item ID.',
           );
         });
       } else {
@@ -228,15 +209,20 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
   Widget build(BuildContext context) {
     final theme = context.theme;
     final templates = widget.app.vault.templates;
-    final prompt = _prompt();
+    final handoff = draft.handoff;
+    final launchText = handoff == null || handoff.expired
+        ? 'KeyLease will prepare a temporary CLI handoff when you copy.'
+        : handoff.clipboardText;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const GuidanceCard(
           key: ValueKey('agent-driven-guidance'),
           title: 'Create this item with a local agent',
-          summary: 'Choose a starting point, copy the generated instructions, and paste them into Codex or another agent with terminal access.',
-          useWhen: 'The agent connects through the KeyLease CLI. It never needs your master password or a pasted Vault secret.',
+          summary:
+              'Choose a starting point, then copy one short command into Codex or another agent with terminal access.',
+          useWhen:
+              'The KeyLease CLI supplies the complete, version-matched workflow. The handoff expires after two hours and never needs your master password.',
         ),
         const SizedBox(height: 20),
         const _StepTitle(number: 1, title: 'Choose a starting point'),
@@ -302,7 +288,7 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
             onChange: (value) => setState(() {
               draft
                 ..projectSlug = value
-                ..promptCopied = false;
+                ..invalidateHandoff();
             }),
           ),
           const SizedBox(height: 10),
@@ -328,7 +314,7 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
               onChange: (value) => setState(() {
                 draft
                   ..agentAccess = value ?? 'read_write'
-                  ..promptCopied = false;
+                  ..invalidateHandoff();
               }),
             ),
           ),
@@ -349,7 +335,7 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
             onChange: (value) => setState(() {
               draft
                 ..groupId = value
-                ..promptCopied = false;
+                ..invalidateHandoff();
             }),
           ),
         const SizedBox(height: 10),
@@ -379,7 +365,7 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
           ),
         ),
         const SizedBox(height: 24),
-        const _StepTitle(number: 3, title: 'Copy and run with your agent'),
+        const _StepTitle(number: 3, title: 'Copy the CLI handoff'),
         const SizedBox(height: 10),
         DecoratedBox(
           decoration: BoxDecoration(
@@ -387,19 +373,30 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
             border: Border.all(color: theme.colors.border),
             borderRadius: BorderRadius.circular(8),
           ),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 300),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(12),
-              child: SelectableText(
-                prompt,
-                key: const ValueKey('agent-prompt-preview'),
-                style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 12,
-                  height: 1.4,
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SelectableText(
+                  launchText,
+                  key: const ValueKey('agent-handoff-preview'),
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    height: 1.4,
+                  ),
                 ),
-              ),
+                if (handoff != null && !handoff.expired) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Available until ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(handoff.expiresAt))}',
+                    style: theme.typography.body.sm.copyWith(
+                      color: theme.colors.mutedForeground,
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
         ),
@@ -407,8 +404,8 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
         Align(
           alignment: Alignment.centerRight,
           child: FButton(
-            key: const ValueKey('agent-copy-prompt'),
-            onPress: _copying ? null : _copyPrompt,
+            key: const ValueKey('agent-copy-command'),
+            onPress: _copying ? null : _copyAgentInstruction,
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -417,7 +414,7 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
                   size: 16,
                 ),
                 const SizedBox(width: 7),
-                Text(_copying ? 'Preparing…' : 'Copy agent prompt'),
+                Text(_copying ? 'Preparing…' : 'Copy agent command'),
               ],
             ),
           ),
@@ -437,7 +434,7 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
           child: FButton(
             key: const ValueKey('agent-refresh-review'),
             variant: FButtonVariant.outline,
-            onPress: !draft.promptCopied || _refreshing
+            onPress: !draft.handoffCopied || _refreshing
                 ? null
                 : _refreshAndReview,
             child: Row(

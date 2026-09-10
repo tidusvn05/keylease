@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keylease_desktop/app/keylease_app.dart';
-import 'package:keylease_desktop/core/models/models.dart';
 import 'package:keylease_desktop/core/state/agent_creation_draft.dart';
 import 'package:keylease_desktop/core/state/app_controller.dart';
 import 'package:material_ui/material_ui.dart';
@@ -52,6 +51,15 @@ _pump(
   final harness = buildController(
     script: (client) {
       client.value('templates_list', _templates);
+      client.value('agent_handoff_create', {
+        'protocol_version': 1,
+        'handoff_id': 'handoff-test',
+        'command': 'keylease agent new-item handoff-test',
+        'expires_at': DateTime.now()
+            .add(const Duration(hours: 2))
+            .toUtc()
+            .toIso8601String(),
+      });
       script?.call(client);
     },
   );
@@ -67,69 +75,20 @@ _pump(
 }
 
 void main() {
-  test(
-    'entry prompt validates then creates immediately in the expected vault',
-    () {
-      final draft =
-          AgentCreationDraft(kind: 'core.ssh_server', groupId: 'group-work')
-            ..recipeId = 'ssh_topology'
-            ..context = 'One bastion and one application server';
-      final prompt = AgentCreationPromptBuilder.build(
-        draft: draft,
-        vaultId: 'vault-1',
-        vaultName: 'Primary Vault',
-        templateLabel: 'SSH Server',
-        groupName: 'Work',
-        template: const TemplateDefinition(
-          kind: 'core.ssh_server',
-          label: 'SSH Server',
-          family: 'developer',
-          markdownNotes: true,
-          fields: [],
-        ),
-      );
+  test('handoff receipt produces only a short CLI navigation message', () {
+    final handoff = AgentCreationHandoff.fromJson({
+      'handoff_id': 'handoff-test',
+      'command': 'keylease agent new-item handoff-test',
+      'expires_at': DateTime.now()
+          .add(const Duration(hours: 2))
+          .toUtc()
+          .toIso8601String(),
+    });
 
-      expect(prompt, contains('Run `keylease status`'));
-      expect(prompt, contains('vault ID is not `vault-1`'));
-      expect(prompt, contains('entries create --input-json -'));
-      expect(prompt, contains('--dry-run'));
-      expect(prompt, contains('create it immediately'));
-      expect(prompt.toLowerCase(), contains('create exactly one item'));
-      expect(
-        prompt,
-        contains(
-          'Waiting for details — no KeyLease item has been created yet.',
-        ),
-      );
-      expect(prompt, contains('Created in KeyLease: <item-id>'));
-      expect(prompt, contains('ssh_connect_via'));
-      expect(prompt, contains('Never save an `IdentityFile` path'));
-      expect(prompt, isNot(contains('desktop.token')));
-      expect(prompt, isNot(contains('client-token-file')));
-      expect(prompt, isNot(contains('master password:')));
-    },
-  );
-
-  test('content prompt creates Markdown and applies selected agent access', () {
-    final draft = AgentCreationDraft(kind: 'core.prompt')
-      ..recipeId = 'prompt'
-      ..projectSlug = 'leasegate'
-      ..tags = 'agent, reusable'
-      ..agentAccess = 'read_write';
-    final prompt = AgentCreationPromptBuilder.build(
-      draft: draft,
-      vaultId: 'vault-1',
-      vaultName: 'Primary Vault',
-      templateLabel: 'Prompt',
-      groupName: null,
-      template: null,
-    );
-
-    expect(prompt, contains('keylease content create --type prompt'));
-    expect(prompt, contains('--project leasegate'));
-    expect(prompt, contains('--tag "agent"'));
-    expect(prompt, contains('content access <id> read-write'));
-    expect(prompt, isNot(contains('entries create')));
+    expect(handoff.clipboardText, contains(handoff.command));
+    expect(handoff.clipboardText.length, lessThan(200));
+    expect(handoff.clipboardText, isNot(contains('vault-1')));
+    expect(handoff.clipboardText, isNot(contains('desktop.token')));
   });
 
   testWidgets('New Item switches modes without losing the manual draft', (
@@ -149,7 +108,7 @@ void main() {
 
     expect(find.text('Fill manually'), findsOneWidget);
     expect(find.byKey(const ValueKey('agent-driven-guidance')), findsOneWidget);
-    expect(find.byKey(const ValueKey('agent-prompt-preview')), findsOneWidget);
+    expect(find.byKey(const ValueKey('agent-handoff-preview')), findsOneWidget);
     expect(find.byKey(const ValueKey('entry-save')), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('entry-creation-mode')));
@@ -161,7 +120,7 @@ void main() {
     expect(harness.app.vault.activeDraft?.title, 'Keep this title');
   });
 
-  testWidgets('copies a scoped prompt and refreshes into the created item', (
+  testWidgets('copies a scoped handoff and refreshes into the created item', (
     tester,
   ) async {
     var created = false;
@@ -188,18 +147,36 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('entry-creation-mode')));
     await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('agent-context')),
+      'Create the development login from the current task',
+    );
 
-    final copy = find.byKey(const ValueKey('agent-copy-prompt'));
+    final copy = find.byKey(const ValueKey('agent-copy-command'));
     await tester.drag(find.byType(ListView).last, const Offset(0, -1400));
     await tester.pumpAndSettle();
     await tester.tap(copy);
     await tester.pumpAndSettle();
 
     expect(harness.adapter.copied, hasLength(1));
-    final prompt = harness.adapter.copied.single;
-    expect(prompt, contains('Target vault: "Primary Vault" (`vault-1`)'));
-    expect(prompt, contains('Destination group: "Work" (`group-work`)'));
-    expect(prompt, contains('Do not create a second item'));
+    final instruction = harness.adapter.copied.single;
+    expect(instruction.length, lessThan(200));
+    expect(instruction, contains('keylease agent new-item handoff-test'));
+    expect(instruction, isNot(contains('vault-1')));
+    expect(instruction, isNot(contains('group-work')));
+    expect(instruction, isNot(contains('development login')));
+
+    final handoffRequest = harness.client.calls.lastWhere(
+      (request) => request['command'] == 'agent_handoff_create',
+    );
+    final input = Map<String, dynamic>.from(handoffRequest['input'] as Map);
+    expect(input['expected_vault_id'], 'vault-1');
+    expect(input['group_id'], 'group-work');
+    expect(input['kind'], 'core.login');
+    expect(
+      input['context'],
+      'Create the development login from the current task',
+    );
 
     await tester.pump(const Duration(seconds: 4));
     final refresh = find.byKey(const ValueKey('agent-refresh-review'));
