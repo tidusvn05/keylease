@@ -1,0 +1,11 @@
+analyzer:
+  exclude:
+    - build/**
+    - android/**
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    # The adapter takes public-typed parameters and stores them privately so
+    # the constructor stays a stable API while the fields stay internal.
+    prefer_initializing_formals: false

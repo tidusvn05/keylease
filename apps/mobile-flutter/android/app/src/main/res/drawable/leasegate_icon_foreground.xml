@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The vault app's launcher mark.
+     It shares the Gateway Blue gate glyph with `Leasegate Approval` so the two
+     read as one family, but replaces the mint chevron with a keyhole. Two
+     Leasegate apps on one launcher must not be indistinguishable.
+
+     minSdk is 26, so every supported device uses this adaptive foreground and
+     the legacy mipmap PNGs are never drawn. That is why differentiating here
+     is enough, and why it needs no image tooling. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#2F72FF"
+        android:pathData="M29.3,79.9V42.7C29.3,32.4 37.6,24.1 47.9,24.1H69.9C75.3,24.1 79.6,28.4 79.6,33.8V49.1H66.5V37.2H47.9C44.8,37.2 42.3,39.7 42.3,42.7V79.9Z" />
+    <path
+        android:fillColor="#36E3A2"
+        android:pathData="M51.6,57.4a8,8 0 1,1 16,0a8,8 0 1,1 -16,0ZM56.6,62.2h6v0L65.4,82.6h-11.6Z" />
+</vector>

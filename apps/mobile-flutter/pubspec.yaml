@@ -1,0 +1,28 @@
+name: leasegate_mobile
+description: Leasegate Vault for Android.
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.13.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Everything above the transport. See packages/leasegate_vault_ui.
+  leasegate_vault_ui:
+    path: ../../packages/leasegate_vault_ui
+  # Flutter 3.47 moved Material out of the SDK; runApp comes from here.
+  material_ui: 1.1.1
+  # dart:ffi helpers (calloc). The bridge itself is hand-written; see
+  # docs/adr/0004 for why neither flutter_rust_bridge nor uniffi is used.
+  ffi: ^2.1.3
+  path_provider: ^2.1.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
