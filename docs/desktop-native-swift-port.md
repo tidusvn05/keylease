@@ -37,6 +37,19 @@ embed + chạy như hiện tại.
 | Golden vectors | `test-vectors/rpc/golden/` (25 file) | capture từ daemon thật, secrets đã scrub |
 | Capture script | `scripts/capture-rpc-golden.py` | tạo vault/client/grant tạm, drive socket, ghi vector |
 
+`apps/desktop-macos-app/` — SwiftPM executable `KeyLease` (SwiftUI, macOS 14),
+package riêng trỏ về `KeyLeaseCore` để Linux CI không đụng code Darwin:
+
+| Thành phần | File | Ghi chú |
+|---|---|---|
+| App shell | `Sources/KeyLease/KeyLeaseApp.swift` | `@main`, WindowGroup + `Settings` scene, menu Vault ⌘R/⌘L |
+| Phase machine | `Sources/KeyLease/AppController.swift` | port `AppController`: starting → inspect → service → locked → ready |
+| Vault state | `Sources/KeyLease/VaultController.swift` | search/list/`entries_view`/`entries_reveal`/`entries_totp` |
+| RuntimeService | `Sources/KeyLease/RuntimeService.swift` | port `LocalRuntimeBridge` — Process + `SMAppService.agent`, fallback daemon tách rời khi `swift run` |
+| SecurityService | `Sources/KeyLease/SecurityService.swift` | `NSPasteboard` copy + clear 30s, sleep/screen-lock → `lock`, openExternalUrl/Google host check |
+| Views | `Sources/KeyLease/Views/` | RootView phase router, Unlock, Onboarding (`create`), Repair, NavigationSplitView + entry list/detail, Settings tối thiểu |
+| Packaging | `scripts/package-macos-swift.sh` | `swift build` universal2 → `.app` bundle (không cần .xcodeproj) → tái dùng `prepare-macos-runtime.sh` cho helper + plist → codesign → `--install` thay `/Applications` |
+
 Test: `cd apps/desktop-macos && swift test` — 21 test, gồm:
 
 - `WireCommandParityTests` — so `commands.json` (giống `parity.rs` bên Rust)
@@ -61,29 +74,24 @@ Trên Mac: Xcode ≥16 là đủ.
 
 ## Còn lại — cần máy Mac
 
-### 1. Xcode project + shell (Phase 2)
+### 1. Shell hoàn chỉnh (Phase 2)
 
-- `apps/desktop-macos/KeyLease.xcodeproj`: app target `KeyLease`, bundle id
-  khớp bản Flutter (`app.keylease.*`), deployment macOS 14, link local package
-  `KeyLeaseCore`.
-- `NavigationSplitView` shell: sidebar (Vault/Connections/Approvals/Activity/
-  Migrations/Settings) + list/detail resizable — thay `adaptive_shell.dart`.
-- Port design tokens từ `ui/tokens/keylease_tokens.dart` (~127 dòng) sang
-  SwiftUI `Color`/`Font` extensions.
+- ~~Xcode project~~ → đã chọn **SwiftPM executable + `package-macos-swift.sh`**,
+  không cần `.xcodeproj` trong git.
+- `NavigationSplitView` shell đã có (milestone 1); còn: port design tokens từ
+  `ui/tokens/keylease_tokens.dart` (~127 dòng) sang SwiftUI `Color`/`Font`
+  extensions, polish layout theo `docs/macos-ui-ux-improvement-plan.md`.
 
 ### 2. RuntimeService (port từ `MainFlutterWindow.swift` runtime channel)
 
-- Gọi `keylease desktop inspect/provision/listVaults/createVault/switchVault/
-  renameVault/inspectSource` qua `Process` — logic đã có sẵn, bỏ lớp
-  MethodChannel.
-- Embed `keylease` binary vào `Contents/Resources` (cargo build
-  `x86_64-apple-darwin` + `aarch64-apple-darwin`, lipo universal2),
-  `Contents/Library/LaunchAgents/app.keylease.service.plist`, đăng ký qua
-  `SMAppService.agent` (kèm xử lý `BACKGROUND_APPROVAL_REQUIRED`).
-- `vaultChanged` push: hiện tại helper không push; nếu giữ nguyên semantics
-  thì app poll/publish giống Dart (`publishVaultChange` + distributed
-  notification hoặc XPC giữa helper/app — xem lại cách channel hiện tại
-  nhận event).
+- ✅ `inspect/provision/listVaults/createVault/switchVault/renameVault/
+  inspectSource` qua `Process` + `SMAppService.agent` (xử lý
+  `BACKGROUND_APPROVAL_REQUIRED`) — `RuntimeService.swift`.
+- ✅ Embed helper: `package-macos-swift.sh` tái dùng `prepare-macos-runtime.sh`
+  (universal2 + `Contents/Library/LaunchAgents` plist + codesign).
+- Còn: `vaultChanged` push giữa nhiều window/instance — `publishVaultChange`
+  + distributed notification (hoặc XPC). Milestone 1 chỉ có 1 window nên
+  chưa cần.
 
 ### 3. State layer
 
@@ -111,16 +119,14 @@ Port `core/state/` (~2.1k dòng Dart) sang `@Observable` classes:
 
 ### 5. SecurityService (port từ `MainFlutterWindow.swift` security channel)
 
-- `NSPasteboard`: copy secret + clear sau 30s chỉ khi `changeCount` không đổi;
-  clear khi sleep/screen-lock/manual lock.
-- `NSWorkspace` sleep/wake + `DistributedNotificationCenter`
-  (`com.apple.screenIsLocked`) → `lock` RPC.
-- `NSOpenPanel` security-scoped cho client token file; SSH key discovery/picker.
-- TOTP QR: chọn ảnh (`CIDetector`/Vision) + screen scan (`ScreenCaptureKit` +
-  `SCContentSharingPicker`, xin quyền Screen Recording).
-- `openGoogleAuthorization`: chỉ mở URL host `accounts.google.com`;
-  `openExternalUrl` cho http(s) thường.
-- Settings window riêng (SwiftUI `Settings` scene).
+- ✅ `NSPasteboard` copy + clear 30s theo `changeCount`; clear khi
+  sleep/screen-lock/manual lock (`SecurityService.swift`).
+- ✅ `NSWorkspace.willSleepNotification` + `com.apple.screenIsLocked` → `lock`
+  RPC; `openGoogleAuthorization` chỉ `accounts.google.com`, `openExternalUrl`
+  chỉ http(s); `Settings` scene tối thiểu đã có.
+- Còn: `NSOpenPanel` security-scoped cho client token file; SSH key
+  discovery/picker; TOTP QR (Vision + `SCContentSharingPicker`, xin quyền
+  Screen Recording).
 
 ### 6. Menu bar + shortcut + polish
 

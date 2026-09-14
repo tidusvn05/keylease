@@ -70,10 +70,9 @@ final class FakeDaemon: @unchecked Sendable {
 
     init(responder: @escaping (JSONValue) -> JSONValue) throws {
         self.responder = responder
-        socketPath = NSTemporaryDirectory()
-            .appendingPathComponent(
-                "keylease-test-\(UUID().uuidString).sock"
-            )
+        // NSTemporaryDirectory() can push the path past the ~104-byte
+        // sun_path limit under Xcode; /tmp stays short on both platforms.
+        socketPath = "/tmp/keylease-test-\(UUID().uuidString).sock"
         #if os(Linux)
             let streamType = Int32(SOCK_STREAM.rawValue)
         #else

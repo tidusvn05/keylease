@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Build the native Swift app and package it as KeyLease.app.
+#
+#   ./scripts/package-macos-swift.sh            # Release universal2 → build/macos-swift/KeyLease.app
+#   ./scripts/package-macos-swift.sh --debug    # Debug, host arch only
+#   ./scripts/package-macos-swift.sh --install  # also replace /Applications/KeyLease.app
+#
+# The script assembles the bundle by hand — there is no .xcodeproj:
+#   Contents/MacOS/KeyLease                  SwiftPM executable
+#   Contents/Resources/keylease              Rust helper (universal2, via prepare-macos-runtime.sh)
+#   Contents/Library/LaunchAgents/…          LaunchAgent plist for the daemon
+#   Contents/Info.plist                      apps/desktop-macos-app/Info.plist
+#
+# Environment overrides:
+#   EXPANDED_CODE_SIGN_IDENTITY   Signing identity (default: ad-hoc "-")
+#   KEYLEASE_APPLICATIONS_DIR     Install target (default: /Applications)
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+APP_PACKAGE="$REPO_DIR/apps/desktop-macos-app"
+CONFIGURATION="Release"
+INSTALL=false
+
+for argument in "$@"; do
+  case "$argument" in
+    --debug) CONFIGURATION="Debug" ;;
+    --install) INSTALL=true ;;
+    -h|--help)
+      sed -n '2,20p' "$0"
+      exit 0
+      ;;
+    *)
+      echo "error: unknown argument: $argument" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  echo "error: packaging must run on macOS" >&2
+  exit 1
+fi
+
+CONFIG_LOWER="$(tr '[:upper:]' '[:lower:]' <<<"$CONFIGURATION")"
+BUILD_ROOT="$APP_PACKAGE/.build"
+
+echo "== Building KeyLease ($CONFIGURATION) =="
+if [[ "$CONFIGURATION" == "Release" ]]; then
+  swift build --package-path "$APP_PACKAGE" -c release \
+    --arch arm64 --arch x86_64
+  APP_BINARY=""
+  for candidate in \
+    "$BUILD_ROOT/apple/Products/Release/KeyLease" \
+    "$BUILD_ROOT/release/KeyLease"; do
+    if [[ -f "$candidate" ]]; then
+      APP_BINARY="$candidate"
+      break
+    fi
+  done
+else
+  swift build --package-path "$APP_PACKAGE"
+  APP_BINARY=""
+  for candidate in \
+    "$BUILD_ROOT/debug/KeyLease" \
+    "$BUILD_ROOT/$(uname -m)-apple-macosx/debug/KeyLease"; do
+    if [[ -f "$candidate" ]]; then
+      APP_BINARY="$candidate"
+      break
+    fi
+  done
+fi
+
+if [[ -z "$APP_BINARY" || ! -f "$APP_BINARY" ]]; then
+  echo "error: built executable not found under $BUILD_ROOT" >&2
+  exit 1
+fi
+
+APP="$REPO_DIR/build/macos-swift/KeyLease.app"
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+
+cp "$APP_BINARY" "$APP/Contents/MacOS/KeyLease"
+cp "$APP_PACKAGE/Info.plist" "$APP/Contents/Info.plist"
+
+# Rust helper + LaunchAgent plist, signed with the same identity as the app.
+"$SCRIPT_DIR/prepare-macos-runtime.sh" "$APP/Contents" "$CONFIGURATION"
+
+echo "== Signing =="
+codesign --force --options runtime \
+  --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" "$APP"
+codesign --verify --deep --strict "$APP"
+echo "built $APP"
+
+if [[ "$INSTALL" == true ]]; then
+  APPLICATIONS_DIR="${KEYLEASE_APPLICATIONS_DIR:-/Applications}"
+  INSTALLED_APP="$APPLICATIONS_DIR/KeyLease.app"
+  BACKUP_APP=""
+  if [[ -d "$INSTALLED_APP" ]]; then
+    BACKUP_APP="$(mktemp -d)/KeyLease.app"
+    mv "$INSTALLED_APP" "$BACKUP_APP"
+  fi
+  if ditto "$APP" "$INSTALLED_APP"; then
+    [[ -z "$BACKUP_APP" ]] || rm -rf "$BACKUP_APP"
+    echo "installed $INSTALLED_APP"
+  else
+    [[ -z "$BACKUP_APP" ]] || mv "$BACKUP_APP" "$INSTALLED_APP"
+    echo "error: install failed; previous app restored" >&2
+    exit 1
+  fi
+fi

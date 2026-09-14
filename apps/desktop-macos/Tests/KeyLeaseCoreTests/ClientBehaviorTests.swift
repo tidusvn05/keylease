@@ -94,8 +94,8 @@ final class ClientBehaviorTests: XCTestCase {
         // A daemon that closes without writing is not expressible through
         // FakeDaemon's responder, so use a raw socket that accepts then
         // closes.
-        let path = NSTemporaryDirectory()
-            .appendingPathComponent("keylease-test-\(UUID().uuidString).sock")
+        // Short path on purpose: sun_path is ~104 bytes on macOS.
+        let path = "/tmp/keylease-test-\(UUID().uuidString).sock"
         let rpc = client(socketPath: path, tokenPath: try writeTokenFile())
         let closer = Thread {
             #if os(Linux)
