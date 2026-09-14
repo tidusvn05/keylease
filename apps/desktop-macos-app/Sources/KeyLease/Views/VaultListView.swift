@@ -7,8 +7,11 @@ struct VaultListView: View {
     let app: AppController
 
     var body: some View {
-        List(app.vault.entries, selection: Bindable(app.vault).selectedId) {
-            entry in
+        List(
+            app.vault.entries,
+            id: \.id,
+            selection: Bindable(app.vault).selectedId
+        ) { entry in
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
                     Text(entry.title).font(.headline)

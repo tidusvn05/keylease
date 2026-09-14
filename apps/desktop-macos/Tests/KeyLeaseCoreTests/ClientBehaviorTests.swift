@@ -1,6 +1,12 @@
 import Foundation
 import XCTest
 
+#if os(Linux)
+    import Glibc
+#else
+    import Darwin
+#endif
+
 @testable import KeyLeaseCore
 
 /// Client-side guarantees that do not need a recorded vector: token file
@@ -29,8 +35,7 @@ final class ClientBehaviorTests: XCTestCase {
 
     func testRejectsSymlinkTokenFile() async throws {
         let target = try writeTokenFile()
-        let link = NSTemporaryDirectory()
-            .appendingPathComponent("keylease-test-\(UUID().uuidString)")
+        let link = temporaryPath("keylease-test-\(UUID().uuidString)")
         try FileManager.default.createSymbolicLink(
             atPath: link, withDestinationPath: target
         )
@@ -66,8 +71,7 @@ final class ClientBehaviorTests: XCTestCase {
 
     func testRefusedConnectionIsTransportError() async throws {
         let rpc = client(
-            socketPath: NSTemporaryDirectory()
-                .appendingPathComponent("keylease-absent.sock"),
+            socketPath: temporaryPath("keylease-absent.sock"),
             tokenPath: try writeTokenFile()
         )
         await assertThrowsCode(.transport) {
@@ -117,7 +121,17 @@ final class ClientBehaviorTests: XCTestCase {
             }
             _ = withUnsafePointer(to: &address) { ptr in
                 ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                    bind(listener, sa, socklen_t(MemoryLayout<sockaddr_un>.size))
+                    #if os(Linux)
+                        Glibc.bind(
+                            listener, sa,
+                            socklen_t(MemoryLayout<sockaddr_un>.size)
+                        )
+                    #else
+                        Darwin.bind(
+                            listener, sa,
+                            socklen_t(MemoryLayout<sockaddr_un>.size)
+                        )
+                    #endif
                 }
             }
             _ = listen(listener, 1)

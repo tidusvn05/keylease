@@ -21,6 +21,12 @@ let repositoryRoot = URL(fileURLWithPath: #filePath)
 let rpcTestVectors = repositoryRoot
     .appendingPathComponent("test-vectors/rpc")
 
+func temporaryPath(_ component: String) -> String {
+    URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        .appendingPathComponent(component)
+        .path
+}
+
 func loadGolden(_ name: String) throws -> (
     request: JSONValue, response: JSONValue
 ) {
@@ -45,8 +51,7 @@ func writeTokenFile(
     _ contents: String = "<redacted-client-token>",
     mode: mode_t = 0o600
 ) throws -> String {
-    let path = NSTemporaryDirectory()
-        .appendingPathComponent("keylease-test-\(UUID().uuidString).token")
+    let path = temporaryPath("keylease-test-\(UUID().uuidString).token")
     try contents.write(toFile: path, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes(
         [.posixPermissions: NSNumber(value: Int(mode))],

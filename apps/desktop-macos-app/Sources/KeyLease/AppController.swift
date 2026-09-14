@@ -163,15 +163,13 @@ final class AppController {
         do {
             _ = try await client.authorized(.groupsList)
         } catch let error as KeyLeaseError {
-            enter(
-                switch error.code {
-                case .denied: AppPhase.permissionDenied
-                case .vaultLocked: AppPhase.locked
-                case .client: AppPhase.repairRequired
-                default: AppPhase.serviceUnavailable
-                },
-                UserMessage(error)
-            )
+            let errorPhase = switch error.code {
+            case .denied: AppPhase.permissionDenied
+            case .vaultLocked: AppPhase.locked
+            case .client: AppPhase.repairRequired
+            default: AppPhase.serviceUnavailable
+            }
+            enter(errorPhase, UserMessage(error))
             return
         } catch {
             enter(.serviceUnavailable, UserMessage(error))

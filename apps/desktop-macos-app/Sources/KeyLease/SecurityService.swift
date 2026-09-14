@@ -95,9 +95,11 @@ final class SecurityService {
     }
 
     deinit {
-        for token in observerTokens {
-            NSWorkspace.shared.notificationCenter.removeObserver(token)
-            DistributedNotificationCenter.default().removeObserver(token)
+        MainActor.assumeIsolated {
+            for token in observerTokens {
+                NSWorkspace.shared.notificationCenter.removeObserver(token)
+                DistributedNotificationCenter.default().removeObserver(token)
+            }
         }
     }
 }
