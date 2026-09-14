@@ -1,0 +1,41 @@
+{
+  "name": "08_entries_create",
+  "request": {
+    "command": "entries_create",
+    "input": {
+      "group_id": "group_01a09c2f073273b3987e1e7b707426d5",
+      "kind": "core.login",
+      "title": "Golden Login",
+      "username": "golden@example.com",
+      "password": "<redacted-secret>",
+      "url": "https://example.com",
+      "totp_uri": "otpauth://totp/Golden:golden@example.com?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=Golden&algorithm=SHA1&digits=6&period=30"
+    },
+    "idempotency_key": "golden-entry-1",
+    "dry_run": false,
+    "auth": {
+      "agent_id": "agent_golden-capture",
+      "token": "<redacted-client-token>",
+      "session_id": "golden"
+    }
+  },
+  "response": {
+    "ok": true,
+    "result": {
+      "favorite": false,
+      "group_id": "group_01a09c2f073273b3987e1e7b707426d5",
+      "has_notes": false,
+      "has_password": true,
+      "has_totp": true,
+      "id": "item_01a09c2f074076c3b7d9fbbbe322b785",
+      "kind": "core.login",
+      "revision": 1,
+      "title": "Golden Login",
+      "updated_at": "2026-09-13T19:12:02.880221675Z",
+      "urls": [
+        "https://example.com"
+      ],
+      "username": "golden@example.com"
+    }
+  }
+}

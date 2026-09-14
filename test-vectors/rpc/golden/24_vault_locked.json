@@ -1,0 +1,19 @@
+{
+  "name": "24_vault_locked",
+  "request": {
+    "command": "entries_search",
+    "auth": {
+      "agent_id": "agent_golden-capture",
+      "token": "<redacted-client-token>",
+      "session_id": "golden"
+    },
+    "query": "golden"
+  },
+  "response": {
+    "error": {
+      "error": "vault_locked",
+      "requires_user_action": true
+    },
+    "ok": false
+  }
+}

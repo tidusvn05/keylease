@@ -1,0 +1,21 @@
+{
+  "name": "03_status_unlocked",
+  "request": {
+    "command": "status",
+    "auth": {
+      "agent_id": "agent_golden-capture",
+      "token": "<redacted-client-token>",
+      "session_id": "golden"
+    }
+  },
+  "response": {
+    "ok": true,
+    "result": {
+      "contract_version": 1,
+      "idle_expires_at": "2026-09-13T20:12:02.862737893Z",
+      "locked": false,
+      "service_version": "0.1.0",
+      "vault_id": "vault_01a09c2ec63e7553b678a27d85246a2d"
+    }
+  }
+}

@@ -7,6 +7,10 @@
 .flutter-plugins*
 .packages
 build/
+.build/
+*.xcuserstate
+xcuserdata/
+DerivedData/
 deploy/compose/.env
 deploy/compose/secrets/
 deploy/compose/backups/

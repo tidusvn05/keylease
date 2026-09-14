@@ -1,0 +1,15 @@
+{
+  "name": "00_status_locked",
+  "request": {
+    "command": "status"
+  },
+  "response": {
+    "ok": true,
+    "result": {
+      "contract_version": 1,
+      "locked": true,
+      "requires_user_action": true,
+      "service_version": "0.1.0"
+    }
+  }
+}

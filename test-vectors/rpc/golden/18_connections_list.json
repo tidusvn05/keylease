@@ -1,0 +1,15 @@
+{
+  "name": "18_connections_list",
+  "request": {
+    "command": "connections_list",
+    "auth": {
+      "agent_id": "agent_golden-capture",
+      "token": "<redacted-client-token>",
+      "session_id": "golden"
+    }
+  },
+  "response": {
+    "ok": true,
+    "result": []
+  }
+}

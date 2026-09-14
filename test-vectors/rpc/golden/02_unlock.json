@@ -1,0 +1,20 @@
+{
+  "name": "02_unlock",
+  "request": {
+    "command": "unlock",
+    "password": "<redacted-master-password>",
+    "session_ttl_seconds": 3600,
+    "auth": {
+      "agent_id": "agent_golden-capture",
+      "token": "<redacted-client-token>",
+      "session_id": "golden"
+    }
+  },
+  "response": {
+    "ok": true,
+    "result": {
+      "unlocked": true,
+      "vault_id": "vault_01a09c2ec63e7553b678a27d85246a2d"
+    }
+  }
+}

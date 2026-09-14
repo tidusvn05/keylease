@@ -1,0 +1,24 @@
+{
+  "name": "22_invalid_request",
+  "request": {
+    "command": "lease_request",
+    "auth": {
+      "agent_id": "agent_golden-capture",
+      "token": "<redacted-client-token>",
+      "session_id": "golden"
+    },
+    "request": {
+      "unexpected": "shape"
+    },
+    "ttl_seconds": 60,
+    "max_uses": 1,
+    "approval_id": null
+  },
+  "response": {
+    "error": {
+      "error": "invalid_request",
+      "reason": "invalid JSON RPC request"
+    },
+    "ok": false
+  }
+}

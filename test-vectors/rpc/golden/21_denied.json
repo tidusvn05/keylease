@@ -1,0 +1,19 @@
+{
+  "name": "21_denied",
+  "request": {
+    "command": "entries_search",
+    "auth": {
+      "agent_id": "agent_golden-nogrants",
+      "token": "<redacted-client-token>",
+      "session_id": "golden-denied"
+    },
+    "query": "golden"
+  },
+  "response": {
+    "error": {
+      "error": "denied",
+      "reason": "default deny: no matching policy rule"
+    },
+    "ok": false
+  }
+}

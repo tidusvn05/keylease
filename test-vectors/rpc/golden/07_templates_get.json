@@ -1,0 +1,81 @@
+{
+  "name": "07_templates_get",
+  "request": {
+    "command": "templates_get",
+    "kind": "core.login",
+    "auth": {
+      "agent_id": "agent_golden-capture",
+      "token": "<redacted-client-token>",
+      "session_id": "golden"
+    }
+  },
+  "response": {
+    "ok": true,
+    "result": {
+      "family": "common",
+      "fields": [
+        {
+          "aliases": [
+            "user",
+            "login"
+          ],
+          "key": "username",
+          "label": "Username",
+          "mask_last": null,
+          "protected": false,
+          "section": "Login",
+          "semantic_role": "username",
+          "sensitivity": "private_metadata",
+          "value_type": "text"
+        },
+        {
+          "aliases": [
+            "pass",
+            "passwd"
+          ],
+          "key": "password",
+          "label": "Password",
+          "mask_last": null,
+          "protected": true,
+          "section": "Login",
+          "semantic_role": "password",
+          "sensitivity": "highly_sensitive",
+          "value_type": "concealed"
+        },
+        {
+          "aliases": [
+            "url",
+            "site"
+          ],
+          "key": "website",
+          "label": "Website",
+          "mask_last": null,
+          "protected": false,
+          "section": "Login",
+          "semantic_role": "website",
+          "sensitivity": "private_metadata",
+          "value_type": "url"
+        },
+        {
+          "aliases": [
+            "totp",
+            "one time password"
+          ],
+          "key": "otp",
+          "label": "One-time password",
+          "mask_last": null,
+          "protected": true,
+          "section": "Login",
+          "semantic_role": "otp",
+          "sensitivity": "secret",
+          "value_type": "totp"
+        }
+      ],
+      "icon": "login",
+      "kind": "core.login",
+      "label": "Login",
+      "markdown_notes": true,
+      "template_version": 1
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "14_entries_totp",
+  "request": {
+    "command": "entries_totp",
+    "id": "item_01a09c2f074076c3b7d9fbbbe322b785",
+    "auth": {
+      "agent_id": "agent_golden-capture",
+      "token": "<redacted-client-token>",
+      "session_id": "golden"
+    }
+  },
+  "response": {
+    "ok": true,
+    "result": {
+      "code": "006798",
+      "expires_in": 28,
+      "item_id": "item_01a09c2f074076c3b7d9fbbbe322b785"
+    }
+  }
+}

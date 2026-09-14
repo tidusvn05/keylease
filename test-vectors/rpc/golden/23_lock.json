@@ -1,0 +1,17 @@
+{
+  "name": "23_lock",
+  "request": {
+    "command": "lock",
+    "auth": {
+      "agent_id": "agent_golden-capture",
+      "token": "<redacted-client-token>",
+      "session_id": "golden"
+    }
+  },
+  "response": {
+    "ok": true,
+    "result": {
+      "locked": true
+    }
+  }
+}

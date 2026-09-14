@@ -1,0 +1,29 @@
+{
+  "name": "04_groups_create",
+  "request": {
+    "command": "groups_create",
+    "name": "Golden Group",
+    "parent_id": null,
+    "idempotency_key": "golden-group-1",
+    "dry_run": false,
+    "auth": {
+      "agent_id": "agent_golden-capture",
+      "token": "<redacted-client-token>",
+      "session_id": "golden"
+    }
+  },
+  "response": {
+    "ok": true,
+    "result": {
+      "created_at": "2026-09-13T19:12:02.866670123Z",
+      "id": "group_01a09c2f073273b3987e1e7b707426d5",
+      "name": "Golden Group",
+      "parent_id": null,
+      "purpose": "user",
+      "revision": 1,
+      "sort_order": null,
+      "updated_at": "2026-09-13T19:12:02.866670123Z",
+      "vault_id": "vault_01a09c2ec63e7553b678a27d85246a2d"
+    }
+  }
+}

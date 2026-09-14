@@ -1,0 +1,24 @@
+{
+  "name": "16_entries_reveal_by_id",
+  "request": {
+    "command": "entries_reveal_by_id",
+    "id": "item_01a09c2f074076c3b7d9fbbbe322b785",
+    "field_id": "field_01a09c2f074076c3b7d9fb880b9e3338",
+    "auth": {
+      "agent_id": "agent_golden-capture",
+      "token": "<redacted-client-token>",
+      "session_id": "golden"
+    }
+  },
+  "response": {
+    "ok": true,
+    "result": {
+      "field_id": "field_01a09c2f074076c3b7d9fb880b9e3338",
+      "item_id": "item_01a09c2f074076c3b7d9fbbbe322b785",
+      "value": {
+        "type": "text",
+        "value": "golden@example.com"
+      }
+    }
+  }
+}

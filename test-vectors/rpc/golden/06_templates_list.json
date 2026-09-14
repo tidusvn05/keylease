@@ -1,0 +1,1972 @@
+{
+  "name": "06_templates_list",
+  "request": {
+    "command": "templates_list",
+    "auth": {
+      "agent_id": "agent_golden-capture",
+      "token": "<redacted-client-token>",
+      "session_id": "golden"
+    }
+  },
+  "response": {
+    "ok": true,
+    "result": [
+      {
+        "family": "agent_knowledge",
+        "fields": [],
+        "icon": "prompt",
+        "kind": "core.prompt",
+        "label": "Prompt",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "agent_knowledge",
+        "fields": [],
+        "icon": "runbook",
+        "kind": "core.runbook",
+        "label": "Runbook",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "developer",
+        "fields": [],
+        "icon": "square-code",
+        "kind": "core.environment",
+        "label": "Environment",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "developer",
+        "fields": [],
+        "icon": "server-cog",
+        "kind": "core.ssh_server",
+        "label": "SSH Server",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "common",
+        "fields": [
+          {
+            "aliases": [
+              "user",
+              "login"
+            ],
+            "key": "username",
+            "label": "Username",
+            "mask_last": null,
+            "protected": false,
+            "section": "Login",
+            "semantic_role": "username",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "pass",
+              "passwd"
+            ],
+            "key": "password",
+            "label": "Password",
+            "mask_last": null,
+            "protected": true,
+            "section": "Login",
+            "semantic_role": "password",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "url",
+              "site"
+            ],
+            "key": "website",
+            "label": "Website",
+            "mask_last": null,
+            "protected": false,
+            "section": "Login",
+            "semantic_role": "website",
+            "sensitivity": "private_metadata",
+            "value_type": "url"
+          },
+          {
+            "aliases": [
+              "totp",
+              "one time password"
+            ],
+            "key": "otp",
+            "label": "One-time password",
+            "mask_last": null,
+            "protected": true,
+            "section": "Login",
+            "semantic_role": "otp",
+            "sensitivity": "secret",
+            "value_type": "totp"
+          }
+        ],
+        "icon": "login",
+        "kind": "core.login",
+        "label": "Login",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "developer",
+        "fields": [
+          {
+            "aliases": [
+              "service"
+            ],
+            "key": "provider",
+            "label": "Provider",
+            "mask_last": null,
+            "protected": false,
+            "section": "Credential",
+            "semantic_role": "provider",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "key id",
+              "api key id"
+            ],
+            "key": "client_id",
+            "label": "Client/Key ID",
+            "mask_last": null,
+            "protected": false,
+            "section": "Credential",
+            "semantic_role": "client_id",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "api key",
+              "token"
+            ],
+            "key": "credential",
+            "label": "Credential",
+            "mask_last": null,
+            "protected": true,
+            "section": "Credential",
+            "semantic_role": "credential",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "api secret",
+              "secret"
+            ],
+            "key": "client_secret",
+            "label": "Client secret",
+            "mask_last": null,
+            "protected": true,
+            "section": "Credential",
+            "semantic_role": "client_secret",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "url",
+              "website"
+            ],
+            "key": "hostname",
+            "label": "Host",
+            "mask_last": null,
+            "protected": false,
+            "section": "Details",
+            "semantic_role": "host",
+            "sensitivity": "private_metadata",
+            "value_type": "url"
+          },
+          {
+            "aliases": [
+              "expiration"
+            ],
+            "key": "expiry",
+            "label": "Expiry",
+            "mask_last": null,
+            "protected": false,
+            "section": "Details",
+            "semantic_role": "expiry",
+            "sensitivity": "private_metadata",
+            "value_type": "date"
+          }
+        ],
+        "icon": "api",
+        "kind": "core.api_credential",
+        "label": "API Credential",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "developer",
+        "fields": [
+          {
+            "aliases": [
+              "type"
+            ],
+            "key": "engine",
+            "label": "Engine",
+            "mask_last": null,
+            "protected": false,
+            "section": "Connection",
+            "semantic_role": "database_engine",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "server",
+              "hostname"
+            ],
+            "key": "host",
+            "label": "Host",
+            "mask_last": null,
+            "protected": false,
+            "section": "Connection",
+            "semantic_role": "host",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [],
+            "key": "port",
+            "label": "Port",
+            "mask_last": null,
+            "protected": false,
+            "section": "Connection",
+            "semantic_role": "port",
+            "sensitivity": "private_metadata",
+            "value_type": "number"
+          },
+          {
+            "aliases": [
+              "dbname"
+            ],
+            "key": "database",
+            "label": "Database",
+            "mask_last": null,
+            "protected": false,
+            "section": "Connection",
+            "semantic_role": "database_name",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "user"
+            ],
+            "key": "username",
+            "label": "Username",
+            "mask_last": null,
+            "protected": false,
+            "section": "Credential",
+            "semantic_role": "username",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "pass"
+            ],
+            "key": "password",
+            "label": "Password",
+            "mask_last": null,
+            "protected": true,
+            "section": "Credential",
+            "semantic_role": "password",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "dsn",
+              "database url"
+            ],
+            "key": "connection_string",
+            "label": "Connection string",
+            "mask_last": null,
+            "protected": true,
+            "section": "Credential",
+            "semantic_role": "connection_string",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          }
+        ],
+        "icon": "database",
+        "kind": "core.database",
+        "label": "Database",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "developer",
+        "fields": [
+          {
+            "aliases": [
+              "algorithm"
+            ],
+            "key": "key_type",
+            "label": "Key type",
+            "mask_last": null,
+            "protected": false,
+            "section": "Key",
+            "semantic_role": "key_type",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "ssh public key"
+            ],
+            "key": "public_key",
+            "label": "Public key",
+            "mask_last": null,
+            "protected": false,
+            "section": "Key",
+            "semantic_role": "public_key",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "ssh private key"
+            ],
+            "key": "private_key",
+            "label": "Private key",
+            "mask_last": null,
+            "protected": true,
+            "section": "Key",
+            "semantic_role": "private_key",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "sha256 fingerprint"
+            ],
+            "key": "fingerprint",
+            "label": "Fingerprint",
+            "mask_last": null,
+            "protected": false,
+            "section": "Key",
+            "semantic_role": "fingerprint",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "password"
+            ],
+            "key": "passphrase",
+            "label": "Passphrase",
+            "mask_last": null,
+            "protected": true,
+            "section": "Key",
+            "semantic_role": "passphrase",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [],
+            "key": "comment",
+            "label": "Comment",
+            "mask_last": null,
+            "protected": false,
+            "section": "Details",
+            "semantic_role": "comment",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          }
+        ],
+        "icon": "ssh",
+        "kind": "core.ssh_key",
+        "label": "SSH Key",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "common",
+        "fields": [],
+        "icon": "note-lock",
+        "kind": "core.secure_note",
+        "label": "Secure Note",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "agent_knowledge",
+        "fields": [],
+        "icon": "note",
+        "kind": "core.note",
+        "label": "Note",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "common",
+        "fields": [
+          {
+            "aliases": [
+              "pass",
+              "passwd"
+            ],
+            "key": "password",
+            "label": "Password",
+            "mask_last": null,
+            "protected": true,
+            "section": "Password",
+            "semantic_role": "password",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "url"
+            ],
+            "key": "website",
+            "label": "Website",
+            "mask_last": null,
+            "protected": false,
+            "section": "Password",
+            "semantic_role": "website",
+            "sensitivity": "private_metadata",
+            "value_type": "url"
+          }
+        ],
+        "icon": "key",
+        "kind": "core.password",
+        "label": "Password",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "developer",
+        "fields": [
+          {
+            "aliases": [
+              "email address"
+            ],
+            "key": "email",
+            "label": "Email",
+            "mask_last": null,
+            "protected": false,
+            "section": "Account",
+            "semantic_role": "Account",
+            "sensitivity": "private_metadata",
+            "value_type": "email"
+          },
+          {
+            "aliases": [
+              "service"
+            ],
+            "key": "provider",
+            "label": "Provider",
+            "mask_last": null,
+            "protected": false,
+            "section": "Account",
+            "semantic_role": "provider",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "user"
+            ],
+            "key": "username",
+            "label": "Username",
+            "mask_last": null,
+            "protected": false,
+            "section": "Credential",
+            "semantic_role": "username",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "pass"
+            ],
+            "key": "password",
+            "label": "Password",
+            "mask_last": null,
+            "protected": true,
+            "section": "Credential",
+            "semantic_role": "password",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "incoming server"
+            ],
+            "key": "imap_host",
+            "label": "IMAP host",
+            "mask_last": null,
+            "protected": false,
+            "section": "Incoming",
+            "semantic_role": "imap_host",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [],
+            "key": "imap_port",
+            "label": "IMAP port",
+            "mask_last": null,
+            "protected": false,
+            "section": "Incoming",
+            "semantic_role": "imap_port",
+            "sensitivity": "private_metadata",
+            "value_type": "number"
+          },
+          {
+            "aliases": [
+              "outgoing server"
+            ],
+            "key": "smtp_host",
+            "label": "SMTP host",
+            "mask_last": null,
+            "protected": false,
+            "section": "Outgoing",
+            "semantic_role": "smtp_host",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [],
+            "key": "smtp_port",
+            "label": "SMTP port",
+            "mask_last": null,
+            "protected": false,
+            "section": "Outgoing",
+            "semantic_role": "smtp_port",
+            "sensitivity": "private_metadata",
+            "value_type": "number"
+          }
+        ],
+        "icon": "email",
+        "kind": "core.email_account",
+        "label": "Email Account",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "developer",
+        "fields": [
+          {
+            "aliases": [
+              "hostname",
+              "server",
+              "ip"
+            ],
+            "key": "host",
+            "label": "Host/IP",
+            "mask_last": null,
+            "protected": false,
+            "section": "Server",
+            "semantic_role": "host",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "website",
+              "admin url"
+            ],
+            "key": "url",
+            "label": "URL",
+            "mask_last": null,
+            "protected": false,
+            "section": "Server",
+            "semantic_role": "website",
+            "sensitivity": "private_metadata",
+            "value_type": "url"
+          },
+          {
+            "aliases": [
+              "hosting provider"
+            ],
+            "key": "provider",
+            "label": "Provider",
+            "mask_last": null,
+            "protected": false,
+            "section": "Server",
+            "semantic_role": "provider",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [],
+            "key": "port",
+            "label": "Port",
+            "mask_last": null,
+            "protected": false,
+            "section": "Server",
+            "semantic_role": "port",
+            "sensitivity": "private_metadata",
+            "value_type": "number"
+          },
+          {
+            "aliases": [
+              "user"
+            ],
+            "key": "username",
+            "label": "Username",
+            "mask_last": null,
+            "protected": false,
+            "section": "Credential",
+            "semantic_role": "username",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "pass"
+            ],
+            "key": "password",
+            "label": "Password",
+            "mask_last": null,
+            "protected": true,
+            "section": "Credential",
+            "semantic_role": "password",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          }
+        ],
+        "icon": "server",
+        "kind": "core.server",
+        "label": "Server",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "developer",
+        "fields": [
+          {
+            "aliases": [
+              "software"
+            ],
+            "key": "product",
+            "label": "Product",
+            "mask_last": null,
+            "protected": false,
+            "section": "License",
+            "semantic_role": "product",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [],
+            "key": "version",
+            "label": "Version",
+            "mask_last": null,
+            "protected": false,
+            "section": "License",
+            "semantic_role": "version",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "registered name"
+            ],
+            "key": "licensed_to",
+            "label": "Licensed to",
+            "mask_last": null,
+            "protected": false,
+            "section": "License",
+            "semantic_role": "person_name",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "email"
+            ],
+            "key": "registered_email",
+            "label": "Registered email",
+            "mask_last": null,
+            "protected": false,
+            "section": "License",
+            "semantic_role": "email",
+            "sensitivity": "private_metadata",
+            "value_type": "email"
+          },
+          {
+            "aliases": [
+              "serial",
+              "key"
+            ],
+            "key": "license_key",
+            "label": "License key",
+            "mask_last": null,
+            "protected": true,
+            "section": "License",
+            "semantic_role": "license_key",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "order id"
+            ],
+            "key": "order_number",
+            "label": "Order number",
+            "mask_last": null,
+            "protected": false,
+            "section": "Purchase",
+            "semantic_role": "order_number",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [],
+            "key": "purchase_date",
+            "label": "Purchase date",
+            "mask_last": null,
+            "protected": false,
+            "section": "Purchase",
+            "semantic_role": "purchase_date",
+            "sensitivity": "private_metadata",
+            "value_type": "date"
+          },
+          {
+            "aliases": [
+              "download"
+            ],
+            "key": "download_url",
+            "label": "Download URL",
+            "mask_last": null,
+            "protected": false,
+            "section": "Links",
+            "semantic_role": "download_url",
+            "sensitivity": "private_metadata",
+            "value_type": "url"
+          }
+        ],
+        "icon": "software",
+        "kind": "core.software_license",
+        "label": "Software License",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "developer",
+        "fields": [
+          {
+            "aliases": [
+              "router",
+              "model"
+            ],
+            "key": "device",
+            "label": "Device/Model",
+            "mask_last": null,
+            "protected": false,
+            "section": "Wi-Fi",
+            "semantic_role": "device",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "wifi name",
+              "network"
+            ],
+            "key": "ssid",
+            "label": "Network name",
+            "mask_last": null,
+            "protected": false,
+            "section": "Wi-Fi",
+            "semantic_role": "ssid",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "wireless security"
+            ],
+            "key": "security",
+            "label": "Security",
+            "mask_last": null,
+            "protected": false,
+            "section": "Wi-Fi",
+            "semantic_role": "wifi_security",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "wireless password",
+              "network key"
+            ],
+            "key": "wifi_password",
+            "label": "Wi-Fi password",
+            "mask_last": null,
+            "protected": true,
+            "section": "Wi-Fi",
+            "semantic_role": "wifi_password",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "server",
+              "ip",
+              "router url"
+            ],
+            "key": "admin_url",
+            "label": "Admin URL/IP",
+            "mask_last": null,
+            "protected": false,
+            "section": "Administration",
+            "semantic_role": "admin_url",
+            "sensitivity": "private_metadata",
+            "value_type": "url"
+          },
+          {
+            "aliases": [
+              "username"
+            ],
+            "key": "admin_username",
+            "label": "Admin username",
+            "mask_last": null,
+            "protected": false,
+            "section": "Administration",
+            "semantic_role": "username",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "password"
+            ],
+            "key": "admin_password",
+            "label": "Admin password",
+            "mask_last": null,
+            "protected": true,
+            "section": "Administration",
+            "semantic_role": "password",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          }
+        ],
+        "icon": "router",
+        "kind": "core.wireless_router",
+        "label": "Wireless Router",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "common",
+        "fields": [
+          {
+            "aliases": [
+              "cardholder name",
+              "name on card"
+            ],
+            "key": "cardholder",
+            "label": "Cardholder",
+            "mask_last": null,
+            "protected": false,
+            "section": "Card",
+            "semantic_role": "cardholder",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "brand",
+              "type"
+            ],
+            "key": "card_type",
+            "label": "Card type",
+            "mask_last": null,
+            "protected": false,
+            "section": "Card",
+            "semantic_role": "card_type",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "card number",
+              "credit card number",
+              "cc number",
+              "card no",
+              "number"
+            ],
+            "key": "card_number",
+            "label": "Card number",
+            "mask_last": 4,
+            "protected": true,
+            "section": "Card",
+            "semantic_role": "card_number",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "cvv",
+              "cvc",
+              "security code",
+              "verification number"
+            ],
+            "key": "verification_number",
+            "label": "CVV",
+            "mask_last": null,
+            "protected": true,
+            "section": "Card",
+            "semantic_role": "card_verification",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "expiry date",
+              "expiration"
+            ],
+            "key": "expiry",
+            "label": "Expiry",
+            "mask_last": null,
+            "protected": false,
+            "section": "Card",
+            "semantic_role": "card_expiry",
+            "sensitivity": "private_metadata",
+            "value_type": "month_year"
+          },
+          {
+            "aliases": [
+              "valid from"
+            ],
+            "key": "valid_from",
+            "label": "Valid from",
+            "mask_last": null,
+            "protected": false,
+            "section": "Card",
+            "semantic_role": "card_valid_from",
+            "sensitivity": "private_metadata",
+            "value_type": "month_year"
+          },
+          {
+            "aliases": [
+              "pin"
+            ],
+            "key": "pin",
+            "label": "PIN",
+            "mask_last": null,
+            "protected": true,
+            "section": "Card",
+            "semantic_role": "pin",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "bank",
+              "issuer"
+            ],
+            "key": "issuing_bank",
+            "label": "Issuing bank",
+            "mask_last": null,
+            "protected": false,
+            "section": "Details",
+            "semantic_role": "issuer",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          }
+        ],
+        "icon": "credit-card",
+        "kind": "core.credit_card",
+        "label": "Credit Card",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "common",
+        "fields": [
+          {
+            "aliases": [
+              "type"
+            ],
+            "key": "document_type",
+            "label": "Document type",
+            "mask_last": null,
+            "protected": false,
+            "section": "Document",
+            "semantic_role": "document_type",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "number",
+              "id number"
+            ],
+            "key": "document_number",
+            "label": "Document number",
+            "mask_last": null,
+            "protected": true,
+            "section": "Document",
+            "semantic_role": "document_number",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "issuing authority"
+            ],
+            "key": "issuer",
+            "label": "Issuer",
+            "mask_last": null,
+            "protected": false,
+            "section": "Document",
+            "semantic_role": "issuer",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "expiration"
+            ],
+            "key": "expiry",
+            "label": "Expiry",
+            "mask_last": null,
+            "protected": false,
+            "section": "Document",
+            "semantic_role": "expiry",
+            "sensitivity": "private_metadata",
+            "value_type": "date"
+          }
+        ],
+        "icon": "document",
+        "kind": "core.document",
+        "label": "Document",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "common",
+        "fields": [
+          {
+            "aliases": [
+              "given name"
+            ],
+            "key": "first_name",
+            "label": "First name",
+            "mask_last": null,
+            "protected": false,
+            "section": "Name",
+            "semantic_role": "first_name",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [],
+            "key": "middle_name",
+            "label": "Middle name",
+            "mask_last": null,
+            "protected": false,
+            "section": "Name",
+            "semantic_role": "middle_name",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "surname",
+              "family name"
+            ],
+            "key": "last_name",
+            "label": "Last name",
+            "mask_last": null,
+            "protected": false,
+            "section": "Name",
+            "semantic_role": "last_name",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "date of birth",
+              "dob"
+            ],
+            "key": "birth_date",
+            "label": "Birth date",
+            "mask_last": null,
+            "protected": false,
+            "section": "Details",
+            "semantic_role": "birth_date",
+            "sensitivity": "private_metadata",
+            "value_type": "date"
+          },
+          {
+            "aliases": [
+              "organization"
+            ],
+            "key": "company",
+            "label": "Company",
+            "mask_last": null,
+            "protected": false,
+            "section": "Details",
+            "semantic_role": "company",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "home address"
+            ],
+            "key": "address",
+            "label": "Address",
+            "mask_last": null,
+            "protected": false,
+            "section": "Contact",
+            "semantic_role": "address",
+            "sensitivity": "private_metadata",
+            "value_type": "address"
+          },
+          {
+            "aliases": [
+              "email address"
+            ],
+            "key": "email",
+            "label": "Email",
+            "mask_last": null,
+            "protected": false,
+            "section": "Contact",
+            "semantic_role": "email",
+            "sensitivity": "private_metadata",
+            "value_type": "email"
+          },
+          {
+            "aliases": [
+              "telephone",
+              "mobile"
+            ],
+            "key": "phone",
+            "label": "Phone",
+            "mask_last": null,
+            "protected": false,
+            "section": "Contact",
+            "semantic_role": "phone",
+            "sensitivity": "private_metadata",
+            "value_type": "phone"
+          }
+        ],
+        "icon": "identity",
+        "kind": "core.identity",
+        "label": "Identity",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "personal",
+        "fields": [
+          {
+            "aliases": [
+              "bank name"
+            ],
+            "key": "bank_name",
+            "label": "Bank",
+            "mask_last": null,
+            "protected": false,
+            "section": "Account",
+            "semantic_role": "bank",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "name"
+            ],
+            "key": "account_holder",
+            "label": "Account holder",
+            "mask_last": null,
+            "protected": false,
+            "section": "Account",
+            "semantic_role": "account_holder",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "account no"
+            ],
+            "key": "account_number",
+            "label": "Account number",
+            "mask_last": 4,
+            "protected": true,
+            "section": "Account",
+            "semantic_role": "account_number",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "routing",
+              "sort code"
+            ],
+            "key": "routing_number",
+            "label": "Routing number",
+            "mask_last": null,
+            "protected": true,
+            "section": "Account",
+            "semantic_role": "routing_number",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "iban"
+            ],
+            "key": "iban",
+            "label": "IBAN",
+            "mask_last": null,
+            "protected": true,
+            "section": "Account",
+            "semantic_role": "iban",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "bic",
+              "swift code"
+            ],
+            "key": "swift",
+            "label": "SWIFT/BIC",
+            "mask_last": null,
+            "protected": true,
+            "section": "Account",
+            "semantic_role": "swift",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "pin"
+            ],
+            "key": "pin",
+            "label": "PIN",
+            "mask_last": null,
+            "protected": true,
+            "section": "Account",
+            "semantic_role": "pin",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          }
+        ],
+        "icon": "bank",
+        "kind": "core.bank_account",
+        "label": "Bank Account",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "personal",
+        "fields": [
+          {
+            "aliases": [
+              "chain"
+            ],
+            "key": "network",
+            "label": "Network",
+            "mask_last": null,
+            "protected": false,
+            "section": "Wallet",
+            "semantic_role": "network",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "public address"
+            ],
+            "key": "address",
+            "label": "Wallet address",
+            "mask_last": null,
+            "protected": false,
+            "section": "Wallet",
+            "semantic_role": "wallet_address",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "private key"
+            ],
+            "key": "private_key",
+            "label": "Private key",
+            "mask_last": null,
+            "protected": true,
+            "section": "Secrets",
+            "semantic_role": "private_key",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "seed phrase",
+              "mnemonic"
+            ],
+            "key": "recovery_phrase",
+            "label": "Recovery phrase",
+            "mask_last": null,
+            "protected": true,
+            "section": "Secrets",
+            "semantic_role": "recovery_phrase",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "pin"
+            ],
+            "key": "pin",
+            "label": "PIN",
+            "mask_last": null,
+            "protected": true,
+            "section": "Secrets",
+            "semantic_role": "pin",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          }
+        ],
+        "icon": "wallet",
+        "kind": "core.crypto_wallet",
+        "label": "Crypto Wallet",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "personal",
+        "fields": [
+          {
+            "aliases": [
+              "full name"
+            ],
+            "key": "name",
+            "label": "Name",
+            "mask_last": null,
+            "protected": false,
+            "section": "License",
+            "semantic_role": "person_name",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "license no",
+              "id number"
+            ],
+            "key": "number",
+            "label": "License number",
+            "mask_last": null,
+            "protected": true,
+            "section": "License",
+            "semantic_role": "identity_number",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "type"
+            ],
+            "key": "class",
+            "label": "Class",
+            "mask_last": null,
+            "protected": false,
+            "section": "License",
+            "semantic_role": "license_class",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "state",
+              "country"
+            ],
+            "key": "region",
+            "label": "State/Country",
+            "mask_last": null,
+            "protected": false,
+            "section": "License",
+            "semantic_role": "issuing_region",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "issue date"
+            ],
+            "key": "issued",
+            "label": "Issued",
+            "mask_last": null,
+            "protected": false,
+            "section": "Validity",
+            "semantic_role": "issued",
+            "sensitivity": "private_metadata",
+            "value_type": "date"
+          },
+          {
+            "aliases": [
+              "expiration"
+            ],
+            "key": "expiry",
+            "label": "Expiry",
+            "mask_last": null,
+            "protected": false,
+            "section": "Validity",
+            "semantic_role": "expiry",
+            "sensitivity": "private_metadata",
+            "value_type": "date"
+          }
+        ],
+        "icon": "license",
+        "kind": "core.driver_license",
+        "label": "Driver License",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "personal",
+        "fields": [
+          {
+            "aliases": [
+              "name"
+            ],
+            "key": "patient_name",
+            "label": "Patient",
+            "mask_last": null,
+            "protected": false,
+            "section": "Patient",
+            "semantic_role": "person_name",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "dob"
+            ],
+            "key": "birth_date",
+            "label": "Birth date",
+            "mask_last": null,
+            "protected": false,
+            "section": "Patient",
+            "semantic_role": "birth_date",
+            "sensitivity": "private_metadata",
+            "value_type": "date"
+          },
+          {
+            "aliases": [],
+            "key": "blood_type",
+            "label": "Blood type",
+            "mask_last": null,
+            "protected": false,
+            "section": "Medical",
+            "semantic_role": "blood_type",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "doctor"
+            ],
+            "key": "physician",
+            "label": "Physician",
+            "mask_last": null,
+            "protected": false,
+            "section": "Medical",
+            "semantic_role": "physician",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "member id"
+            ],
+            "key": "insurance_number",
+            "label": "Insurance number",
+            "mask_last": null,
+            "protected": true,
+            "section": "Insurance",
+            "semantic_role": "insurance_number",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [],
+            "key": "allergies",
+            "label": "Allergies",
+            "mask_last": null,
+            "protected": false,
+            "section": "Medical",
+            "semantic_role": "allergies",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [],
+            "key": "medications",
+            "label": "Medications",
+            "mask_last": null,
+            "protected": false,
+            "section": "Medical",
+            "semantic_role": "medications",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          }
+        ],
+        "icon": "medical",
+        "kind": "core.medical_record",
+        "label": "Medical Record",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "personal",
+        "fields": [
+          {
+            "aliases": [
+              "program"
+            ],
+            "key": "organization",
+            "label": "Organization/Program",
+            "mask_last": null,
+            "protected": false,
+            "section": "Membership",
+            "semantic_role": "organization",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "name"
+            ],
+            "key": "member_name",
+            "label": "Member",
+            "mask_last": null,
+            "protected": false,
+            "section": "Membership",
+            "semantic_role": "person_name",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "member id",
+              "membership no"
+            ],
+            "key": "member_number",
+            "label": "Member number",
+            "mask_last": null,
+            "protected": true,
+            "section": "Membership",
+            "semantic_role": "membership_number",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "pin"
+            ],
+            "key": "pin",
+            "label": "PIN",
+            "mask_last": null,
+            "protected": true,
+            "section": "Membership",
+            "semantic_role": "pin",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "expiration"
+            ],
+            "key": "expiry",
+            "label": "Expiry",
+            "mask_last": null,
+            "protected": false,
+            "section": "Membership",
+            "semantic_role": "expiry",
+            "sensitivity": "private_metadata",
+            "value_type": "date"
+          },
+          {
+            "aliases": [
+              "url"
+            ],
+            "key": "website",
+            "label": "Website",
+            "mask_last": null,
+            "protected": false,
+            "section": "Contact",
+            "semantic_role": "website",
+            "sensitivity": "private_metadata",
+            "value_type": "url"
+          }
+        ],
+        "icon": "membership",
+        "kind": "core.membership",
+        "label": "Membership",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "personal",
+        "fields": [
+          {
+            "aliases": [
+              "full name"
+            ],
+            "key": "name",
+            "label": "Name",
+            "mask_last": null,
+            "protected": false,
+            "section": "License",
+            "semantic_role": "person_name",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "license no",
+              "id number"
+            ],
+            "key": "number",
+            "label": "License number",
+            "mask_last": null,
+            "protected": true,
+            "section": "License",
+            "semantic_role": "identity_number",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "type"
+            ],
+            "key": "class",
+            "label": "Class",
+            "mask_last": null,
+            "protected": false,
+            "section": "License",
+            "semantic_role": "license_class",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "state",
+              "country"
+            ],
+            "key": "region",
+            "label": "State/Country",
+            "mask_last": null,
+            "protected": false,
+            "section": "License",
+            "semantic_role": "issuing_region",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "issue date"
+            ],
+            "key": "issued",
+            "label": "Issued",
+            "mask_last": null,
+            "protected": false,
+            "section": "Validity",
+            "semantic_role": "issued",
+            "sensitivity": "private_metadata",
+            "value_type": "date"
+          },
+          {
+            "aliases": [
+              "expiration"
+            ],
+            "key": "expiry",
+            "label": "Expiry",
+            "mask_last": null,
+            "protected": false,
+            "section": "Validity",
+            "semantic_role": "expiry",
+            "sensitivity": "private_metadata",
+            "value_type": "date"
+          }
+        ],
+        "icon": "outdoor",
+        "kind": "core.outdoor_license",
+        "label": "Outdoor License",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "personal",
+        "fields": [
+          {
+            "aliases": [],
+            "key": "type",
+            "label": "Type",
+            "mask_last": null,
+            "protected": false,
+            "section": "Passport",
+            "semantic_role": "passport_type",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "passport no"
+            ],
+            "key": "number",
+            "label": "Passport number",
+            "mask_last": null,
+            "protected": true,
+            "section": "Passport",
+            "semantic_role": "identity_number",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "full name"
+            ],
+            "key": "name",
+            "label": "Name",
+            "mask_last": null,
+            "protected": false,
+            "section": "Holder",
+            "semantic_role": "person_name",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [],
+            "key": "nationality",
+            "label": "Nationality",
+            "mask_last": null,
+            "protected": false,
+            "section": "Holder",
+            "semantic_role": "nationality",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "dob"
+            ],
+            "key": "birth_date",
+            "label": "Birth date",
+            "mask_last": null,
+            "protected": false,
+            "section": "Holder",
+            "semantic_role": "birth_date",
+            "sensitivity": "private_metadata",
+            "value_type": "date"
+          },
+          {
+            "aliases": [
+              "place of birth"
+            ],
+            "key": "birth_place",
+            "label": "Birth place",
+            "mask_last": null,
+            "protected": false,
+            "section": "Holder",
+            "semantic_role": "birth_place",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "issue date"
+            ],
+            "key": "issued",
+            "label": "Issued",
+            "mask_last": null,
+            "protected": false,
+            "section": "Validity",
+            "semantic_role": "issued",
+            "sensitivity": "private_metadata",
+            "value_type": "date"
+          },
+          {
+            "aliases": [
+              "expiration"
+            ],
+            "key": "expiry",
+            "label": "Expiry",
+            "mask_last": null,
+            "protected": false,
+            "section": "Validity",
+            "semantic_role": "expiry",
+            "sensitivity": "private_metadata",
+            "value_type": "date"
+          },
+          {
+            "aliases": [
+              "issuing authority"
+            ],
+            "key": "authority",
+            "label": "Authority",
+            "mask_last": null,
+            "protected": false,
+            "section": "Validity",
+            "semantic_role": "issuer",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          }
+        ],
+        "icon": "passport",
+        "kind": "core.passport",
+        "label": "Passport",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "personal",
+        "fields": [
+          {
+            "aliases": [
+              "program"
+            ],
+            "key": "organization",
+            "label": "Organization/Program",
+            "mask_last": null,
+            "protected": false,
+            "section": "Membership",
+            "semantic_role": "organization",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "name"
+            ],
+            "key": "member_name",
+            "label": "Member",
+            "mask_last": null,
+            "protected": false,
+            "section": "Membership",
+            "semantic_role": "person_name",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "member id",
+              "membership no"
+            ],
+            "key": "member_number",
+            "label": "Member number",
+            "mask_last": null,
+            "protected": true,
+            "section": "Membership",
+            "semantic_role": "membership_number",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "pin"
+            ],
+            "key": "pin",
+            "label": "PIN",
+            "mask_last": null,
+            "protected": true,
+            "section": "Membership",
+            "semantic_role": "pin",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          },
+          {
+            "aliases": [
+              "expiration"
+            ],
+            "key": "expiry",
+            "label": "Expiry",
+            "mask_last": null,
+            "protected": false,
+            "section": "Membership",
+            "semantic_role": "expiry",
+            "sensitivity": "private_metadata",
+            "value_type": "date"
+          },
+          {
+            "aliases": [
+              "url"
+            ],
+            "key": "website",
+            "label": "Website",
+            "mask_last": null,
+            "protected": false,
+            "section": "Contact",
+            "semantic_role": "website",
+            "sensitivity": "private_metadata",
+            "value_type": "url"
+          }
+        ],
+        "icon": "rewards",
+        "kind": "core.reward_program",
+        "label": "Reward Program",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "personal",
+        "fields": [
+          {
+            "aliases": [
+              "full name"
+            ],
+            "key": "name",
+            "label": "Name",
+            "mask_last": null,
+            "protected": false,
+            "section": "Identity",
+            "semantic_role": "person_name",
+            "sensitivity": "private_metadata",
+            "value_type": "text"
+          },
+          {
+            "aliases": [
+              "ssn",
+              "social security number"
+            ],
+            "key": "number",
+            "label": "Number",
+            "mask_last": null,
+            "protected": true,
+            "section": "Identity",
+            "semantic_role": "identity_number",
+            "sensitivity": "highly_sensitive",
+            "value_type": "concealed"
+          }
+        ],
+        "icon": "identity-number",
+        "kind": "core.social_security_number",
+        "label": "Social Security Number",
+        "markdown_notes": true,
+        "template_version": 1
+      },
+      {
+        "family": "other",
+        "fields": [],
+        "icon": "item",
+        "kind": "core.generic",
+        "label": "Generic",
+        "markdown_notes": true,
+        "template_version": 1
+      }
+    ]
+  }
+}
