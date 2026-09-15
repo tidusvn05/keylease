@@ -8,6 +8,13 @@ struct StaleApprovalError: Error, Equatable {
     let message: String
 }
 
+/// What a list-backed section should render — `SectionScaffold` uses it
+/// to lift empty/loading states out of the scroll column so they center
+/// in the detail area like other macOS apps.
+enum SectionPhase {
+    case loading, empty, rows
+}
+
 /// Shared loading/error plumbing for the read-mostly sections
 /// (Dart `SectionController`).
 @MainActor @Observable
@@ -16,6 +23,13 @@ final class SectionController<Item: Sendable> {
     var error: UserMessage?
     private(set) var loaded = false
     private(set) var loading = false
+
+    /// `loading` while the first fetch runs, `empty` once it returns
+    /// nothing, `rows` when there is content to scroll.
+    var phase: SectionPhase {
+        if loading, !loaded { return .loading }
+        return items.isEmpty ? .empty : .rows
+    }
 
     private let fetcher: (KeyLeaseClient) async throws -> [Item]
     private var client: KeyLeaseClient?

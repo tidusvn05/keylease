@@ -10,31 +10,51 @@ import KeyLeaseCore
 private struct SectionScaffold<Content: View>: View {
     let title: String
     let subtitle: String
+    var centered = false
     var actions: () -> AnyView
     @ViewBuilder var content: () -> Content
 
     init(
-        title: String, subtitle: String,
+        title: String, subtitle: String, centered: Bool = false,
         @ViewBuilder actions: @escaping () -> some View = { EmptyView() },
         @ViewBuilder content: @escaping () -> Content
     ) {
         self.title = title
         self.subtitle = subtitle
+        self.centered = centered
         self.actions = { AnyView(actions()) }
         self.content = content
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: KL.Space.l) {
-                Text(subtitle)
-                    .font(.callout).foregroundStyle(.secondary)
-                content()
+        Group {
+            if centered {
+                // Empty/loading fills the detail area so the state view
+                // centers like other macOS apps, instead of riding the
+                // top of the scroll column.
+                VStack(alignment: .leading, spacing: KL.Space.l) {
+                    Text(subtitle)
+                        .font(.callout).foregroundStyle(.secondary)
+                    content()
+                }
+                .padding(KL.Space.xxl)
+                .frame(
+                    maxWidth: .infinity, maxHeight: .infinity,
+                    alignment: .topLeading)
+                .controlSize(.large)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: KL.Space.l) {
+                        Text(subtitle)
+                            .font(.callout).foregroundStyle(.secondary)
+                        content()
+                    }
+                    .padding(KL.Space.xxl)
+                    .frame(maxWidth: 840, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .controlSize(.large)
+                }
             }
-            .padding(KL.Space.xxl)
-            .frame(maxWidth: 840, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .controlSize(.large)
         }
         .navigationTitle(title)
         .toolbar {
@@ -59,16 +79,16 @@ private struct SectionScaffold<Content: View>: View {
             onAction: { Task { await controller.load() } },
             onDismiss: { controller.error = nil })
     }
-    if controller.loading, !controller.loaded {
+    switch controller.phase {
+    case .loading:
         ProgressView()
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.top, 60)
-    } else if controller.items.isEmpty {
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    case .empty:
         ContentUnavailableView(
             emptyTitle, systemImage: emptyIcon,
             description: Text(emptyDetail))
-            .padding(.top, 40)
-    } else {
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    case .rows:
         rows(controller.items)
     }
 }
@@ -93,7 +113,8 @@ struct ConnectionsView: View {
     var body: some View {
         SectionScaffold(
             title: "Connections",
-            subtitle: "Accounts and providers KeyLease may reach")
+            subtitle: "Accounts and providers KeyLease may reach",
+            centered: controller.list.phase != .rows)
         {
             HStack(spacing: KL.Space.m) {
                 Button("Add token connection") { addToken = true }
@@ -457,7 +478,8 @@ struct ApprovalsView: View {
     var body: some View {
         SectionScaffold(
             title: "Approvals",
-            subtitle: "Requests waiting for a human decision")
+            subtitle: "Requests waiting for a human decision",
+            centered: controller.list.phase != .rows)
         {
             Button {
                 Task { await controller.list.load() }
@@ -622,7 +644,9 @@ struct ActivityView: View {
     var body: some View {
         SectionScaffold(
             title: "Activity",
-            subtitle: "What the daemon allowed, denied, or changed")
+            subtitle: "What the daemon allowed, denied, or changed",
+            centered: controller.list.phase != .rows
+                || controller.filtered.isEmpty)
         {
             HStack(spacing: KL.Space.m) {
                 Picker(
@@ -652,8 +676,17 @@ struct ActivityView: View {
                 emptyDetail: "What the daemon allows, denies, or changes "
                     + "will appear here."
             ) { _ in
-                ForEach(controller.filtered, id: \.requestId) { event in
-                    eventRow(event)
+                if controller.filtered.isEmpty {
+                    ContentUnavailableView(
+                        "No matching events",
+                        systemImage: "line.3.horizontal.decrease.circle",
+                        description: Text(
+                            "Try showing all events."))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ForEach(controller.filtered, id: \.requestId) { event in
+                        eventRow(event)
+                    }
                 }
             }
         }
@@ -703,7 +736,10 @@ struct MigrationsView: View {
     var body: some View {
         SectionScaffold(
             title: "Vault migrations",
-            subtitle: "Pending upgrades and applied history")
+            subtitle: "Pending upgrades and applied history",
+            centered: vault.migrationStatus.map {
+                $0.pending.isEmpty && $0.history.isEmpty
+            } ?? true)
         {
             Button {
                 Task { await vault.loadMigrations() }
@@ -717,13 +753,21 @@ struct MigrationsView: View {
                     message: failure, onDismiss: { self.failure = nil })
             }
             if let status = vault.migrationStatus {
-                SectionLabel(title: "Pending")
-                if status.pending.isEmpty {
-                    Text("Nothing to migrate.")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(status.pending, id: \.migrationId) { preview in
-                    migrationCard(preview)
+                if status.pending.isEmpty && status.history.isEmpty {
+                    ContentUnavailableView(
+                        "Vault is up to date",
+                        systemImage: "checkmark.seal",
+                        description: Text("No migrations are pending."))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    SectionLabel(title: "Pending")
+                    if status.pending.isEmpty {
+                        Text("Nothing to migrate.")
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(status.pending, id: \.migrationId) { preview in
+                        migrationCard(preview)
+                    }
                 }
                 if !status.history.isEmpty {
                     SectionLabel(title: "History").padding(.top, 8)
@@ -753,7 +797,8 @@ struct MigrationsView: View {
                     }
                 }
             } else {
-                ProgressView().controlSize(.small)
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .task { await vault.loadMigrations() }
