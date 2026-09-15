@@ -170,6 +170,17 @@ impl NativeStore {
         })
     }
 
+    /// Whether this database holds an initialised vault.
+    ///
+    /// `open` applies the schema eagerly, so table existence says nothing —
+    /// only a `vault_meta` row does.
+    pub fn is_initialized(&self) -> Result<bool> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .query_row("SELECT EXISTS(SELECT 1 FROM vault_meta)", [], |r| r.get(0))
+            .map_err(|_| KeyLeaseError::Storage)
+    }
+
     pub fn initialize(&self, password: &[u8]) -> Result<UnlockedVault> {
         let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
         let exists: bool = connection

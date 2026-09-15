@@ -1,11 +1,15 @@
 package ai.leasegate.mobile.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
@@ -13,14 +17,19 @@ import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Monitor
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -30,9 +39,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import ai.leasegate.mobile.core.LocalVaultProfile
+import ai.leasegate.mobile.core.UserMessage
 import ai.leasegate.mobile.state.AppController
 import ai.leasegate.mobile.state.AppPhase
 import ai.leasegate.mobile.state.AppSection
@@ -322,6 +336,8 @@ private fun UnlockScreen(app: AppController) {
     var password by remember { mutableStateOf("") }
     var biometricUnlock by remember { mutableStateOf(false) }
     var enableBiometric by remember { mutableStateOf(false) }
+    var switching by remember { mutableStateOf(false) }
+    var failure by remember { mutableStateOf<UserMessage?>(null) }
 
     LaunchedEffect(Unit) {
         biometricUnlock = app.canUnlockWithBiometrics()
@@ -330,7 +346,11 @@ private fun UnlockScreen(app: AppController) {
 
     val busy = appState.isBusy(AppController.unlockKey)
     val activeVault = appState.activeVaultProfile
-    val shortIdentity = activeVault?.vaultId?.let { if (it.length > 12) it.substring(0, 12) else it }
+    // A vault that predates the profile registry has no entry yet — fall back
+    // to what the open database itself can report.
+    val vaultId = activeVault?.vaultId ?: appState.status?.vaultId
+    val shortIdentity = vaultId?.let { if (it.length > 12) it.substring(0, 12) else it }
+    val vaultPath = activeVault?.path ?: appState.activeVaultPath
 
     fun submit() {
         if (password.isEmpty()) return
@@ -341,15 +361,46 @@ private fun UnlockScreen(app: AppController) {
 
     StateScreen(
         title = "Welcome back",
-        message = if (activeVault == null) {
-            "Unlock your vault to access your items."
-        } else {
-            "Unlock ${activeVault.name}${if (shortIdentity == null) "" else " · $shortIdentity"} to access your items."
-        },
+        message = "Unlock your vault to access your items.",
         icon = Icons.Filled.Lock,
         footnote = "The vault locks itself when the app is backgrounded or the screen locks.",
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            // Which vault this password opens — a name alone is ambiguous once
+            // the device holds more than one.
+            Text(
+                activeVault?.name ?: "Vault on this device",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+            )
+            if (vaultPath != null) {
+                SelectionContainer {
+                    Text(
+                        vaultPath,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                    )
+                }
+            }
+            if (shortIdentity != null) {
+                Text(
+                    "ID $shortIdentity",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            failure?.let {
+                Spacer(Modifier.height(10.dp))
+                Text(it.detail, color = MaterialTheme.colorScheme.error)
+            }
+            Spacer(Modifier.height(14.dp))
             OutlinedTextField(
                 value = password,
                 onValueChange = {
@@ -402,6 +453,99 @@ private fun UnlockScreen(app: AppController) {
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
+            if (app.capabilities.mobileVaultLifecycle) {
+                Spacer(Modifier.height(14.dp))
+                if (appState.vaultProfiles.size > 1) {
+                    KeyleaseButton(
+                        "Switch vault",
+                        outline = true,
+                        icon = Icons.Filled.SwapHoriz,
+                        enabled = !busy,
+                        onClick = { switching = true },
+                    )
+                }
+                // The vault list — switch, rename, import, create — lives in
+                // Settings, which stays reachable while the vault is locked.
+                TextButton(
+                    onClick = { app.selectSection(AppSection.SETTINGS) },
+                    enabled = !busy,
+                ) { Text("Manage vaults") }
+            }
         }
     }
+
+    if (switching) {
+        SwitchVaultDialog(
+            profiles = appState.vaultProfiles,
+            onSwitch = { profile ->
+                scope.launch {
+                    try {
+                        app.switchManagedVault(profile.id)
+                    } catch (caught: Throwable) {
+                        failure = UserMessage.from(caught)
+                    }
+                    switching = false
+                }
+            },
+            onDismiss = { switching = false },
+        )
+    }
+}
+
+@Composable
+private fun SwitchVaultDialog(
+    profiles: List<LocalVaultProfile>,
+    onSwitch: (LocalVaultProfile) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Switch vault") },
+        text = {
+            Column {
+                Text(
+                    "Each vault has its own master password.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                for (profile in profiles) {
+                    ListItem(
+                        modifier = Modifier.clickable(enabled = !profile.active) {
+                            onSwitch(profile)
+                        },
+                        leadingContent = {
+                            Icon(
+                                if (profile.active) {
+                                    Icons.Filled.CheckCircle
+                                } else {
+                                    Icons.Filled.Circle
+                                },
+                                contentDescription = null,
+                                tint = if (profile.active) {
+                                    LocalKeyleaseColors.current.success
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        },
+                        headlineContent = { Text(profile.name) },
+                        supportingContent = {
+                            Text(
+                                listOfNotNull(
+                                    profile.path,
+                                    profile.vaultId?.let { "ID ${it.take(12)}" },
+                                ).joinToString("\n"),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        },
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }

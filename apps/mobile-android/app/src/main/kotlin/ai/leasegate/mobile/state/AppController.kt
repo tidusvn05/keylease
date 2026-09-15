@@ -81,6 +81,8 @@ data class AppUiState(
     val unlockMessage: UserMessage? = null,
     val serviceVersion: String? = null,
     val vaultProfiles: List<LocalVaultProfile> = emptyList(),
+    /** The open vault's file — identifies it even before a profile exists. */
+    val activeVaultPath: String? = null,
     val passwordGeneratorSettings: PasswordGeneratorSettings = PasswordGeneratorSettings(),
     val busy: Set<String> = emptySet(),
     val sectionLoadTick: Int = 0,
@@ -160,11 +162,9 @@ class AppController(
             }
             try {
                 storage.initialize()
+                syncVaultProfiles()
                 _state.update {
-                    it.copy(
-                        vaultProfiles = storage.listVaults(),
-                        serviceVersion = storage.serviceVersion(),
-                    )
+                    it.copy(serviceVersion = storage.serviceVersion())
                 }
                 if (!storage.vaultExists()) {
                     enter(AppPhase.ONBOARDING, null)
@@ -339,7 +339,7 @@ class AppController(
         }
         if (unlocked) {
             _state.update { it.copy(unlockMessage = null) }
-            _state.update { it.copy(vaultProfiles = storage.listVaults()) }
+            syncVaultProfiles()
             if (enableBiometric) {
                 val vaultId = _state.value.activeVaultProfile?.vaultId
                 val adapter = biometric
@@ -390,8 +390,15 @@ class AppController(
 
     // --- vault profiles ----------------------------------------------------
 
-    suspend fun reloadVaultProfiles() {
-        _state.update { it.copy(vaultProfiles = storage.listVaults()) }
+    suspend fun reloadVaultProfiles() = syncVaultProfiles()
+
+    private suspend fun syncVaultProfiles() {
+        _state.update {
+            it.copy(
+                vaultProfiles = storage.listVaults(),
+                activeVaultPath = storage.activePath,
+            )
+        }
     }
 
     suspend fun createManagedVault(name: String, request: JsonMap) {

@@ -492,4 +492,5 @@ data class LocalVaultProfile(
     val active: Boolean,
     val vaultId: String? = null,
     val provenance: String? = null,
+    val path: String? = null,
 )

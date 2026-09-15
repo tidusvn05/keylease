@@ -82,6 +82,9 @@ class VaultStorage(
         return result
     }
 
+    /** The database file the session currently has open. */
+    val activePath: String get() = databasePath
+
     suspend fun listVaults(): List<LocalVaultProfile> = profiles.map { profile ->
         LocalVaultProfile(
             id = profile["id"] as String,
@@ -89,6 +92,7 @@ class VaultStorage(
             active = profile["id"] == activeId,
             vaultId = profile["vault_id"] as? String,
             provenance = profile["provenance"] as? String,
+            path = profile["path"] as? String,
         )
     }
 

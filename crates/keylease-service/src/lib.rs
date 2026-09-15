@@ -652,6 +652,12 @@ impl KeyLeaseService {
         let token = self.store.register_local_owner_client(&id, role)?;
         Ok((id, token))
     }
+    /// Whether the open database holds an initialised vault — the distinction
+    /// between the onboarding and the locked phases on a client.
+    pub fn is_initialized(&self) -> Result<bool> {
+        self.store.is_initialized()
+    }
+
     pub fn list_clients(&self) -> Result<Vec<AgentId>> {
         self.store.list_clients()
     }

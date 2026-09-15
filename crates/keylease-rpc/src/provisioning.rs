@@ -159,7 +159,10 @@ pub async fn handle_provision(
     match request {
         ProvisionRequest::Inspect => {
             let status = service.status()?;
-            let initialised = service.list_clients().is_ok() && status.get("locked").is_some();
+            // `NativeStore::open` creates the file and applies the schema
+            // eagerly, so "the store answers queries" cannot stand in for "a
+            // vault exists" — only a `vault_meta` row can.
+            let initialised = service.is_initialized().unwrap_or(false);
             Ok(json!({
                 "initialized": initialised,
                 "status": status,

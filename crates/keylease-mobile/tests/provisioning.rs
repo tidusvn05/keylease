@@ -49,6 +49,36 @@ fn call(handle: u64, request: &Value) -> Value {
 }
 
 #[test]
+fn a_freshly_opened_database_reports_not_initialized() {
+    // `NativeStore::open` materialises the file and its schema on first open,
+    // so "the tables answer queries" cannot stand in for "a vault exists" —
+    // only a `vault_meta` row can. A client that misreads this drops a first
+    // install onto the unlock screen, where no password can ever succeed.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let handle = open(dir.path().join("vault.sqlite").to_str().expect("utf-8"));
+
+    let inspected = provision(handle, &json!({"provision": "inspect"}));
+    assert_eq!(inspected["ok"], json!(true), "{inspected}");
+    assert_eq!(
+        inspected["result"]["initialized"],
+        json!(false),
+        "an empty database is not a vault: {inspected}"
+    );
+
+    let created = provision(
+        handle,
+        &json!({"provision": "create", "password": MASTER_PASSWORD,
+                "session_ttl_seconds": 300, "acknowledge_standalone": true}),
+    );
+    assert_eq!(created["ok"], json!(true), "{created}");
+
+    let again = provision(handle, &json!({"provision": "inspect"}));
+    assert_eq!(again["result"]["initialized"], json!(true), "{again}");
+
+    keylease_close(handle);
+}
+
+#[test]
 fn a_standalone_vault_can_be_created_and_used() {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("vault.sqlite");
