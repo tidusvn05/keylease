@@ -116,14 +116,14 @@ final class VaultController {
     func select(_ entryId: String) {
         guard selectedId != entryId else { return }
         selectedId = entryId
-        workspaceMode = .detail
+        closeEditor()
         hideSecrets()
         Task { await loadEntryView(entryId) }
     }
 
     func moveSelection(_ delta: Int) {
         let visible = visibleEntries
-        guard !visible.isEmpty else { return }
+        guard !visible.isEmpty, confirmDiscardIfDirty() else { return }
         let current = visible.firstIndex { $0.id == selectedId } ?? -1
         let next = min(max(current < 0 ? 0 : current + delta, 0),
                        visible.count - 1)
@@ -133,7 +133,7 @@ final class VaultController {
     func selectGroup(_ groupId: String?) {
         selectedGroupId = groupId
         favoritesOnly = false
-        workspaceMode = .detail
+        closeEditor()
         hideSecrets()
         normalizeSelection()
     }
@@ -141,7 +141,7 @@ final class VaultController {
     func selectFavorites() {
         selectedGroupId = nil
         favoritesOnly = true
-        workspaceMode = .detail
+        closeEditor()
         hideSecrets()
         normalizeSelection()
     }
@@ -164,7 +164,22 @@ final class VaultController {
     /// same via `draft.isDirty` + a confirmation dialog).
     var draftIsDirty: Bool { activeDraft?.isDirty ?? false }
 
+    /// `true` when no dirty draft blocks a workspace change — or the user
+    /// just confirmed dropping it. The editor's Cancel uses the same dialog.
+    func confirmDiscardIfDirty() -> Bool {
+        let agentDirty = creationMode == .agentDriven
+            && (agentCreationDraft?.isDirty ?? false)
+        guard draftIsDirty || agentDirty else { return true }
+        return confirmAction(
+            title: "Discard changes?",
+            message: "This item has unsaved changes. Discarding cannot "
+                + "be undone.",
+            confirmLabel: "Discard",
+            destructive: true)
+    }
+
     func beginCreate(kind: String = "core.login", initialPassword: String = "") {
+        activeDraft?.wipeSecrets()
         let draft = EntryDraft(
             groupId: selectedGroupId ?? orderedGroups.first?.id,
             kind: kind,
@@ -178,6 +193,7 @@ final class VaultController {
     }
 
     func beginCreateContent(kind: String) {
+        activeDraft?.wipeSecrets()
         let draft = EntryDraft(kind: kind)
         activeDraft = draft
         creationMode = .manual
@@ -203,6 +219,7 @@ final class VaultController {
     func beginEdit(_ entry: ItemMetadata) {
         agentCreationDraft = nil
         creationMode = .manual
+        activeDraft?.wipeSecrets()
         activeDraft = EntryDraft(editing: entry)
         workspaceMode = .edit
         hideSecrets()
@@ -545,6 +562,14 @@ final class VaultController {
                     dryRun: false))
         }
         await search()
+        // Land on the item just written — a new item should become the
+        // selection, an edit keeps it. Only when it is visible under the
+        // current filter; the editor's `closeEditor` handles the rest.
+        if let savedId,
+            visibleEntries.contains(where: { $0.id == savedId })
+        {
+            select(savedId)
+        }
         return savedId
     }
 
@@ -595,6 +620,11 @@ final class VaultController {
                     idempotencyKey: idempotencyKey(),
                     dryRun: false))
             error = nil
+            // Deleting the item open in the editor must not leave a
+            // ghost draft behind — its save would hit a missing entry.
+            if activeDraft?.entryId == entry.id {
+                closeEditor()
+            }
             await search()
         } catch {
             self.error = UserMessage(error)

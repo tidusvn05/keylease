@@ -125,6 +125,7 @@ private struct EditorBody: View {
                 Task { await cancel() }
             }
             .disabled(saving)
+            .keyboardShortcut(.cancelAction)
             if !agentDriven {
                 KLButton(title: saving ? "Saving…" : "Save",
                          role: .primary) {
@@ -629,15 +630,19 @@ private struct EditorBody: View {
         failureAction = nil
         saving = true
         defer { saving = false }
+        // `save()` selects the written item, which closes the editor and
+        // wipes the draft — snapshot the bindings before they are gone.
+        let bindingsToClear = draft.sshBindingsToClear
+        let keyBindings = draft.sshKeyBindings
         do {
             let savedId = try await vault.save(draft)
             var bindingFailure: Error?
             if let savedId {
                 do {
-                    for endpointId in draft.sshBindingsToClear {
+                    for endpointId in bindingsToClear {
                         try app.setSshKeyBinding(savedId, endpointId, nil)
                     }
-                    for (endpointId, path) in draft.sshKeyBindings {
+                    for (endpointId, path) in keyBindings {
                         try app.setSshKeyBinding(savedId, endpointId, path)
                     }
                 } catch {
@@ -659,17 +664,7 @@ private struct EditorBody: View {
 
     private func cancel() async {
         syncTemplatePayload()
-        let agentDirty = vault.creationMode == .agentDriven
-            && (vault.agentCreationDraft?.isDirty ?? false)
-        if draft.isDirty || agentDirty {
-            let discard = confirmAction(
-                title: "Discard changes?",
-                message: "This item has unsaved changes. Discarding cannot "
-                    + "be undone.",
-                confirmLabel: "Discard",
-                destructive: true)
-            guard discard else { return }
-        }
+        guard vault.confirmDiscardIfDirty() else { return }
         vault.closeEditor()
     }
 
@@ -679,7 +674,7 @@ private struct EditorBody: View {
             guard let generated = try await vault.generatePassword(settings)
             else { return }
             draft.password = generated
-            passwordCopied = app.copySensitive(generated)
+            passwordCopied = app.copySensitive(generated, label: "Password")
             if passwordCopied {
                 Task {
                     try? await Task.sleep(for: .seconds(1))

@@ -60,18 +60,26 @@ struct EntryDetailView: View {
                     {
                         Task { await app.vault.toggleFavorite(item) }
                     }
-                    IconAction(
-                        label: "Copy prompt for agent",
-                        icon: "doc.on.clipboard")
-                    {
-                        _ = app.copyAgentPrompt(item)
+                    Menu {
+                        Button("Copy prompt for agent",
+                               systemImage: "doc.on.clipboard")
+                        {
+                            _ = app.copyAgentPrompt(item)
+                        }
+                        Button("Copy CLI command", systemImage: "terminal")
+                        {
+                            _ = app.copyCliCommand(item)
+                        }
+                    } label: {
+                        Label("More actions",
+                              systemImage: "ellipsis.circle")
                     }
-                    IconAction(
-                        label: "Copy CLI command", icon: "terminal")
-                    {
-                        _ = app.copyCliCommand(item)
-                    }
+                    .labelStyle(.iconOnly)
+                    .menuIndicator(.hidden)
+                    .help("More actions")
                     IconAction(label: "Edit", icon: "square.and.pencil") {
+                        guard app.vault.confirmDiscardIfDirty()
+                        else { return }
                         app.vault.beginEdit(item)
                     }
                     IconAction(
@@ -297,6 +305,7 @@ struct EntryDetailView: View {
         }
         .padding(20)
         .frame(minWidth: 420)
+        .onExitCommand { showHistory = false }
     }
 
     // MARK: Copy/open helpers
@@ -312,7 +321,7 @@ struct EntryDetailView: View {
                     entryId: item.id, field: field)
             }
             if let value, !value.isEmpty {
-                _ = app.copySensitive(value)
+                _ = app.copySensitive(value, label: label)
             }
         }
     }
@@ -331,7 +340,7 @@ struct EntryDetailView: View {
                 value = field.displayValue
             }
             if let value, !value.isEmpty {
-                _ = app.copySensitive(value)
+                _ = app.copySensitive(value, label: field.label)
             }
         }
     }
@@ -362,7 +371,7 @@ private struct NotesSection: View {
                 if notes != nil {
                     IconAction(label: "Copy notes", icon: "doc.on.doc") {
                         if let notes, !notes.isEmpty {
-                            _ = app.copySensitive(notes)
+                            _ = app.copySensitive(notes, label: "Notes")
                         }
                     }
                 }
@@ -424,22 +433,37 @@ private struct TotpRow: View {
     @State private var code: String?
     @State private var error: String?
     @State private var remaining = 0
+    /// Seconds the fetched code had left — the ring's denominator.
+    @State private var total = 0
     @State private var loading = false
     @State private var timer: Timer?
 
     var body: some View {
-        DetailRow(
-            label: "One-time password",
-            value: loading
-                ? "Loading code…"
-                : code.map { "\($0) · \(remaining)s" }
-                    ?? (error ?? "Could not load code")
-        ) {
+        HStack(alignment: .firstTextBaseline) {
+            Text("One-time password")
+                .foregroundStyle(.secondary)
+                .frame(width: 150, alignment: .leading)
+            HStack(spacing: KL.Space.m) {
+                if let code {
+                    countdownRing
+                    Text(code)
+                        .font(.body.monospaced())
+                        .textSelection(.enabled)
+                } else {
+                    Text(
+                        loading
+                            ? "Loading code…"
+                            : error ?? "Could not load code")
+                }
+            }
+            Spacer(minLength: 8)
             if code != nil {
                 IconAction(
                     label: "Copy one-time password", icon: "doc.on.doc")
                 {
-                    if let code { _ = app.copySensitive(code) }
+                    if let code {
+                        _ = app.copySensitive(code, label: "One-time password")
+                    }
                 }
             }
             if error != nil {
@@ -450,8 +474,28 @@ private struct TotpRow: View {
                 }
             }
         }
+        .padding(.vertical, 6)
         .onAppear { Task { await load() } }
         .onDisappear { timer?.invalidate() }
+    }
+
+    private var progress: Double {
+        total > 0 ? min(max(Double(remaining) / Double(total), 0), 1) : 0
+    }
+
+    private var countdownRing: some View {
+        ZStack {
+            Circle().stroke(.secondary.opacity(0.25), lineWidth: 2)
+            Circle()
+                .trim(from: 0, to: progress)
+                .stroke(
+                    KL.Colors.accent,
+                    style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
+        .frame(width: 14, height: 14)
+        .animation(.linear(duration: 1), value: remaining)
+        .help("Refreshes in \(remaining) s")
     }
 
     private func load() async {
@@ -462,6 +506,7 @@ private struct TotpRow: View {
             let response = try await app.vault.totp(entry)
             code = response.code
             remaining = Int(response.expiresIn ?? 0)
+            total = remaining
             loading = false
             scheduleCountdown()
         } catch let caught {

@@ -34,12 +34,11 @@ private enum SidebarItem: Hashable {
 }
 
 struct ContentView: View {
-    let app: AppController
-    @State private var section: AppSection = .vault
+    @Bindable var app: AppController
 
     var body: some View {
         Group {
-            if section == .vault {
+            if app.section == .vault {
                 // Vault keeps the classic three-pane mail layout.
                 NavigationSplitView {
                     sidebar
@@ -60,19 +59,19 @@ struct ContentView: View {
                 }
             }
         }
-        .onChange(of: section) { loadSection() }
+        .onChange(of: app.section) { loadSection() }
         .task { loadSection() }
     }
 
     private var sidebar: some View {
-        SidebarView(app: app, section: $section)
+        SidebarView(app: app, section: $app.section)
             .navigationSplitViewColumnWidth(min: 180, ideal: 214, max: 280)
     }
 
     /// Section switches trigger the controller loads, like the Dart
     /// `_select` in the settings/sidebar.
     private func loadSection() {
-        switch section {
+        switch app.section {
         case .vault:
             Task { await app.vault.reload() }
         case .connections:
@@ -87,7 +86,7 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var sectionContent: some View {
-        switch section {
+        switch app.section {
         case .vault:
             EmptyView()
         case .connections:
@@ -148,12 +147,15 @@ private struct SidebarView: View {
                 case .section(let item):
                     section = item
                 case .allItems:
+                    guard app.vault.confirmDiscardIfDirty() else { return }
                     section = .vault
                     app.vault.selectGroup(nil)
                 case .favorites:
+                    guard app.vault.confirmDiscardIfDirty() else { return }
                     section = .vault
                     app.vault.selectFavorites()
                 case .group(let id):
+                    guard app.vault.confirmDiscardIfDirty() else { return }
                     section = .vault
                     app.vault.selectGroup(id)
                 case nil:
@@ -166,8 +168,14 @@ private struct SidebarView: View {
         List(selection: selection) {
             Section {
                 ForEach(AppSection.allCases) { item in
-                    Label(item.rawValue, systemImage: item.icon)
-                        .tag(SidebarItem.section(item))
+                    if item == .approvals, pendingApprovals > 0 {
+                        Label(item.rawValue, systemImage: item.icon)
+                            .badge(pendingApprovals)
+                            .tag(SidebarItem.section(item))
+                    } else {
+                        Label(item.rawValue, systemImage: item.icon)
+                            .tag(SidebarItem.section(item))
+                    }
                 }
             }
 
@@ -212,6 +220,22 @@ private struct SidebarView: View {
             }
             Button("Cancel", role: .cancel) { renaming = nil }
         }
+        .alert(
+            groupError?.title ?? "Group action failed",
+            isPresented: Binding(
+                get: { groupError != nil },
+                set: { if !$0 { groupError = nil } })
+        ) {
+            Button("OK", role: .cancel) { groupError = nil }
+        } message: {
+            if let detail = groupError?.detail {
+                Text(detail)
+            }
+        }
+    }
+
+    private var pendingApprovals: Int {
+        app.approvals.list.items.filter(\.decidableNow).count
     }
 
     @ViewBuilder private var vaultGroups: some View {

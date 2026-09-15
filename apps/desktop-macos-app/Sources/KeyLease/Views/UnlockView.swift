@@ -5,9 +5,17 @@ struct UnlockView: View {
     let app: AppController
     @State private var password = ""
     @State private var busy = false
+    @FocusState private var passwordFocused: Bool
+
+    private var vaultName: String? {
+        app.vaultProfiles.first(where: \.active)?.name
+    }
 
     var body: some View {
-        KLStateScreen(icon: "lock.fill", title: "Unlock KeyLease") {
+        KLStateScreen(
+            icon: "lock.fill", title: "Unlock KeyLease",
+            detail: vaultName.map { "Vault: \($0)" })
+        {
             VStack(spacing: KL.Space.xl) {
                 if let message = app.unlockMessage {
                     Text(message.title)
@@ -16,6 +24,7 @@ struct UnlockView: View {
                 }
                 SecureField("Master password", text: $password)
                     .frame(maxWidth: 320)
+                    .focused($passwordFocused)
                     .onSubmit { Task { await submit() } }
                 HStack(spacing: KL.Space.m) {
                     KLButton(
@@ -30,6 +39,10 @@ struct UnlockView: View {
                     }
                 }
             }
+        }
+        .onAppear {
+            // Focus may need a beat while the window finishes appearing.
+            DispatchQueue.main.async { passwordFocused = true }
         }
     }
 

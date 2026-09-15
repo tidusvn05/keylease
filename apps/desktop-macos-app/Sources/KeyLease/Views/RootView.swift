@@ -53,6 +53,23 @@ struct RootView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Copy confirmation — floats above whatever phase is showing.
+        .overlay(alignment: .bottom) {
+            if let toast = app.copiedToast {
+                Label(toast, systemImage: "checkmark.circle.fill")
+                    .font(.callout.weight(.medium))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().stroke(KL.Colors.cardStroke))
+                    .shadow(radius: 8, y: 2)
+                    .padding(.bottom, 24)
+                    .transition(
+                        .move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(
+            .spring(duration: 0.3), value: app.copiedToast != nil)
     }
 }
 

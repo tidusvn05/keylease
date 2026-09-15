@@ -307,6 +307,7 @@ private struct ImportVaultSheet: View {
             HStack {
                 Spacer()
                 KLButton(title: "Cancel", role: .ghost) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
                 KLButton(
                     title: busy ? "Importing…" : "Import", role: .primary)
                 {

@@ -12,7 +12,10 @@ struct VaultListView: View {
     private var selection: Binding<String?> {
         Binding(
             get: { app.vault.selectedId },
-            set: { if let id = $0 { app.vault.select(id) } })
+            set: { if let id = $0 {
+                guard app.vault.confirmDiscardIfDirty() else { return }
+                app.vault.select(id)
+            } })
     }
 
     var body: some View {
@@ -26,7 +29,10 @@ struct VaultListView: View {
                     {
                         Task { await app.vault.toggleFavorite(entry) }
                     }
-                    Button("Edit") { app.vault.beginEdit(entry) }
+                    Button("Edit") {
+                        guard app.vault.confirmDiscardIfDirty() else { return }
+                        app.vault.beginEdit(entry)
+                    }
                     Divider()
                     Button("Delete", role: .destructive) {
                         deletingEntry = entry
@@ -41,10 +47,25 @@ struct VaultListView: View {
             app.vault.moveSelection(direction == .down ? 1 : -1)
         }
         .overlay { stateOverlay }
+        .safeAreaInset(edge: .bottom) {
+            if app.vault.listState == .content {
+                Text(
+                    "\(app.vault.visibleEntries.count) "
+                        + (app.vault.visibleEntries.count == 1
+                            ? "item" : "items"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, KL.Space.xxl)
+                    .padding(.vertical, KL.Space.s)
+                    .background(.bar)
+            }
+        }
         .navigationTitle("Vault")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
+                    guard app.vault.confirmDiscardIfDirty() else { return }
                     app.vault.beginCreate()
                 } label: {
                     Label("New item", systemImage: "plus")
@@ -52,6 +73,7 @@ struct VaultListView: View {
                 .help("New item")
 
                 Button {
+                    guard app.vault.confirmDiscardIfDirty() else { return }
                     app.vault.openPasswordGenerator()
                 } label: {
                     Label("Password generator", systemImage: "wand.and.stars")

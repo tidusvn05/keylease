@@ -45,11 +45,12 @@ private struct SectionScaffold<Content: View>: View {
     }
 }
 
-/// The empty/error/loading body shared by list sections.
+/// The empty/error/loading body shared by list sections — the same
+/// `ContentUnavailableView` language as the vault list.
 @ViewBuilder
 @MainActor private func sectionBody<Item: Sendable>(
     _ controller: SectionController<Item>,
-    empty: String,
+    emptyTitle: String, emptyIcon: String, emptyDetail: String,
     @ViewBuilder rows: ([Item]) -> some View
 ) -> some View {
     if let error = controller.error {
@@ -59,9 +60,14 @@ private struct SectionScaffold<Content: View>: View {
             onDismiss: { controller.error = nil })
     }
     if controller.loading, !controller.loaded {
-        ProgressView().controlSize(.small)
+        ProgressView()
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.top, 60)
     } else if controller.items.isEmpty {
-        Text(empty).foregroundStyle(.secondary)
+        ContentUnavailableView(
+            emptyTitle, systemImage: emptyIcon,
+            description: Text(emptyDetail))
+            .padding(.top, 40)
     } else {
         rows(controller.items)
     }
@@ -107,8 +113,10 @@ struct ConnectionsView: View {
             }
             sectionBody(
                 controller.list,
-                empty: "No connections yet. Add a token connection or "
-                    + "connect Google to get started."
+                emptyTitle: "No connections yet",
+                emptyIcon: "link",
+                emptyDetail: "Add a token connection or connect Google "
+                    + "to get started."
             ) { items in
                 ForEach(items, id: \.id) { connection in
                     ConnectionCard(app: app, connection: connection)
@@ -272,6 +280,7 @@ private struct ConnectionCard: View {
                         enrolling = false
                         resource = ""
                     }
+                    .keyboardShortcut(.cancelAction)
                 }
             } else {
                 KLButton(title: "Enroll a resource",
@@ -328,6 +337,7 @@ private struct AddTokenSheet: View {
             HStack {
                 Spacer()
                 KLButton(title: "Cancel", role: .ghost) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
                 KLButton(
                     title: busy ? "Adding…" : "Add", role: .primary)
                 {
@@ -393,6 +403,7 @@ private struct GoogleConnectSheet: View {
             HStack {
                 Spacer()
                 KLButton(title: "Cancel", role: .ghost) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
                 KLButton(
                     title: busy ? "Opening…" : "Open Google",
                     role: .primary)
@@ -461,7 +472,9 @@ struct ApprovalsView: View {
             }
             sectionBody(
                 controller.list,
-                empty: "Nothing waiting for you."
+                emptyTitle: "Nothing waiting for you",
+                emptyIcon: "checkmark.shield",
+                emptyDetail: "New approval requests will appear here."
             ) { items in
                 ForEach(items, id: \.id) { approval in
                     ApprovalCard(
@@ -472,7 +485,15 @@ struct ApprovalsView: View {
                 }
             }
         }
-        .task { await controller.list.load() }
+        // Approvals arrive asynchronously — poll while the section is
+        // open so a request is never silently stale. `.task` cancels
+        // the loop when the view goes away.
+        .task {
+            while !Task.isCancelled {
+                await controller.list.load()
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
     }
 
     private func decide(_ approval: ApprovalRecord, approve: Bool) async {
@@ -626,14 +647,22 @@ struct ActivityView: View {
         } content: {
             sectionBody(
                 controller.list,
-                empty: "No events yet."
+                emptyTitle: "No events yet",
+                emptyIcon: "clock",
+                emptyDetail: "What the daemon allows, denies, or changes "
+                    + "will appear here."
             ) { _ in
                 ForEach(controller.filtered, id: \.requestId) { event in
                     eventRow(event)
                 }
             }
         }
-        .task { await controller.list.load() }
+        .task {
+            while !Task.isCancelled {
+                await controller.list.load()
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
     }
 
     private func eventRow(_ event: AuditEvent) -> some View {

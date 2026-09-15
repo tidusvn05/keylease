@@ -149,7 +149,7 @@ struct PasswordGeneratorForm: View {
 
     private func copy() {
         guard !password.isEmpty else { return }
-        copied = app.copySensitive(password)
+        copied = app.copySensitive(password, label: "Password")
         if copied {
             Task {
                 try? await Task.sleep(for: .seconds(2))
@@ -225,6 +225,7 @@ struct PasswordSettingsSheet: View {
                 Spacer()
                 KLButton(title: "Cancel", role: .ghost) { dismiss() }
                     .disabled(saving)
+                    .keyboardShortcut(.cancelAction)
                 KLButton(
                     title: saving ? "Saving…" : "Save settings",
                     role: .primary)
@@ -519,7 +520,8 @@ struct AgentCreationPane: View {
                 draft.handoff = handoff
             }
             let copied = app.copySensitive(
-                handoff!.clipboardText, clearAfter: 120)
+                handoff!.clipboardText, clearAfter: 120,
+                label: "Agent command")
             if copied { draft.handoffCopied = true }
         } catch {
             message = UserMessage(error)

@@ -82,6 +82,13 @@ final class AppController {
     private(set) var legacyDatabase: String?
     var message: UserMessage?
     var unlockMessage: UserMessage?
+    /// Transient copy confirmation shown as a floating capsule — every
+    /// `copySensitive` call sites through here so the feedback is uniform.
+    private(set) var copiedToast: String?
+    private var toastTask: Task<Void, Never>?
+    /// Top-level section shown in `ContentView` — lives here so the Go
+    /// menu (⌘1–⌘5) can switch sections from outside the view tree.
+    var section: AppSection = .vault
 
     let runtime = RuntimeService()
     let security = SecurityService()
@@ -197,6 +204,9 @@ final class AppController {
         approvals.use(client)
         activity.use(client)
         await vault.load(using: client)
+        // The sidebar badge needs pending approvals without a visit to
+        // the section — load once here, the section itself polls.
+        Task { await approvals.list.load() }
     }
 
     /// Polls `status` until the freshly started daemon accepts connections —
@@ -337,12 +347,22 @@ final class AppController {
 
     // MARK: - Clipboard (`copySensitive` / agent prompt / CLI command)
 
-    /// Copies a secret and schedules the conditional clear. Returns false
-    /// for empty input, like the Dart adapter.
+    /// Copies a secret, schedules the conditional clear and confirms it
+    /// on screen. Returns false for empty input, like the Dart adapter.
     @discardableResult
-    func copySensitive(_ value: String, clearAfter seconds: Int = 30) -> Bool {
+    func copySensitive(
+        _ value: String, clearAfter seconds: Int = 30,
+        label: String? = nil
+    ) -> Bool {
         guard !value.isEmpty else { return false }
         security.copySensitive(value, clearAfter: seconds)
+        copiedToast = (label ?? "Value") + " copied"
+        toastTask?.cancel()
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.6))
+            guard !Task.isCancelled else { return }
+            self?.copiedToast = nil
+        }
         return true
     }
 
@@ -379,12 +399,16 @@ final class AppController {
 
     @discardableResult
     func copyAgentPrompt(_ entry: ItemMetadata) -> Bool {
-        copySensitive(Self.agentPromptForEntry(entry), clearAfter: 120)
+        copySensitive(
+            Self.agentPromptForEntry(entry), clearAfter: 120,
+            label: "Agent prompt")
     }
 
     @discardableResult
     func copyCliCommand(_ entry: ItemMetadata) -> Bool {
-        copySensitive(Self.cliCommandForEntry(entry), clearAfter: 120)
+        copySensitive(
+            Self.cliCommandForEntry(entry), clearAfter: 120,
+            label: "CLI command")
     }
 
     // MARK: - Preferences passthroughs
