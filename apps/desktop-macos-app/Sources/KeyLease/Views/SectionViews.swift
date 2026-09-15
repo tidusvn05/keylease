@@ -33,8 +33,9 @@ private struct SectionScaffold<Content: View>: View {
             }
             .padding(KL.Space.xxl)
             .frame(maxWidth: 840, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .controlSize(.large)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .navigationTitle(title)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
@@ -267,17 +268,14 @@ private struct ConnectionCard: View {
                                 enrolled: true)
                         }
                     }
-                    .controlSize(.small)
                     KLButton(title: "Cancel", role: .ghost) {
                         enrolling = false
                         resource = ""
                     }
-                    .controlSize(.small)
                 }
             } else {
                 KLButton(title: "Enroll a resource",
                          icon: "plus") { enrolling = true }
-                    .controlSize(.small)
             }
             }
         }
@@ -341,6 +339,7 @@ private struct AddTokenSheet: View {
         }
         .padding(KL.Space.xxxl)
         .frame(width: 420)
+        .controlSize(.large)
     }
 
     private func add() async {
@@ -407,6 +406,7 @@ private struct GoogleConnectSheet: View {
         }
         .padding(KL.Space.xxxl)
         .frame(width: 420)
+        .controlSize(.large)
     }
 
     private func begin() async {

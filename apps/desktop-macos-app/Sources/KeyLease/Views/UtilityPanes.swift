@@ -19,8 +19,9 @@ struct PasswordGeneratorView: View {
             }
             .padding(KL.Space.xxl)
             .frame(maxWidth: 640, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .controlSize(.large)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .navigationTitle("Password generator")
         .toolbar {
             ToolbarItem(placement: .navigation) {
@@ -236,6 +237,7 @@ struct PasswordSettingsSheet: View {
         }
         .padding(KL.Space.xxxl)
         .frame(width: 420)
+        .controlSize(.large)
         .onAppear { value = app.passwordGeneratorSettings }
     }
 

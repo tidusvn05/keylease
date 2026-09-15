@@ -47,8 +47,9 @@ struct EntryDetailView: View {
                 }
                 .padding(KL.Space.xxxxl)
                 .frame(maxWidth: 840, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .controlSize(.large)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
             .navigationTitle(item.title)
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {

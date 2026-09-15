@@ -103,6 +103,7 @@ private struct GeneralSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+        .controlSize(.large)
         .padding()
     }
 }
@@ -172,6 +173,7 @@ private struct VaultsSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+        .controlSize(.large)
         .padding()
         .alert("New vault", isPresented: $creating) {
             TextField("Vault name", text: $newName)
@@ -318,6 +320,7 @@ private struct ImportVaultSheet: View {
         }
         .padding(KL.Space.xxxl)
         .frame(width: 420)
+        .controlSize(.large)
     }
 
     private func run() async {
@@ -372,6 +375,7 @@ private struct SecuritySettingsTab: View {
             }
         }
         .formStyle(.grouped)
+        .controlSize(.large)
         .padding()
     }
 }

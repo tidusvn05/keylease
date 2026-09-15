@@ -82,8 +82,9 @@ private struct EditorBody: View {
             }
             .padding(KL.Space.xxl)
             .frame(maxWidth: 840, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .controlSize(.large)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .navigationTitle(draft.isNew ? "New item" : "Edit item")
         .toolbar { editorToolbar }
         .onAppear {

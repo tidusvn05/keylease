@@ -294,6 +294,7 @@ struct KLStateScreen<Content: View>: View {
                 }
             }
             content()
+                .controlSize(.large)
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
