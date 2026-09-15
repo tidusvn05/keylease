@@ -309,6 +309,17 @@ impl NativeStore {
     }
 
     pub fn restore_native_backup(&self, password: &[u8], bytes: &[u8]) -> Result<UnlockedVault> {
+        self.restore_native_backup_filtered(password, bytes, true)
+    }
+
+    /// Restores an authenticated native backup, optionally omitting connector
+    /// credentials when the destination is a mobile client.
+    pub fn restore_native_backup_filtered(
+        &self,
+        password: &[u8],
+        bytes: &[u8],
+        include_connections: bool,
+    ) -> Result<UnlockedVault> {
         let backup: NativeBackup =
             serde_json::from_slice(bytes).map_err(|_| KeyLeaseError::InvalidRequest {
                 reason: "invalid native backup".into(),
@@ -398,14 +409,16 @@ impl NativeStore {
         for object in backup.history {
             tx.execute("INSERT INTO item_history(item_id,revision,envelope,created_at) VALUES(?1,?2,?3,?4)",params![object.id,object.revision,object.envelope,object.created_at]).map_err(|_|KeyLeaseError::Storage)?;
         }
-        for raw in backup.connections {
-            let mut record: ConnectionRecord = from_json(&raw)?;
-            record.health = keylease_core::ConnectionHealth::Disconnected;
-            tx.execute(
-                "INSERT INTO connections(connection_id,record_json) VALUES(?1,?2)",
-                params![record.id.0, json(&record)?],
-            )
-            .map_err(|_| KeyLeaseError::Storage)?;
+        if include_connections {
+            for raw in backup.connections {
+                let mut record: ConnectionRecord = from_json(&raw)?;
+                record.health = keylease_core::ConnectionHealth::Disconnected;
+                tx.execute(
+                    "INSERT INTO connections(connection_id,record_json) VALUES(?1,?2)",
+                    params![record.id.0, json(&record)?],
+                )
+                .map_err(|_| KeyLeaseError::Storage)?;
+            }
         }
         tx.commit().map_err(|_| KeyLeaseError::Storage)?;
         Ok(UnlockedVault {

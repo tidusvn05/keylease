@@ -2,6 +2,7 @@ import 'package:forui/forui.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../app/app_scope.dart';
+import '../../core/platform/local_runtime_adapter.dart';
 import '../../core/state/app_controller.dart';
 import '../../core/state/app_phase.dart';
 import '../../ui/components/state_screen.dart';
@@ -49,7 +50,8 @@ class PhaseScreen extends StatelessWidget {
       AppPhase.backgroundApprovalRequired => StateScreen(
         icon: FLucideIcons.circleAlert,
         title: 'Allow KeyLease in the background',
-        message: 'macOS needs your approval so the vault is ready when you open the app.',
+        message:
+            'macOS needs your approval so the vault is ready when you open the app.',
         actions: [
           FButton(
             onPress: app.openLoginItemsSettings,
@@ -120,6 +122,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   String? _error;
   bool _differentPassword = false;
   bool _acknowledgePlaintext = false;
+  bool _creating = false;
+  bool _enableBiometric = false;
 
   @override
   void dispose() {
@@ -136,6 +140,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         return;
       }
       final inspected = await app.inspectSource(path);
+      if (inspected['supported'] == false) {
+        throw StateError(inspected['reason'] ?? 'Unsupported vault source');
+      }
       if (mounted) {
         setState(() {
           _sourcePath = path;
@@ -145,7 +152,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       }
     } catch (caught) {
       if (mounted) {
-        setState(() => _error = 'This file is not a supported vault.');
+        setState(
+          () => _error = caught is StateError
+              ? caught.message.toString()
+              : 'This file is not a supported encrypted KeyLease backup or KDBX vault.',
+        );
       }
     }
   }
@@ -169,6 +180,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       return;
     }
     final request = <String, dynamic>{'password': targetPassword};
+    if (_enableBiometric) request['enable_biometric'] = true;
     if (kind == null) {
       request['mode'] = 'create';
     } else {
@@ -196,16 +208,22 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
     final tokens = KeyLeaseTokens.of(context);
+    final mobile = app.capabilities.mobileVaultLifecycle;
     final importing = _sourcePath != null;
+    final configuring = importing || _creating;
     final needsSourcePassword = _sourceKind == 'kdbx';
     final needsTargetPassword = !needsSourcePassword || _differentPassword;
     return StateScreen(
       icon: FLucideIcons.keyRound,
       title: importing ? 'Bring your vault to KeyLease' : 'Welcome to KeyLease',
       message: importing
-          ? 'Your original file stays unchanged. KeyLease creates a managed copy on this Mac.'
+          ? 'Your original file stays unchanged. KeyLease creates an encrypted managed copy on this device.'
+          : mobile
+          ? 'Choose how you want to set up this phone. No vault is assumed yet.'
           : 'Create a new encrypted vault, or use one you already have.',
-      footnote: 'KeyLease stores its managed files privately in ~/.keylease.',
+      footnote: mobile
+          ? 'Managed vaults stay in Android app-private storage.'
+          : 'KeyLease stores its managed files privately in ~/.keylease.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -216,16 +234,28 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             ),
             SizedBox(height: tokens.gutterSmall),
           ],
-          if (!importing) ...[
+          if (!configuring) ...[
+            if (mobile) ...[
+              FButton(
+                onPress: null,
+                prefix: const Icon(FLucideIcons.wifi, size: 16),
+                child: const Text('Pair with nearby desktop — coming soon'),
+              ),
+              SizedBox(height: tokens.gutterSmall),
+            ],
             FButton(
-              onPress: () => setState(() => _sourcePath = null),
+              onPress: () => setState(() => _creating = true),
               child: const Text('Create a new vault'),
             ),
             SizedBox(height: tokens.gutterSmall),
             FButton(
               variant: FButtonVariant.outline,
               onPress: () => _choose(app),
-              child: const Text('Use an existing vault'),
+              child: Text(
+                mobile
+                    ? 'Import KeyLease backup or KDBX'
+                    : 'Use an existing vault',
+              ),
             ),
             if (app.legacyDatabase != null) ...[
               SizedBox(height: tokens.gutterSmall),
@@ -254,11 +284,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               onPress: () => setState(() {
                 _sourcePath = null;
                 _sourceKind = null;
+                _creating = false;
               }),
               child: const Text('Choose another file'),
             ),
           ],
-          SizedBox(height: tokens.gutter),
+          if (configuring) SizedBox(height: tokens.gutter),
           if (needsSourcePassword) ...[
             FTextField(
               label: const Text('Existing vault password'),
@@ -272,12 +303,22 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               onChange: (value) => setState(() => _differentPassword = value),
             ),
           ],
-          if (needsTargetPassword) ...[
+          if (configuring && needsTargetPassword) ...[
             FTextField(
               label: Text(importing ? 'KeyLease password' : 'Master password'),
               obscureText: true,
               control: FTextFieldControl.managed(controller: _password),
             ),
+            if (mobile) ...[
+              SizedBox(height: tokens.gutterSmall),
+              FCheckbox(
+                label: const Text(
+                  'Enable biometric unlock after verifying this password',
+                ),
+                value: _enableBiometric,
+                onChange: (value) => setState(() => _enableBiometric = value),
+              ),
+            ],
             SizedBox(height: tokens.gutterSmall),
             FTextField(
               label: const Text('Confirm password'),
@@ -294,11 +335,21 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               onChange: (value) =>
                   setState(() => _acknowledgePlaintext = value),
             ),
-          SizedBox(height: tokens.gutter),
-          FButton(
-            onPress: () => _submit(app),
-            child: Text(importing ? 'Import and continue' : 'Create vault'),
-          ),
+          if (configuring) ...[
+            SizedBox(height: tokens.gutter),
+            FButton(
+              onPress: () => _submit(app),
+              child: Text(importing ? 'Import and continue' : 'Create vault'),
+            ),
+            if (_creating) ...[
+              SizedBox(height: tokens.gutterSmall),
+              FButton(
+                variant: FButtonVariant.ghost,
+                onPress: () => setState(() => _creating = false),
+                child: const Text('Back'),
+              ),
+            ],
+          ],
         ],
       ),
     );
@@ -317,11 +368,17 @@ class UnlockScreen extends StatefulWidget {
 class _UnlockScreenState extends State<UnlockScreen> {
   final _password = TextEditingController();
   final _focus = FocusNode(debugLabel: 'unlock.password');
+  bool _biometricUnlock = false;
+  bool _enableBiometric = false;
 
   @override
   void initState() {
     super.initState();
     _password.addListener(_clearErrorWhenTyping);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final available = await AppScope.of(context).canUnlockWithBiometrics();
+      if (mounted) setState(() => _biometricUnlock = available);
+    });
   }
 
   void _clearErrorWhenTyping() {
@@ -343,7 +400,10 @@ class _UnlockScreenState extends State<UnlockScreen> {
     final value = _password.text;
     if (value.isEmpty) return;
     _password.clear();
-    final unlocked = await app.unlock(value);
+    final unlocked = await app.unlock(
+      value,
+      enableBiometric: _enableBiometric,
+    );
     if (!unlocked && mounted) _focus.requestFocus();
   }
 
@@ -352,10 +412,23 @@ class _UnlockScreenState extends State<UnlockScreen> {
     final app = AppScope.of(context);
     final tokens = KeyLeaseTokens.of(context);
     final busy = app.isBusy(AppController.unlockKey);
+    LocalVaultProfile? activeVault;
+    for (final profile in app.vaultProfiles) {
+      if (profile.active) {
+        activeVault = profile;
+        break;
+      }
+    }
+    final identity = activeVault?.vaultId;
+    final shortIdentity = identity != null && identity.length > 12
+        ? identity.substring(0, 12)
+        : identity;
     return StateScreen(
       icon: FLucideIcons.lock,
       title: 'Welcome back',
-      message: 'Unlock your vault to access your items.',
+      message: activeVault == null
+          ? 'Unlock your vault to access your items.'
+          : 'Unlock ${activeVault.name}${shortIdentity == null ? '' : ' · $shortIdentity'} to access your items.',
       footnote: app.status?.idleExpiresAt == null
           ? 'The vault locks itself when this machine sleeps or the screen '
                 'locks.'
@@ -387,6 +460,26 @@ class _UnlockScreenState extends State<UnlockScreen> {
             prefix: const Icon(FLucideIcons.lockOpen, size: 16),
             child: Text(busy ? 'Unlocking…' : 'Unlock vault'),
           ),
+          if (app.capabilities.mobileVaultLifecycle && !_biometricUnlock) ...[
+            SizedBox(height: tokens.gutterSmall),
+            FCheckbox(
+              label: const Text('Enable biometric unlock on this device'),
+              value: _enableBiometric,
+              onChange: busy
+                  ? null
+                  : (value) => setState(() => _enableBiometric = value),
+            ),
+          ],
+          if (_biometricUnlock) ...[
+            SizedBox(height: tokens.gutterSmall),
+            FButton(
+              key: const ValueKey('unlock-biometric'),
+              variant: FButtonVariant.outline,
+              onPress: busy ? null : app.unlockWithBiometrics,
+              prefix: const Icon(FLucideIcons.fingerprint, size: 16),
+              child: const Text('Unlock with biometrics'),
+            ),
+          ],
         ],
       ),
     );

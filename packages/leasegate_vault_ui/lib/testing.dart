@@ -207,6 +207,16 @@ class FakeKeyLeaseClient implements KeyLeaseClient {
   }
 
   @override
+  Future<dynamic> unlock(
+    String password, {
+    int sessionTtlSeconds = 900,
+  }) => _dispatch({
+    'command': 'unlock',
+    'password': password,
+    'session_ttl_seconds': sessionTtlSeconds,
+  });
+
+  @override
   Future<dynamic> authorized(Map<String, dynamic> request) =>
       _dispatch(request);
 

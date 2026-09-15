@@ -90,18 +90,43 @@ verified here:
 
 - clipboard auto-clear and its "only if unchanged" behaviour
 - `FLAG_SECURE` (screenshots, recents thumbnail)
-- biometric unlock and camera QR scanning
+- biometric unlock on a physical device and camera QR scanning
 - the back gesture and edge-to-edge insets on Android 15
 - restoring a desktop backup and browsing the vault
 
+## Android onboarding
+
+On a clean install the app does not assume that a vault exists and does not
+show a master-password prompt. The user first chooses to create a vault or pick
+an encrypted KeyLease backup / password-only KDBX file through Android's system
+document picker. The selected file is bounded to 64 MiB, copied into app-private
+storage for parsing, and removed after a successful import. Raw SQLite and
+plaintext 1PUX sources are deliberately refused.
+
+Every managed vault has a local profile (display name, vault id, provenance and
+private database path). Switching profiles closes the native handle and drops
+its in-memory owner credential before opening the next vault. The unlock screen
+shows the selected profile and a shortened vault id so the user knows which
+vault a password will unlock.
+
 ## Not in this version
 
-- **Desktop ↔ phone sync.** The server side exists; no client sync engine does,
-  in any language. Move a vault with an encrypted backup for now. A `device_id`
-  and the vault's provenance are already recorded at provisioning so a later
-  sync engine does not need a migration.
+- **Desktop ↔ phone LAN sync.** The pairing and relay transport is not wired
+  yet. The onboarding screen reserves its location but labels it as unavailable;
+  move a vault with an encrypted backup for now. A `device_id` and provenance
+  are already recorded so the sync engine does not need a vault migration.
 - **Google Workspace setup.** Cut with connection creation; the loopback OAuth
   callback would work in process, but the `mobile_owner` role denies adding
   connections anyway.
-- **Multiple vaults on one device.**
+- **Background LAN sync.** WorkManager scheduling is deferred until the paired
+  desktop relay exists; Android cannot run a meaningful periodic job without a
+  sync endpoint.
+
+## Biometric unlock
+
+Biometric unlock is opt-in after a successful master-password unlock. The
+cached password is AES-GCM encrypted with an auth-per-use key in
+`AndroidKeyStore`; `BiometricPrompt` receives the cipher as a `CryptoObject`,
+and the key is invalidated when biometric enrollment changes. The owner token
+continues to live only in Rust memory and is never persisted.
 - **iOS.** The `staticlib` crate-type is already produced for it; the app is not.

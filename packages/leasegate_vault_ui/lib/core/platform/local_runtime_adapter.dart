@@ -44,6 +44,8 @@ class LocalVaultProfile {
     required this.id,
     required this.name,
     required this.active,
+    this.vaultId,
+    this.provenance,
   });
 
   factory LocalVaultProfile.fromJson(
@@ -53,11 +55,15 @@ class LocalVaultProfile {
     id: '${json['id']}',
     name: '${json['name']}',
     active: '${json['id']}' == activeId,
+    vaultId: json['vault_id'] as String?,
+    provenance: json['provenance'] as String?,
   );
 
   final String id;
   final String name;
   final bool active;
+  final String? vaultId;
+  final String? provenance;
 }
 
 abstract class LocalRuntimeAdapter {

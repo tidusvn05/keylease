@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:leasegate_vault_ui/core/platform/local_runtime_adapter.dart';
 import 'package:leasegate_vault_ui/core/platform/security_adapter.dart';
+import 'package:leasegate_vault_ui/core/rpc/keylease_client.dart';
 
 /// What the app can find out about the vault files on this device.
 ///
@@ -79,21 +80,21 @@ class FfiLocalRuntimeAdapter implements LocalRuntimeAdapter {
 
   @override
   Future<void> provision(Map<String, dynamic> request) =>
-      _storage.provision(request).then((_) {});
+      _storage.provision(_mobileProvisionRequest(request)).then((_) {});
 
   @override
   Future<String?> chooseVaultSource() => _storage.importBackupFile();
 
   @override
   Future<Map<String, dynamic>> inspectSource(String path) =>
-      _storage.provision({'provision': 'inspect', 'source_path': path});
+      _storage.provision({'provision': 'inspect_source', 'source_path': path});
 
   @override
   Future<List<LocalVaultProfile>> listVaults() => _storage.listVaults();
 
   @override
   Future<void> createVault(String name, Map<String, dynamic> request) =>
-      _storage.createVault(name, request);
+      _storage.createVault(name, _mobileProvisionRequest(request));
 
   @override
   Future<void> switchVault(String id) => _storage.switchVault(id);
@@ -115,4 +116,33 @@ class FfiLocalRuntimeAdapter implements LocalRuntimeAdapter {
 
   @override
   Future<void> dispose() async {}
+
+  Map<String, dynamic> _mobileProvisionRequest(Map<String, dynamic> request) {
+    if (request.containsKey('provision')) return request;
+    final password = request['password'];
+    return switch (request['mode']) {
+      'create' => {
+        'provision': 'create',
+        'password': password,
+        'session_ttl_seconds': 900,
+        'acknowledge_standalone': true,
+      },
+      'restore_keylease_backup' => {
+        'provision': 'restore_backup',
+        'source_path': request['source_path'],
+        'password': password,
+        'session_ttl_seconds': 900,
+      },
+      'import_kdbx' => {
+        'provision': 'import_kdbx',
+        'source_path': request['source_path'],
+        'source_password': request['source_password'],
+        'password': password,
+        'session_ttl_seconds': 900,
+      },
+      _ => throw const KeyLeaseException(
+        'Android supports encrypted KeyLease backups and password-only KDBX files.',
+      ),
+    };
+  }
 }

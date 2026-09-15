@@ -65,14 +65,10 @@ fn a_standalone_vault_can_be_created_and_used() {
         "provenance must be recorded so a future sync engine can refuse to \
          enrol an unmergeable vault: {created}"
     );
-    let auth = json!({
-        "agent_id": created["result"]["agent_id"],
-        "token": created["result"]["token"],
-        "session_id": "provision",
-    });
+    assert!(created["result"].get("token").is_none(), "{created}");
 
     // The default group and the mobile owner rule are both in place.
-    let groups = call(handle, &json!({"command": "groups_list", "auth": auth}));
+    let groups = call(handle, &json!({"command": "groups_list"}));
     assert_eq!(groups["ok"], json!(true), "{groups}");
     assert!(
         !groups["result"].as_array().expect("groups").is_empty(),
@@ -110,11 +106,6 @@ fn the_phone_gets_mobile_authority_not_desktop_authority() {
         &json!({"provision": "create", "password": MASTER_PASSWORD,
                 "session_ttl_seconds": 300, "acknowledge_standalone": true}),
     );
-    let auth = json!({
-        "agent_id": created["result"]["agent_id"],
-        "token": created["result"]["token"],
-        "session_id": "provision",
-    });
     assert_eq!(
         created["result"]["agent_id"], "agent_mobile",
         "a phone must not present itself as the desktop: {created}"
@@ -122,17 +113,14 @@ fn the_phone_gets_mobile_authority_not_desktop_authority() {
 
     // Everyday work is allowed.
     assert_eq!(
-        call(
-            handle,
-            &json!({"command": "connections_list", "auth": auth})
-        )["ok"],
+        call(handle, &json!({"command": "connections_list"}))["ok"],
         json!(true)
     );
 
     // Widening the vault is not.
     let refused = call(
         handle,
-        &json!({"command": "connection_add", "auth": auth, "provider": "fake",
+        &json!({"command": "connection_add", "provider": "fake",
                 "credential": "probe", "authorized_resources": []}),
     );
     assert_eq!(refused["error"]["error"], "denied", "{refused}");
@@ -159,23 +147,14 @@ fn a_backup_round_trips_onto_a_second_device_and_keeps_the_vault_identity() {
                 "session_ttl_seconds": 300, "acknowledge_standalone": true}),
     );
     let original_vault_id = created["result"]["vault_id"].clone();
-    let source_auth = json!({
-        "agent_id": created["result"]["agent_id"],
-        "token": created["result"]["token"],
-        "session_id": "provision",
-    });
-
-    let groups = call(
-        source,
-        &json!({"command": "groups_list", "auth": source_auth}),
-    );
+    let groups = call(source, &json!({"command": "groups_list"}));
     let group_id = groups["result"][0]["id"]
         .as_str()
         .expect("a group")
         .to_owned();
     let entry = call(
         source,
-        &json!({"command": "entries_create", "auth": source_auth,
+        &json!({"command": "entries_create",
                 "idempotency_key": "backup-entry", "dry_run": false,
                 "input": {"group_id": group_id, "kind": "core.login",
                           "title": "Backup Entry", "password": CANARY_SECRET}}),
@@ -194,6 +173,17 @@ fn a_backup_round_trips_onto_a_second_device_and_keeps_the_vault_identity() {
         json!(false),
         "a mobile export must leave connector credentials behind by default: {exported}"
     );
+    let inspected = provision(
+        source,
+        &json!({"provision": "inspect_source",
+                "source_path": backup_path.to_str().expect("utf-8")}),
+    );
+    assert_eq!(
+        inspected["result"]["kind"], "keylease_backup",
+        "{inspected}"
+    );
+    assert_eq!(inspected["result"]["supported"], json!(true), "{inspected}");
+    assert_eq!(inspected["result"]["item_count"], json!(1), "{inspected}");
     keylease_close(source);
 
     // A second device adopts it.
@@ -218,14 +208,9 @@ fn a_backup_round_trips_onto_a_second_device_and_keeps_the_vault_identity() {
         "a restored vault must keep its identity, or the two devices can never sync"
     );
 
-    let target_auth = json!({
-        "agent_id": restored["result"]["agent_id"],
-        "token": restored["result"]["token"],
-        "session_id": "provision",
-    });
     let found = call(
         target,
-        &json!({"command": "entries_search", "auth": target_auth, "query": "Backup"}),
+        &json!({"command": "entries_search", "query": "Backup"}),
     );
     assert_eq!(found["ok"], json!(true), "{found}");
     assert!(
@@ -234,6 +219,33 @@ fn a_backup_round_trips_onto_a_second_device_and_keeps_the_vault_identity() {
     );
 
     keylease_close(target);
+}
+
+#[test]
+fn raw_sqlite_is_identified_but_refused_as_an_android_import() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("vault.sqlite");
+    let handle = open(path.to_str().expect("utf-8"));
+    provision(
+        handle,
+        &json!({"provision": "create", "password": MASTER_PASSWORD,
+                "session_ttl_seconds": 300, "acknowledge_standalone": true}),
+    );
+    let inspected = provision(
+        handle,
+        &json!({"provision": "inspect_source",
+                "source_path": path.to_str().expect("utf-8")}),
+    );
+    assert_eq!(
+        inspected["result"]["kind"], "keylease_database",
+        "{inspected}"
+    );
+    assert_eq!(
+        inspected["result"]["supported"],
+        json!(false),
+        "{inspected}"
+    );
+    keylease_close(handle);
 }
 
 #[test]

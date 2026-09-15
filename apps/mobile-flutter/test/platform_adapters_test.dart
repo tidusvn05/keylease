@@ -152,6 +152,19 @@ void main() {
       );
     });
 
+    test('desktop-shaped onboarding requests map to the mobile lifecycle channel', () async {
+      final storage = _FakeStorage(exists: false);
+      final adapter = FfiLocalRuntimeAdapter(storage);
+
+      await adapter.provision({'mode': 'create', 'password': 'long-password'});
+      await adapter.inspectSource('/private/import.source');
+
+      expect(storage.calls, [
+        'provision:create',
+        'provision:inspect_source',
+      ]);
+    });
+
     test('service lifecycle is inert because there is no daemon', () async {
       final storage = _FakeStorage();
       final adapter = FfiLocalRuntimeAdapter(storage);

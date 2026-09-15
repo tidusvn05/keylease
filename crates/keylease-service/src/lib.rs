@@ -3751,6 +3751,26 @@ impl KeyLeaseService {
         Ok(id)
     }
 
+    pub fn restore_native_backup_filtered(
+        &self,
+        password: &[u8],
+        bytes: &[u8],
+        session_ttl: Duration,
+        include_connections: bool,
+    ) -> Result<VaultId> {
+        validate_session_timeout(session_ttl)?;
+        let vault =
+            self.store
+                .restore_native_backup_filtered(password, bytes, include_connections)?;
+        let id = vault.vault_id.clone();
+        *self.session.lock().map_err(|_| KeyLeaseError::Storage)? = Some(Session {
+            vault,
+            idle_timeout: session_ttl,
+            last_activity: Utc::now(),
+        });
+        Ok(id)
+    }
+
     pub async fn request_lease(
         &self,
         actor: &ActorContext,

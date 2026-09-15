@@ -26,6 +26,7 @@ class AppCapabilities {
     this.dataFolder = false,
     this.loginItems = false,
     this.windowTrafficLights = false,
+    this.mobileVaultLifecycle = false,
   });
 
   /// The macOS desktop client: the full surface.
@@ -54,6 +55,7 @@ class AppCapabilities {
     developerTemplateEditing: true,
     cameraQrScan: true,
     imageQrScan: true,
+    mobileVaultLifecycle: true,
   );
 
   /// Whether the agent-driven creation flow is offered.
@@ -91,6 +93,9 @@ class AppCapabilities {
 
   /// Whether the window has traffic-light buttons the title bar must clear.
   final bool windowTrafficLights;
+
+  /// Whether onboarding uses Android's local-file and nearby-device flows.
+  final bool mobileVaultLifecycle;
 
   /// Whether any way of capturing a TOTP QR code is available.
   bool get anyQrScan => screenQrScan || cameraQrScan || imageQrScan;

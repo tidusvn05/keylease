@@ -9,7 +9,12 @@ import 'package:ffi/ffi.dart';
 // same Rust code, so the two transports cannot answer differently.
 
 typedef _OpenNative =
-    Uint64 Function(Pointer<Uint8>, IntPtr, Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
+    Uint64 Function(
+      Pointer<Uint8>,
+      IntPtr,
+      Pointer<Pointer<Uint8>>,
+      Pointer<IntPtr>,
+    );
 typedef _OpenDart =
     int Function(Pointer<Uint8>, int, Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
 
@@ -84,6 +89,9 @@ class KeyLeaseFfi {
 
   /// Opens the vault at [databasePath] and returns the response envelope.
   Map<String, dynamic> openVault(String databasePath) {
+    // Switching profiles reuses the isolate but never the native handle or its
+    // decrypted session state.
+    close();
     final bytes = utf8.encode(databasePath);
     final input = calloc<Uint8>(bytes.length);
     final outPtr = calloc<Pointer<Uint8>>();

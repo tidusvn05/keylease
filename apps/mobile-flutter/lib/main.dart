@@ -8,6 +8,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'platform/android_security_adapter.dart';
+import 'platform/android_biometric_vault.dart';
 import 'platform/app_preferences_store.dart';
 import 'platform/ffi_bridge.dart';
 import 'platform/ffi_keylease_client.dart';
@@ -22,21 +23,20 @@ Future<AppController> buildAndroidController() async {
   final support = await getApplicationSupportDirectory();
 
   final vault = await VaultIsolate.spawn();
-  final session = MobileSession();
-  final storage = FfiVaultStorage(
-    vault: vault,
-    session: session,
-    databasePath: '${support.path}/vault.sqlite',
-  );
-  await vault.openVault(storage.databasePath);
+  final storage = FfiVaultStorage(vault: vault, supportDirectory: support.path);
+  await storage.initialize();
 
   final security = AndroidSecurityAdapter();
   final controller = AppController(
     adapter: security,
     runtime: FfiLocalRuntimeAdapter(storage),
     preferences: AppPreferencesStore(directory: support.path),
-    clientFactory: (_) => FfiKeyLeaseClient(vault, session),
+    clientFactory: (_) => FfiKeyLeaseClient(
+      vault,
+      onUnlocked: storage.recordUnlocked,
+    ),
     capabilities: AppCapabilities.androidPhone,
+    biometric: const AndroidBiometricVault(),
     // There is no socket and no token file: the vault is opened in process.
     defaultSettings: const ConnectionSettings.unset(),
   );
@@ -44,7 +44,6 @@ Future<AppController> buildAndroidController() async {
   // Locking must also drop the in-process session keys, not just the UI's view
   // of them, so the background trigger reaches the Rust side too.
   security.lockRequests.listen((_) {
-    session.clear();
     unawaited(vault.lock());
   });
 
@@ -54,6 +53,9 @@ Future<AppController> buildAndroidController() async {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(
-    KeyLeaseApp(controller: await buildAndroidController(), ownsController: true),
+    KeyLeaseApp(
+      controller: await buildAndroidController(),
+      ownsController: true,
+    ),
   );
 }

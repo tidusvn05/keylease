@@ -87,6 +87,15 @@ abstract class SecurityAdapter {
   Future<void> dispose();
 }
 
+/// Optional password cache protected by an authentication-bound platform key.
+abstract class BiometricVaultAdapter {
+  Future<bool> isAvailable();
+  Future<bool> hasCredential(String vaultId);
+  Future<void> enable(String vaultId, String password);
+  Future<String?> unlock(String vaultId);
+  Future<void> disable(String vaultId);
+}
+
 /// Raised when a platform build has no native adapter for a capability.
 class UnsupportedPlatformCapability implements Exception {
   const UnsupportedPlatformCapability(this.capability);

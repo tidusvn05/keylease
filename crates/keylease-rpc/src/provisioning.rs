@@ -19,7 +19,8 @@
 //! build, where cargo unifies features across crates.
 
 use chrono::Duration;
-use keylease_core::{KeyLeaseError, LocalOwnerRole, Result};
+use keylease_core::{KeyLeaseError, LocalOwnerRole, Result, VaultId};
+use keylease_kdbx::{KdbxAdapter, KeepassRsAdapter};
 use keylease_service::KeyLeaseService;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -37,12 +38,23 @@ pub enum ProvisionRequest {
     /// Reports whether this database already holds a vault, and who owns it.
     Inspect,
 
+    /// Identifies a user-selected import source without modifying the vault.
+    InspectSource { source_path: String },
+
     /// Adopts an existing vault from an encrypted desktop backup.
     ///
     /// This is the path a phone should normally take. See [`Self::Create`].
     RestoreBackup {
         /// A file the caller has already copied into app-private storage.
         source_path: String,
+        password: String,
+        session_ttl_seconds: i64,
+    },
+
+    /// Creates a new vault and imports a password-only KDBX 3.1/4.x source.
+    ImportKdbx {
+        source_path: String,
+        source_password: String,
         password: String,
         session_ttl_seconds: i64,
     },
@@ -118,6 +130,8 @@ fn adopt_owner(
 }
 
 /// Reads a caller-supplied file, bounded so a wrong path cannot exhaust memory.
+const MAX_MOBILE_IMPORT_BYTES: u64 = 64 * 1024 * 1024;
+
 fn read_bounded(path: &str) -> Result<Zeroizing<Vec<u8>>> {
     let metadata = std::fs::metadata(path).map_err(|_| KeyLeaseError::NotFound {
         resource: "backup file".into(),
@@ -127,7 +141,7 @@ fn read_bounded(path: &str) -> Result<Zeroizing<Vec<u8>>> {
             reason: "the backup source must be a regular file".into(),
         });
     }
-    if metadata.len() > crate::MAX_LOCAL_JSON_BYTES as u64 {
+    if metadata.len() > MAX_MOBILE_IMPORT_BYTES {
         return Err(KeyLeaseError::InvalidRequest {
             reason: "the backup file exceeds the size limit".into(),
         });
@@ -149,6 +163,38 @@ pub async fn handle_provision(
             Ok(json!({
                 "initialized": initialised,
                 "status": status,
+            }))
+        }
+
+        ProvisionRequest::InspectSource { source_path } => {
+            let bytes = read_bounded(&source_path)?;
+            if bytes.starts_with(b"SQLite format 3\0") {
+                return Ok(json!({
+                    "kind": "keylease_database",
+                    "supported": false,
+                    "reason": "Raw SQLite vault files cannot be imported on Android. Export an encrypted KeyLease backup instead."
+                }));
+            }
+            if bytes.starts_with(&[0x03, 0xd9, 0xa2, 0x9a, 0x67, 0xfb, 0x4b, 0xb5]) {
+                return Ok(json!({"kind": "kdbx", "supported": true}));
+            }
+            let document: Value =
+                serde_json::from_slice(&bytes).map_err(|_| KeyLeaseError::InvalidRequest {
+                    reason: "the selected file is not a supported KeyLease backup or KDBX file"
+                        .into(),
+                })?;
+            if document.get("format").and_then(Value::as_str) != Some("keylease-native-backup") {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "the selected JSON file is not an encrypted KeyLease backup".into(),
+                });
+            }
+            Ok(json!({
+                "kind": "keylease_backup",
+                "supported": true,
+                "vault_id": document.get("vault_id"),
+                "created_at": document.get("created_at"),
+                "item_count": document.get("items").and_then(Value::as_array).map_or(0, Vec::len),
+                "format_version": document.get("format_version"),
             }))
         }
 
@@ -186,7 +232,12 @@ pub async fn handle_provision(
             session_ttl_seconds,
         } => {
             let bytes = read_bounded(&source_path)?;
-            service.restore_native_backup(password.as_bytes(), &bytes, ttl(session_ttl_seconds))?;
+            service.restore_native_backup_filtered(
+                password.as_bytes(),
+                &bytes,
+                ttl(session_ttl_seconds),
+                false,
+            )?;
             let (agent_id, token, vault_id) =
                 adopt_owner(service, context, &password, session_ttl_seconds)?;
             let (device_id, provenance) = service.device_identity("restored")?;
@@ -196,6 +247,39 @@ pub async fn handle_provision(
                 "token": token,
                 "device_id": device_id,
                 "provenance": provenance,
+            }))
+        }
+
+        ProvisionRequest::ImportKdbx {
+            source_path,
+            source_password,
+            password,
+            session_ttl_seconds,
+        } => {
+            let bytes = read_bounded(&source_path)?;
+            // Validate the password and complete parse before creating the target.
+            // The placeholder id is discarded; stable item ids are regenerated
+            // against the real vault id after initialization.
+            let placeholder = VaultId("vault_import_preview".into());
+            let mut source = bytes.as_slice();
+            KeepassRsAdapter.preview_import(&mut source, &source_password, &placeholder)?;
+
+            service.initialize(password.as_bytes(), ttl(session_ttl_seconds))?;
+            let preview = service.preview_kdbx_import(&bytes, &source_password)?;
+            let report = service.commit_kdbx_import(&preview)?;
+            if service.list_groups()?.is_empty() {
+                service.create_group("Personal", None)?;
+            }
+            let (agent_id, token, vault_id) =
+                adopt_owner(service, context, &password, session_ttl_seconds)?;
+            let (device_id, provenance) = service.device_identity("imported_kdbx")?;
+            Ok(json!({
+                "vault_id": vault_id,
+                "agent_id": agent_id,
+                "token": token,
+                "device_id": device_id,
+                "provenance": provenance,
+                "report": report,
             }))
         }
 

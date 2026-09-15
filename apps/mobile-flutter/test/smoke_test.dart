@@ -14,5 +14,6 @@ void main() {
     expect(phone.connectionCreation, isFalse);
     expect(phone.vaultMigrations, isFalse);
     expect(phone.cameraQrScan, isTrue);
+    expect(phone.mobileVaultLifecycle, isTrue);
   });
 }

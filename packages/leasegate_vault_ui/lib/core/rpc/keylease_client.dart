@@ -72,6 +72,12 @@ class KeyLeaseException implements Exception {
 
 /// Indirection so state and feature code can be tested without a daemon.
 abstract class KeyLeaseClient {
+  /// Unlocks the active vault using the transport-specific lifecycle path.
+  ///
+  /// Desktop sends the authenticated `unlock` RPC. Mobile uses its separate
+  /// provisioning channel because no owner credential exists before unlock.
+  Future<dynamic> unlock(String password, {int sessionTtlSeconds = 900});
+
   /// Sends [request] with a freshly read `auth` block.
   Future<dynamic> authorized(Map<String, dynamic> request);
 

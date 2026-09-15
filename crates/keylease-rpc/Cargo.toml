@@ -19,6 +19,7 @@ provisioning = []
 [dependencies]
 chrono.workspace = true
 keylease-core = { path = "../keylease-core" }
+keylease-kdbx = { path = "../keylease-kdbx" }
 keylease-service = { path = "../keylease-service" }
 serde.workspace = true
 serde_json.workspace = true

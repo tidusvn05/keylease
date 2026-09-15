@@ -46,7 +46,7 @@ use keylease_rpc::{
 use keylease_service::KeyLeaseService;
 use keylease_store::NativeStore;
 use serde_json::{Value, json};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 /// A response buffer was written to the out-parameters.
 pub const STATUS_OK: i32 = 0;
@@ -65,6 +65,17 @@ pub const NO_HANDLE: u64 = 0;
 struct SessionHandle {
     runtime: tokio::runtime::Runtime,
     service: Arc<KeyLeaseService>,
+    credential: Mutex<Option<MobileCredential>>,
+}
+
+/// The current phone-owner credential.
+///
+/// This never crosses the FFI boundary. Provisioning responses are stripped
+/// before they are returned to Dart, and ordinary RPC calls have this block
+/// inserted here in Rust.
+struct MobileCredential {
+    agent_id: String,
+    token: Zeroizing<String>,
 }
 
 /// Open vaults, addressed by an opaque id.
@@ -216,6 +227,7 @@ fn open_session(database_path: &str) -> Result<(u64, Value), Value> {
     let session = Arc::new(SessionHandle {
         runtime,
         service: Arc::new(service),
+        credential: Mutex::new(None),
     });
     sessions()
         .lock()
@@ -307,9 +319,33 @@ pub unsafe extern "C" fn keylease_call(
         let Some(session) = session(handle) else {
             return envelope_error("not_found", "no vault is open for this handle");
         };
-        let Ok(parsed) = serde_json::from_str::<Value>(request) else {
+        let Ok(mut parsed) = serde_json::from_str::<Value>(request) else {
             return envelope_error("invalid_request", "the request is not valid JSON");
         };
+        let command = parsed.get("command").and_then(Value::as_str);
+        if command != Some("status") {
+            let credential = match session.credential.lock() {
+                Ok(credential) => credential,
+                Err(_) => return envelope_error("storage", "the mobile session is unavailable"),
+            };
+            let Some(credential) = credential.as_ref() else {
+                return envelope_error("vault_locked", "unlock the vault to continue");
+            };
+            let Some(object) = parsed.as_object_mut() else {
+                return envelope_error("invalid_request", "the request is not a JSON object");
+            };
+            // Dart cannot supply or override an owner credential. Keeping this
+            // insertion in Rust is the mobile equivalent of the desktop token
+            // file boundary.
+            object.insert(
+                "auth".into(),
+                json!({
+                    "agent_id": credential.agent_id,
+                    "token": credential.token.as_str(),
+                    "session_id": "mobile",
+                }),
+            );
+        }
         session.runtime.block_on(dispatch_value(
             &session.service,
             RpcCapabilities::MOBILE,
@@ -358,8 +394,35 @@ pub unsafe extern "C" fn keylease_provision(
             ProvisionContext::MOBILE,
             request,
         ));
-        serde_json::from_str::<Value>(&raw)
-            .unwrap_or_else(|_| envelope_error("storage", "the response could not be encoded"))
+        let mut response = serde_json::from_str::<Value>(&raw)
+            .unwrap_or_else(|_| envelope_error("storage", "the response could not be encoded"));
+        if response.get("ok") == Some(&Value::Bool(true)) {
+            let result = response.get_mut("result").and_then(Value::as_object_mut);
+            if let Some(result) = result {
+                let agent_id = result
+                    .get("agent_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let token = match result.remove("token") {
+                    Some(Value::String(token)) => Some(Zeroizing::new(token)),
+                    _ => None,
+                };
+                if let (Some(agent_id), Some(token)) = (agent_id, token) {
+                    match session.credential.lock() {
+                        Ok(mut credential) => {
+                            *credential = Some(MobileCredential { agent_id, token });
+                        }
+                        Err(_) => {
+                            return envelope_error(
+                                "storage",
+                                "the mobile session could not be established",
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        response
     }));
     match outcome {
         Ok(value) => emit_value(value, out_ptr, out_len),
@@ -377,6 +440,9 @@ pub extern "C" fn keylease_lock(handle: u64) -> i32 {
     install_panic_hook();
     catch_unwind(AssertUnwindSafe(|| match session(handle) {
         Some(session) => {
+            if let Ok(mut credential) = session.credential.lock() {
+                *credential = None;
+            }
             let _ = session.service.lock();
             STATUS_OK
         }

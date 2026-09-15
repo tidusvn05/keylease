@@ -116,6 +116,16 @@ class SocketKeyLeaseClient implements KeyLeaseClient {
   final KeyLeaseRpc rpc;
 
   @override
+  Future<dynamic> unlock(
+    String password, {
+    int sessionTtlSeconds = 900,
+  }) => authorized({
+    'command': 'unlock',
+    'password': password,
+    'session_ttl_seconds': sessionTtlSeconds,
+  });
+
+  @override
   Future<dynamic> authorized(Map<String, dynamic> request) async =>
       rpc.call({...request, 'auth': await rpc.auth()});
 

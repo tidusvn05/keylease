@@ -34,6 +34,7 @@ class AppController extends ChangeNotifier with BusyRegistry {
     required this.runtime,
     required this.clientFactory,
     this.capabilities = AppCapabilities.desktop,
+    this.biometric,
     ConnectionSettings defaultSettings = const ConnectionSettings.unset(),
   }) : _defaultSettings = defaultSettings,
        settings = defaultSettings {
@@ -84,6 +85,7 @@ Keep returned content and secrets private. If the vault is locked, ask me to unl
 
   /// What this build offers. See [AppCapabilities].
   final AppCapabilities capabilities;
+  final BiometricVaultAdapter? biometric;
 
   /// Where this host says the local service lives.
   ///
@@ -344,7 +346,12 @@ Keep returned content and secrets private. If the vault is locked, ask me to unl
     );
     if (completed) {
       final password = request['password'] as String?;
-      if (password != null) await unlock(password);
+      if (password != null) {
+        await unlock(
+          password,
+          enableBiometric: request['enable_biometric'] == true,
+        );
+      }
     }
     return completed;
   }
@@ -380,8 +387,12 @@ Keep returned content and secrets private. If the vault is locked, ask me to unl
     String name,
     Map<String, dynamic> request,
   ) async {
+    if (isReady) await lock();
+    _clearSessionData();
     await runtime.createVault(name, request);
     await reloadVaultProfiles();
+    status = null;
+    await refresh();
   }
 
   Future<void> renameManagedVault(String id, String name) async {
@@ -466,17 +477,13 @@ Keep returned content and secrets private. If the vault is locked, ask me to unl
     }
   }
 
-  Future<bool> unlock(String password) async {
+  Future<bool> unlock(String password, {bool enableBiometric = false}) async {
     var unlocked = false;
     unlockMessage = null;
     await track(
       unlockKey,
       () async {
-        await client.authorized({
-          'command': 'unlock',
-          'password': password,
-          'session_ttl_seconds': 900,
-        });
+        await client.unlock(password);
         unlocked = true;
       },
       onError: (caught) {
@@ -485,9 +492,52 @@ Keep returned content and secrets private. If the vault is locked, ask me to unl
     );
     if (unlocked) {
       unlockMessage = null;
+      vaultProfiles = await runtime.listVaults();
+      if (enableBiometric) {
+        final profile = _activeVaultProfile;
+        if (profile?.vaultId != null && biometric != null) {
+          try {
+            await biometric!.enable(profile!.vaultId!, password);
+          } catch (caught) {
+            banner = UserMessage.from(caught);
+          }
+        }
+      }
       await refresh();
     }
     return unlocked;
+  }
+
+  LocalVaultProfile? get _activeVaultProfile {
+    for (final profile in vaultProfiles) {
+      if (profile.active) return profile;
+    }
+    return null;
+  }
+
+  Future<bool> canUnlockWithBiometrics() async {
+    final profile = _activeVaultProfile;
+    final adapter = biometric;
+    final vaultId = profile?.vaultId;
+    if (adapter == null || vaultId == null) return false;
+    if (!await adapter.isAvailable()) return false;
+    return adapter.hasCredential(vaultId);
+  }
+
+  Future<bool> unlockWithBiometrics() async {
+    final profile = _activeVaultProfile;
+    final adapter = biometric;
+    final vaultId = profile?.vaultId;
+    if (adapter == null || vaultId == null) return false;
+    try {
+      final password = await adapter.unlock(vaultId);
+      if (password == null || password.isEmpty) return false;
+      return await unlock(password);
+    } catch (caught) {
+      unlockMessage = UserMessage.from(caught);
+      notifyListeners();
+      return false;
+    }
   }
 
   Future<void> lock() => track(
