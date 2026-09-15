@@ -77,12 +77,22 @@ final class AppController {
     private(set) var status: VaultStatus?
     private(set) var vaultProfiles: [VaultProfile] = []
     private(set) var serviceVersion: String?
+    /// An unmanaged vault left behind by an earlier install — onboarding
+    /// offers to adopt it (`legacy_database` in `desktop inspect`).
+    private(set) var legacyDatabase: String?
     var message: UserMessage?
     var unlockMessage: UserMessage?
 
     let runtime = RuntimeService()
     let security = SecurityService()
+    let host = HostIntegrations()
+    let preferences = PreferencesStore()
     let vault = VaultController()
+    let connections = ConnectionsController()
+    let approvals = ApprovalsController()
+    let activity = ActivityController()
+
+    var isReady: Bool { phase == .ready }
 
     private var socketPath = ConnectionDefaults.socketPath
     private var tokenPath = ConnectionDefaults.tokenPath
@@ -106,6 +116,8 @@ final class AppController {
             }
             vaultProfiles = (try? await runtime.listVaults()) ?? []
             serviceVersion = inspection.serviceVersion
+            legacyDatabase = inspection.legacyAvailable
+                ? inspection.legacyDatabase : nil
             switch inspection.state {
             case .needsOnboarding:
                 enter(.onboarding)
@@ -148,6 +160,9 @@ final class AppController {
         status = next
         if next.locked {
             vault.clear()
+            connections.list.clear()
+            approvals.list.clear()
+            activity.list.clear()
             enter(
                 .locked,
                 UserMessage(
@@ -177,6 +192,10 @@ final class AppController {
         }
 
         enter(.ready)
+        preferences.load()
+        connections.use(client)
+        approvals.use(client)
+        activity.use(client)
         await vault.load(using: client)
     }
 
@@ -223,16 +242,15 @@ final class AppController {
         await refresh()
     }
 
-    /// `provision` with `{mode: "create"}` — milestone onboarding path.
-    func provisionNewVault(password: String) async -> Bool {
+    /// `provision` — create, import and repair modes all flow through the
+    /// same call (`mode: create | adopt_keylease_database |
+    /// restore_keylease_backup | import_kdbx | import_onepux |
+    /// repair_desktop_client`), exactly like the Dart `provision`.
+    @discardableResult
+    func provision(_ request: JSONValue) async -> Bool {
         enter(.provisioning)
         do {
-            try await runtime.provision(
-                .object([
-                    "mode": .string("create"),
-                    "password": .string(password),
-                ])
-            )
+            try await runtime.provision(request)
             try await runtime.ensureService()
             try await waitForService()
             await refresh()
@@ -245,6 +263,30 @@ final class AppController {
             )
             return false
         }
+    }
+
+    /// `provision` with `{mode: "create"}` — onboarding path for a fresh
+    /// vault.
+    func provisionNewVault(password: String) async -> Bool {
+        await provision(.object([
+            "mode": .string("create"),
+            "password": .string(password),
+        ]))
+    }
+
+    /// `NSOpenPanel` for a vault source (KDBX / 1PUX / KeyLease backup or
+    /// database) — the Flutter `chooseVaultSource` channel call.
+    func chooseVaultSource() -> String? {
+        host.pickFile(
+            title: "Choose a vault file",
+            message: "Select a KeePass, 1Password, or KeyLease file to import."
+        )?.path
+    }
+
+    /// `desktop inspect-source` — tells the onboarding form which import
+    /// mode the chosen file needs.
+    func inspectSource(path: String) async throws -> JSONValue {
+        try await runtime.inspectSource(path: path)
     }
 
     /// `provision` with `{mode: "repair_desktop_client"}` — re-registers the
@@ -291,6 +333,160 @@ final class AppController {
             guard let self, self.phase == .ready else { return }
             Task { await self.lock() }
         }
+    }
+
+    // MARK: - Clipboard (`copySensitive` / agent prompt / CLI command)
+
+    /// Copies a secret and schedules the conditional clear. Returns false
+    /// for empty input, like the Dart adapter.
+    @discardableResult
+    func copySensitive(_ value: String, clearAfter seconds: Int = 30) -> Bool {
+        guard !value.isEmpty else { return false }
+        security.copySensitive(value, clearAfter: seconds)
+        return true
+    }
+
+    /// `agentPromptForEntry` — the instruction pasted into a local agent.
+    static func agentPromptForEntry(_ entry: ItemMetadata) -> String {
+        let quoted = (try? JSONEncoder().encode(entry.title))
+            .map { String(decoding: $0, as: UTF8.self) }
+            ?? "\"\(entry.title)\""
+        let readInstructions = entry.isAgentContent
+            ? "Read its content: `keylease content get \(entry.id) --raw`\n"
+                + "If access is denied, ask me to grant this agent read access."
+            : "Inspect it: `keylease entries get \(entry.id)`\n"
+                + "List its fields: `keylease entries view \(entry.id)`\n"
+                + "Reveal only a needed field: `keylease entries reveal "
+                + "\(entry.id) --field <field-id>`\n"
+                + "Get its OTP if needed: `keylease entries totp \(entry.id)`"
+        return """
+            Use KeyLease Vault item \(quoted) (`\(entry.id)`) for this task.
+
+            Connect to KeyLease directly; do not ask me to paste the item content.
+            \(readInstructions)
+
+            Keep returned content and secrets private. If the vault is locked, \
+            ask me to unlock KeyLease.
+            """
+    }
+
+    /// `cliCommandForEntry` — the one-liner copied to the clipboard.
+    static func cliCommandForEntry(_ entry: ItemMetadata) -> String {
+        entry.isAgentContent
+            ? "keylease content get \(entry.id) --raw"
+            : "keylease entries get \(entry.id)"
+    }
+
+    @discardableResult
+    func copyAgentPrompt(_ entry: ItemMetadata) -> Bool {
+        copySensitive(Self.agentPromptForEntry(entry), clearAfter: 120)
+    }
+
+    @discardableResult
+    func copyCliCommand(_ entry: ItemMetadata) -> Bool {
+        copySensitive(Self.cliCommandForEntry(entry), clearAfter: 120)
+    }
+
+    // MARK: - Preferences passthroughs
+
+    var passwordGeneratorSettings: PasswordGeneratorSettings {
+        preferences.passwordGenerator
+    }
+
+    func updatePasswordGeneratorSettings(_ value: PasswordGeneratorSettings) {
+        preferences.passwordGenerator = value
+    }
+
+    /// `sshKeyBinding` — the per-device private key bound to an SSH
+    /// endpoint (stored under `~/.keylease/ui.json`, never in the vault).
+    func sshKeyBinding(itemId: String, endpointId: String) -> String? {
+        preferences.sshKeyBinding(
+            itemId: itemId, endpointId: endpointId,
+            vaultId: status?.vaultId)
+    }
+
+    func setSshKeyBinding(
+        _ itemId: String, _ endpointId: String, _ path: String?
+    ) throws {
+        try preferences.setSshKeyBinding(
+            itemId: itemId, endpointId: endpointId,
+            vaultId: status?.vaultId, path: path)
+    }
+
+    func removeSshBindingsForItem(_ itemId: String) {
+        preferences.removeSshBindingsForItem(itemId)
+    }
+
+    // MARK: - Managed vaults (`desktop vault-*` helper commands)
+
+    /// `desktop vault-create` — `request` is the tagged provision payload
+    /// (`mode: create | adopt_* | restore_* | import_*`).
+    func createManagedVault(name: String, request: JSONValue) async throws {
+        try await runtime.createVault(.object([
+            "name": .string(name),
+            "request": request,
+        ]))
+        vaultProfiles = (try? await runtime.listVaults()) ?? vaultProfiles
+    }
+
+    func renameManagedVault(_ id: String, name: String) async throws {
+        try await runtime.renameVault(id: id, name: name)
+        vaultProfiles = (try? await runtime.listVaults()) ?? vaultProfiles
+    }
+
+    /// `switchManagedVault` — locks, switches, restarts and refreshes; on
+    /// failure the previous vault is restored (the Dart rollback path).
+    func switchManagedVault(_ id: String) async {
+        let previous = vaultProfiles.first(where: \.active)
+        if previous?.id == id { return }
+        if isReady { await lock() }
+        vault.clear()
+        do {
+            let result = try await runtime.switchVault(id: id)
+            if let tokenPath = result["token_path"]?.stringValue {
+                self.tokenPath = tokenPath
+            }
+            try await runtime.ensureService(restart: true)
+            let inspection = try await runtime.inspect()
+            if let tokenPath = inspection.tokenPath {
+                self.tokenPath = tokenPath
+            }
+            vaultProfiles = (try? await runtime.listVaults()) ?? vaultProfiles
+            try await waitForService()
+            await refresh()
+        } catch {
+            if let previous {
+                _ = try? await runtime.switchVault(id: previous.id)
+                try? await runtime.ensureService(restart: true)
+                if let inspection = try? await runtime.inspect(),
+                    let tokenPath = inspection.tokenPath
+                {
+                    self.tokenPath = tokenPath
+                }
+                vaultProfiles =
+                    (try? await runtime.listVaults()) ?? vaultProfiles
+            }
+            message = UserMessage(error)
+        }
+    }
+
+    /// Restarts the LaunchAgent (or detached dev daemon) then refreshes.
+    func restartService() async {
+        do {
+            try await runtime.ensureService(restart: true)
+            try await waitForService()
+            await refresh()
+        } catch {
+            message = UserMessage(error)
+        }
+    }
+
+    func openDataFolder() {
+        _ = runtime.openDataFolder()
+    }
+
+    func clearUnlockMessage() {
+        unlockMessage = nil
     }
 
     private func enter(_ phase: AppPhase, _ message: UserMessage? = nil) {

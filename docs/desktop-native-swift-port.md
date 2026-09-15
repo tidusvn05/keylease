@@ -34,6 +34,12 @@ embed + chạy như hiện tại.
 | Errors | `Sources/KeyLeaseCore/KeyLeaseError.swift` | mirror `KeyLeaseErrorCode` phía Dart |
 | Dynamic JSON | `Sources/KeyLeaseCore/JSONValue.swift` | tương đương `Map<String,dynamic>` của Dart |
 | `PasswordRecipe` | `Sources/KeyLeaseCore/PasswordRecipe.swift` | viết tay — chưa nằm trong contracts output |
+| `EntryDraft` | `Sources/KeyLeaseCore/EntryDraft.swift` | port `entry_draft.dart` — create/edit payload, `ifRevision`, isDirty, validation, agent-content |
+| Template fields | `Sources/KeyLeaseCore/TemplateFields.swift` | standard/custom field map, typed value, validation, guidance, fallback templates |
+| Dev templates | `Sources/KeyLeaseCore/DeveloperTemplates.swift` | `parseDotEnv`/`renderDotEnv`, SSH endpoints/forwards state + `renderSshConfig`, `resolveSshPrivateKeyPaths` |
+| Agent creation | `Sources/KeyLeaseCore/AgentCreation.swift` | recipes, `AgentCreationDraft`, handoff input + clipboard text |
+| Password gen | `Sources/KeyLeaseCore/PasswordGeneratorSettings.swift` | settings + entropy/strength giống Dart |
+| Presentation | `Sources/KeyLeaseCore/VaultPresentation.swift` | `FieldView.displayValue`, monogram/subtitle, `EntryRevision`, `TotpCode`, structured-id helpers |
 | Golden vectors | `test-vectors/rpc/golden/` (25 file) | capture từ daemon thật, secrets đã scrub |
 | Capture script | `scripts/capture-rpc-golden.py` | tạo vault/client/grant tạm, drive socket, ghi vector |
 
@@ -42,15 +48,18 @@ package riêng trỏ về `KeyLeaseCore` để Linux CI không đụng code Darw
 
 | Thành phần | File | Ghi chú |
 |---|---|---|
-| App shell | `Sources/KeyLease/KeyLeaseApp.swift` | `@main`, WindowGroup + `Settings` scene, menu Vault ⌘R/⌘L |
-| Phase machine | `Sources/KeyLease/AppController.swift` | port `AppController`: starting → inspect → service → locked → ready |
-| Vault state | `Sources/KeyLease/VaultController.swift` | search/list/`entries_view`/`entries_reveal`/`entries_totp` |
+| App shell | `Sources/KeyLease/KeyLeaseApp.swift` | `@main`, WindowGroup + `Settings` scene, menu Vault ⌘N/⇧⌘G/⌘R/⌘L |
+| Phase machine | `Sources/KeyLease/AppController.swift` | port `AppController`: starting → inspect → service → locked → ready; copy/prompt/CLI helpers, managed vaults, SSH bindings |
+| Vault state | `Sources/KeyLease/VaultController.swift` | full port: search/list/`entries_view`/reveal/draft/save/delete/groups/migrations/history/TOTP/agent creation |
+| Section state | `Sources/KeyLease/SectionControllers.swift` | connections, approvals (stale re-check), activity |
+| Preferences | `Sources/KeyLease/PreferencesStore.swift` | `~/.keylease/ui.json` — password settings, SSH key bindings |
+| Host integrations | `Sources/KeyLease/HostIntegrations.swift` | `NSOpenPanel`, `~/.ssh` key discovery, Vision QR scan, ScreenCaptureKit TOTP scan |
 | RuntimeService | `Sources/KeyLease/RuntimeService.swift` | port `LocalRuntimeBridge` — Process + `SMAppService.agent`, fallback daemon tách rời khi `swift run` |
 | SecurityService | `Sources/KeyLease/SecurityService.swift` | `NSPasteboard` copy + clear 30s, sleep/screen-lock → `lock`, openExternalUrl/Google host check |
-| Views | `Sources/KeyLease/Views/` | RootView phase router, Unlock, Onboarding (`create`), Repair, NavigationSplitView + entry list/detail, Settings tối thiểu |
+| Views | `Sources/KeyLease/Views/` | RootView phase router; Unlock; Onboarding (create + import/adopt/restore); Repair; ContentView (section rail + group tree); VaultListView; EntryDetailView (reveal/TOTP/notes/history); EntryEditorView (create/edit/templates/dev-templates/agent mode); DeveloperTemplateViews (env + SSH editor/detail); UtilityPanes (password generator + agent creation); SectionViews (connections/approvals/activity/migrations); SettingsView (general/vaults/security) |
 | Packaging | `scripts/package-macos-swift.sh` | `swift build` universal2 → `.app` bundle (không cần .xcodeproj) → tái dùng `prepare-macos-runtime.sh` cho helper + plist → codesign → `--install` thay `/Applications` |
 
-Test: `cd apps/desktop-macos && swift test` — 21 test, gồm:
+Test: `cd apps/desktop-macos && swift test` — 62 test, gồm:
 
 - `WireCommandParityTests` — so `commands.json` (giống `parity.rs` bên Rust)
 - `GoldenVectorTests` — replay 23 vector: request trên wire phải **bằng hệt**
@@ -58,6 +67,12 @@ Test: `cd apps/desktop-macos && swift test` — 21 test, gồm:
 - `ClientBehaviorTests` — token file, oversize, transport error
 - `ContractModelsTests` — decode `EntryView`/`FieldValue`/`PolicyDecision`/…
   từ response thật
+- `EntryDraftTests` — create/update payload, `ifRevision`, blank-secret =
+  keep, content payloads
+- `DeveloperTemplateTests` — `.env` parse/render, SSH config render + quote
+  rules, structured field/section sync, key-path resolution
+- `PasswordGeneratorAndAgentTests` — entropy/strength, recipe → RPC shape,
+  agent handoff input/expiry
 
 Regenerate khi contract đổi:
 
@@ -71,6 +86,87 @@ scripts/generate-swift-contracts.py /tmp/contracts.json \
 Toolchain trên VPS: Swift 6.2.4 debian12 tarball tại
 `~/.local/share/swift-toolchain/6.2.4/` (mise chưa có build debian13).
 Trên Mac: Xcode ≥16 là đủ.
+
+## Parity checklist với bản Flutter
+
+Checklist này phản ánh `packages/leasegate_vault_ui` (~15k dòng Dart). Trạng
+thái: ✅ xong · 🚧 đã port, chưa verify trên máy Mac · ⬜ chưa làm.
+
+### Vòng đời app / phase machine
+
+- ✅ starting → inspect → ensureService → status → ready (AppController)
+- ✅ onboarding (`mode: "create"` + import KDBX/1PUX/backup/adopt database
+  qua `inspectSource`), provisioning, repair (`repair_desktop_client`)
+- ✅ backgroundApprovalRequired, serviceUnavailable, locked, permissionDenied
+- ✅ lock on sleep + screen lock + ⌘L; clipboard clear theo changeCount
+
+### Vault list & navigation
+
+- ✅ Groups sidebar: All items / Favorites / cây group 2 cấp / New group /
+  Manage groups (reorder, rename, delete empty)
+- ✅ Search debounce 220ms, stale-response guard, count header, empty states
+- ✅ Favorite filter, group filter (kể cả subgroup), selection normalize,
+  arrow-key move
+- ✅ Password generator pane + settings (persist `~/.keylease/ui.json`)
+
+### Entry detail
+
+- ✅ Identity + actions (favorite, edit, delete, copy prompt, copy CLI)
+- ✅ Login details (username/password/website) + reveal/hide/copy
+- ✅ Field-oriented view `entries_view`: sections, semantic roles,
+  `entries_reveal`/`entries_reveal_by_id`/`entries_reveal_many`
+- ✅ Reveal timeout 15s + hide on lock/sleep/select đổi
+- ✅ TOTP inline với countdown + copy; notes fetch/copy; metadata +
+  `entries_history`
+- ✅ Developer template detail: `.env` copy/search, SSH config copy
+  (per-device key binding, `resolveSshPrivateKeyPaths` + `renderSshConfig`)
+
+### Edit / create — yêu cầu chính
+
+- ✅ `EntryDraft` port: create/edit init, `isDirty`, validation
+  (title/group/JSON fields/JSON sections)
+- ✅ `entries_create` / `entries_update` với `if_revision` +
+  `idempotency_key` + `dry_run: false`; secret trống = "giữ giá trị cũ"
+- ✅ `content_create` / `content_update` / `content_set_access` cho
+  `core.prompt` / `core.runbook` / `core.note` (tags, project, agent access)
+- ✅ Editor pane: template picker + guidance, group picker, title, favorite,
+  dynamic template fields (typed value + validation), password generate /
+  reveal, TOTP (base32/otpauth + QR scan), notes markdown, tags/project,
+  custom JSON fields fallback
+- ✅ Developer template editor: `core.environment` (paste .env, parse, biến
+  secret/visible, reorder) + `core.ssh_server` (endpoints, forwards, key
+  binding per device)
+- ✅ Delete entry (revision-checked, confirm), favorite toggle,
+  revision-conflict → draft giữ nguyên để retry
+- ✅ Dirty-draft confirm trước khi đổi selection/đóng editor
+- ✅ Agent-driven creation: recipe cards, handoff `agent_handoff_create`,
+  copy CLI command, refresh & review `entriesCreatedSince`
+
+### Các section khác
+
+- ✅ Connections: list, test/refresh/disconnect/revoke, enroll/unenroll
+  resource, add token connection, Google OAuth flow
+- ✅ Approvals: list pending, request summary, approve/deny với
+  stale-request re-check
+- ✅ Activity: `audit_query`, filter denied/failed, friendly time
+- ✅ Migrations: `migrations_status` banner, preview proposals, apply với
+  digest, rollback checkpoint
+- ✅ Settings: General (data folder, migrations, restart service, repair) /
+  Vaults (create/rename/switch/import) / Security — `Settings` scene tabs;
+  Connections/Activity vẫn nằm trong section rail chính
+
+### Host capabilities (SecurityService + HostIntegrations)
+
+- ✅ Clipboard copy + timed clear, lock signals, http(s) + Google URL guard
+- ✅ `NSOpenPanel` vault-source/SSH key/QR image pickers; `~/.ssh` private
+  key discovery (header sniff)
+- ✅ TOTP QR: image picker (Vision) + screen scan
+  (`SCScreenshotManager`/`SCContentSharingPicker` khi có), Screen Recording
+  settings deep-link
+- ⬜ `publishVaultChange` / distributed notification giữa nhiều window
+- ⬜ VoiceOver/accessibility audit; menu bar polish; frame autosave
+- ⬜ Packaging/notarize + release gate (chạy `package-macos-swift.sh`,
+  `docs/macos-x86_64-build-test.md` trên máy Mac)
 
 ## Còn lại — cần máy Mac
 
@@ -93,29 +189,30 @@ Trên Mac: Xcode ≥16 là đủ.
   + distributed notification (hoặc XPC). Milestone 1 chỉ có 1 window nên
   chưa cần.
 
-### 3. State layer
+### 3. State layer — ✅ đã port
 
-Port `core/state/` (~2.1k dòng Dart) sang `@Observable` classes:
-
-- `AppController` (570) — phase machine, auth/session, lock triggers
-- `VaultController` (787) — entries/groups/selection/reveal
-- drafts (`entry_draft`, `agent_creation_draft`, `password_generator_settings`),
-  `section_controllers`, `busy_registry`, `user_message`, `connection_settings`
-- `PreferencesStore` → `UserDefaults`/`FileManager` tương đương
+- ✅ `AppController` — phase machine, auth/session, lock triggers, copy/prompt/
+  CLI helpers, managed vaults, SSH key bindings
+- ✅ `VaultController` — entries/groups/selection/reveal/draft save/delete,
+  migrations, history, TOTP, agent-driven creation
+- ✅ drafts (`EntryDraft`, `AgentCreationDraft`, `PasswordGeneratorSettings`)
+  trong `KeyLeaseCore`; `SectionControllers` (connections/approvals/activity),
+  `UserMessage` inline trong `AppController`
+- ✅ `PreferencesStore` → `~/.keylease/ui.json` tương đương
   `file_preferences_store.dart`
 
-### 4. Features (~8.4k dòng Dart)
+### 4. Features — ✅ đã port, chờ verify trên Mac
 
-- Onboarding phases (`onboarding/phase_screens.dart`, 394)
-- Vault: `entry_list` (221), `entry_detail` (791), `entry_editor` (1277),
-  `password_generator` (490), `totp_dialog` (128), templates
-  (`developer_templates` 406, `developer_template_detail` 489,
-  `developer_template_editor` 1642 — file lớn nhất), `agent_driven_creation`
-  (588), `template_guidance` (181)
-- Connections (389) + `google_oauth_flow` (91)
-- Approvals (148), Activity (130), Migrations (167), Settings (664) + multi-vault
-- Components chung (~1.4k): `EntryRow`, `SecretField`, `RequestSummary`,
-  `KeyLeaseDialog`, `SearchableSelect`, `SplitPane`, `MessageBanner`, …
+- ✅ Onboarding phases (create + import/adopt/restore)
+- ✅ Vault: entry list, detail (reveal/TOTP/notes/history), editor
+  (create/edit, dynamic template fields, dev-template env + SSH editors),
+  password generator + settings sheet, TOTP dialog flow, agent-driven
+  creation pane, template guidance
+- ✅ Connections + Google OAuth flow; Approvals (stale re-check); Activity;
+  Migrations; Settings + multi-vault
+- ✅ Components chung trong `Views/ViewSupport.swift`: GuidanceCard,
+  FieldRows, monogram, message banner, confirm helpers
+- Còn: polish layout + design tokens trên máy Mac thật
 
 ### 5. SecurityService (port từ `MainFlutterWindow.swift` security channel)
 
@@ -124,16 +221,18 @@ Port `core/state/` (~2.1k dòng Dart) sang `@Observable` classes:
 - ✅ `NSWorkspace.willSleepNotification` + `com.apple.screenIsLocked` → `lock`
   RPC; `openGoogleAuthorization` chỉ `accounts.google.com`, `openExternalUrl`
   chỉ http(s); `Settings` scene tối thiểu đã có.
-- Còn: `NSOpenPanel` security-scoped cho client token file; SSH key
-  discovery/picker; TOTP QR (Vision + `SCContentSharingPicker`, xin quyền
-  Screen Recording).
+- ✅ `NSOpenPanel` cho vault-source/SSH key/QR image (`HostIntegrations.swift`);
+  `~/.ssh` private-key discovery (header sniff); TOTP QR qua Vision +
+  ScreenCaptureKit (`SCScreenshotManager`/`SCContentSharingPicker` theo OS),
+  deep-link Screen Recording settings.
 
 ### 6. Menu bar + shortcut + polish
 
-- SwiftUI `Commands`: ⌘F search, ⌘, settings, Vault menu ⌘N/⌘R/⌘L —
-  đơn giản hơn nhiều so với retarget trong Flutter runner.
-- Window size/position restore (`NSWindow.frameAutosaveName`).
-- VoiceOver/accessibility audit; error surface theo `UserMessage` semantics.
+- ✅ SwiftUI `Commands`: Vault menu ⌘N (new item), ⇧⌘G (password generator),
+  ⌘R (refresh), ⌘L (lock); arrow-key navigation trong list.
+- Còn: ⌘F search focus, window size/position restore
+  (`NSWindow.frameAutosaveName`), VoiceOver/accessibility audit, error
+  surface theo `UserMessage` semantics.
 
 ### 7. Packaging + release gate
 
