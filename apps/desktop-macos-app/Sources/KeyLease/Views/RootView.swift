@@ -53,6 +53,7 @@ struct RootView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(WindowAccessor { app.mainWindow = $0 })
         // Copy confirmation — floats above whatever phase is showing.
         .overlay(alignment: .bottom) {
             if let toast = app.copiedToast {

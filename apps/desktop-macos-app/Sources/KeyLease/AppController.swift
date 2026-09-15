@@ -92,6 +92,9 @@ final class AppController {
     var section: AppSection = .vault
     /// Menu-bar quick access — status item + popover + ⌥⌘K hotkey.
     private var quickAccess: QuickAccessController?
+    /// The app's main window, tracked by `WindowAccessor` in `RootView`
+    /// so "open in app" reuses it rather than opening a duplicate.
+    weak var mainWindow: NSWindow?
 
     let runtime = RuntimeService()
     let security = SecurityService()

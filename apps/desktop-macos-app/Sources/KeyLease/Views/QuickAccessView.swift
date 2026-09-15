@@ -92,6 +92,7 @@ struct QuickAccessView: View {
                         ? "The vault is locked." : "KeyLease is not ready.")
                     .font(.callout).foregroundStyle(.secondary)
                 KLButton(title: "Open KeyLease", role: .primary) {
+                    presented = false
                     openMain()
                 }
             }
@@ -173,6 +174,7 @@ struct QuickAccessView: View {
     private var footer: some View {
         HStack {
             Button {
+                presented = false
                 openMain()
             } label: {
                 Label("Open KeyLease", systemImage: "macwindow")
@@ -247,13 +249,26 @@ struct QuickAccessView: View {
             presented = false
             return
         }
-        presented = false
         app.vault.openAgentCreatedEntry(entry)
+        presented = false
         openMain()
     }
 
+    /// Brings the existing main window forward; only falls back to
+    /// `openWindow` when the window was closed — `openWindow` alone
+    /// would spawn a duplicate from this out-of-scene popover. The
+    /// activation runs a beat later so the transient popover's close
+    /// can't hand focus back to the previous app afterwards.
     private func openMain() {
-        openWindow(id: "main")
-        NSApp.activate(ignoringOtherApps: true)
+        let window = app.mainWindow
+        if window == nil { openWindow(id: "main") }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(80))
+            NSApp.activate(ignoringOtherApps: true)
+            if let window {
+                if window.isMiniaturized { window.deminiaturize(nil) }
+                window.makeKeyAndOrderFront(nil)
+            }
+        }
     }
 }

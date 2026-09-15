@@ -236,6 +236,23 @@ struct SecretRow: View {
     }
 }
 
+/// Publishes the `NSWindow` a view lives in — SwiftUI keeps no window
+/// handle, and the quick-access popover needs one to bring the existing
+/// main window forward instead of spawning a second.
+struct WindowAccessor: NSViewRepresentable {
+    let onResolve: (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { onResolve(view.window) }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { onResolve(nsView.window) }
+    }
+}
+
 /// The one secure field language across unlock/onboarding/repair —
 /// label above, rounded border — matching the editor's `labeledField`
 /// pattern instead of a lone placeholder inside the field.
