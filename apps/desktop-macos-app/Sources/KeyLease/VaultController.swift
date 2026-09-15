@@ -509,6 +509,38 @@ final class VaultController {
         "desktop-\(Int64(Date().timeIntervalSince1970 * 1_000_000))"
     }
 
+    /// Drag-and-drop onto a sidebar group — a single-field
+    /// `entries_update` patch guarded by the entry's last known revision.
+    /// `groupId` of "" drops the item back into "All items" (ungrouped).
+    func moveEntry(_ entryId: String, toGroup groupId: String) async throws {
+        guard let client,
+            let entry = entries.first(where: { $0.id == entryId }),
+            entry.groupId != groupId
+        else { return }
+        _ = try await client.authorized(
+            .entriesUpdate(
+                id: entryId,
+                patch: EntryPatch(
+                    customFields: nil, favorite: nil, fieldUpdates: nil,
+                    groupId: groupId, notes: nil, password: nil,
+                    removeFieldIds: nil, sections: nil, title: nil,
+                    totp: nil, totpUri: nil, url: nil, username: nil),
+                ifRevision: entry.revision,
+                idempotencyKey: idempotencyKey(),
+                dryRun: false))
+        await search()
+    }
+
+    /// Quick-access search — runs its own query so the menu-bar popover
+    /// never disturbs the main window's debounced list and selection.
+    func searchEntries(_ query: String) async -> [ItemMetadata] {
+        guard let client,
+            let result = try? await client.authorized(
+                .entriesSearch(query: query))
+        else { return [] }
+        return (try? result.decoded(as: [ItemMetadata].self)) ?? []
+    }
+
     /// Saves `draft`. On failure the draft is untouched so the editor can
     /// retry — revision conflicts surface as a `UserMessage`, never a
     /// dropped form (Dart `save`).

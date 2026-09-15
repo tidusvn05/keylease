@@ -921,9 +921,9 @@ private struct SshDetail: View {
         let resolved = await resolveSshPrivateKeyPaths(
             endpoints: endpoints,
             currentPaths: current,
-            discover: { await app.host.discoverSshPrivateKeys() },
+            discover: { app.host.discoverSshPrivateKeys() },
             select: { _ in
-                await app.host.pickFile(
+                app.host.pickFile(
                     title: "Choose a private key",
                     message: "Select the SSH private key to bind.",
                     directory: FileManager.default
@@ -931,7 +931,7 @@ private struct SshDetail: View {
                         .appendingPathComponent(".ssh"))?.path
             },
             onSelected: { endpoint, path in
-                try? await app.setSshKeyBinding(
+                try? app.setSshKeyBinding(
                     item.id, endpoint.sectionId, path)
             })
         guard let resolved else {

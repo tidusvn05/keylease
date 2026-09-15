@@ -23,6 +23,8 @@ struct VaultListView: View {
             entry in
             EntryRow(entry: entry, kindLabel: app.vault.kindLabel(entry.kind))
                 .tag(entry.id)
+                // Drag onto a sidebar group (or "All items") to re-file.
+                .draggable(entry.id)
                 .contextMenu {
                     Button(entry.favorite
                         ? "Remove from favorites" : "Add to favorites")

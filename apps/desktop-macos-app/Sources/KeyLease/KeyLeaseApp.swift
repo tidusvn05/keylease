@@ -7,12 +7,13 @@ struct KeyLeaseApp: App {
     @State private var app = AppController()
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             RootView(app: app)
                 .frame(minWidth: 900, minHeight: 560)
                 .tint(KL.Colors.accent)
                 .task {
                     app.installLockObservers()
+                    app.installQuickAccess()
                     await app.bootstrap()
                 }
         }

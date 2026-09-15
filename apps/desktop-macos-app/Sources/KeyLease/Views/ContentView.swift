@@ -242,6 +242,7 @@ private struct SidebarView: View {
         Section("Items") {
             Label("All items", systemImage: "tray.full")
                 .tag(SidebarItem.allItems)
+                .entryDropTarget("") { dropEntry($0, into: "") }
             Label("Favorites", systemImage: "star")
                 .tag(SidebarItem.favorites)
         }
@@ -256,7 +257,8 @@ private struct SidebarView: View {
                         renameText = $0.name
                     },
                     onDelete: deleteGroup,
-                    onMove: move)
+                    onMove: move,
+                    onDropEntry: dropEntry)
             }
         } header: {
             HStack {
@@ -298,6 +300,18 @@ private struct SidebarView: View {
         }
     }
 
+    /// Entry dropped onto a sidebar row — `groupId` "" means "All items"
+    /// (ungrouped). Move failures surface through the group error alert.
+    private func dropEntry(_ entryId: String, into groupId: String) {
+        Task {
+            do {
+                try await app.vault.moveEntry(entryId, toGroup: groupId)
+            } catch {
+                groupError = UserMessage(error)
+            }
+        }
+    }
+
     private func move(_ group: VaultGroup, offset: Int) {
         let siblings = (group.parentId == nil ? rootGroups : childrenOf(
             app.vault.orderedGroups.first { $0.id == group.parentId }!
@@ -329,11 +343,13 @@ private struct GroupRow: View {
     let onRename: (VaultGroup) -> Void
     let onDelete: (VaultGroup) -> Void
     let onMove: (VaultGroup, Int) -> Void
+    let onDropEntry: (String, String) -> Void
 
     var body: some View {
         Label(group.name, systemImage: "folder")
             .padding(.leading, CGFloat(depth) * 14)
             .tag(SidebarItem.group(group.id))
+            .entryDropTarget(group.id) { onDropEntry($0, group.id) }
             .contextMenu {
                 Button("Rename") { onRename(group) }
                 Button("Move up") { onMove(group, -1) }
@@ -345,7 +361,38 @@ private struct GroupRow: View {
             GroupRow(
                 group: child, depth: depth + 1, app: app,
                 children: children, onRename: onRename,
-                onDelete: onDelete, onMove: onMove)
+                onDelete: onDelete, onMove: onMove,
+                onDropEntry: onDropEntry)
         }
+    }
+}
+
+/// Accepts dragged entry ids — the payload is the entry id as a plain
+/// string (see `.draggable` in `VaultListView`). Highlights the whole
+/// sidebar row while a drag hovers.
+private struct EntryDropTarget: ViewModifier {
+    let onDrop: (String) -> Void
+    @State private var targeted = false
+
+    func body(content: Content) -> some View {
+        content
+            .listRowBackground(
+                targeted
+                    ? RoundedRectangle(cornerRadius: KL.Radius.small)
+                        .fill(KL.Colors.accent.opacity(0.25))
+                    : nil)
+            .dropDestination(for: String.self) { ids, _ in
+                guard let id = ids.first else { return false }
+                onDrop(id)
+                return true
+            } isTargeted: { targeted = $0 }
+    }
+}
+
+private extension View {
+    func entryDropTarget(
+        _ groupId: String, onDrop: @escaping (String) -> Void
+    ) -> some View {
+        modifier(EntryDropTarget(onDrop: onDrop))
     }
 }

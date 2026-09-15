@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 import KeyLeaseCore
@@ -89,6 +90,8 @@ final class AppController {
     /// Top-level section shown in `ContentView` — lives here so the Go
     /// menu (⌘1–⌘5) can switch sections from outside the view tree.
     var section: AppSection = .vault
+    /// Menu-bar quick access — status item + popover + ⌥⌘K hotkey.
+    private var quickAccess: QuickAccessController?
 
     let runtime = RuntimeService()
     let security = SecurityService()
@@ -343,6 +346,15 @@ final class AppController {
             guard let self, self.phase == .ready else { return }
             Task { await self.lock() }
         }
+    }
+
+    /// Installs the menu-bar status item, its quick-access popover and
+    /// the ⌥⌘K hotkey that summons it from any app.
+    func installQuickAccess() {
+        guard quickAccess == nil else { return }
+        let controller = QuickAccessController(app: self)
+        controller.install()
+        quickAccess = controller
     }
 
     // MARK: - Clipboard (`copySensitive` / agent prompt / CLI command)

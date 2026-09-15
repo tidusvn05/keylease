@@ -599,7 +599,7 @@ private struct EditorBody: View {
         if vault.creationMode == .agentDriven {
             vault.useManualCreation()
         } else {
-            try? await vault.useAgentCreation()
+            await vault.useAgentCreation()
         }
     }
 
@@ -713,11 +713,11 @@ private struct EditorBody: View {
                     detail: "Use an image file instead.")
             #endif
         case .image:
-            guard let url = await app.host.pickFile(
+            guard let url = app.host.pickFile(
                 title: "Choose a QR code image",
                 message: "Select an image containing a TOTP QR code.")
             else { return }
-            if let uri = await app.host.scanTotpQrFromImage(url) {
+            if let uri = app.host.scanTotpQrFromImage(url) {
                 draft.totp = uri
             } else {
                 failure = UserMessage(
