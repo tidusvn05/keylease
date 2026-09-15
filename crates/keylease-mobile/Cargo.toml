@@ -12,6 +12,13 @@ rust-version.workspace = true
 #             host, which is how this layer is verified without a device.
 crate-type = ["cdylib", "staticlib", "rlib"]
 
+[features]
+# The Kotlin client in apps/mobile-android reaches the same cores through JNI
+# exports instead of the C ABI. Off by default so the host test suite and the
+# Flutter cdylib do not link the JVM-facing surface.
+default = []
+jni = ["dep:jni"]
+
 [dependencies]
 # default-features = false drops the agent handoff dispatch arms. The wire type
 # is unchanged; the two commands answer `denied` instead.
@@ -22,6 +29,7 @@ keylease-store = { path = "../keylease-store" }
 serde_json.workspace = true
 tokio = { workspace = true }
 zeroize.workspace = true
+jni = { version = "0.21", optional = true }
 
 [dev-dependencies]
 chrono.workspace = true

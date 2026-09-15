@@ -36,12 +36,19 @@ rustup target add --toolchain "$TOOLCHAIN" aarch64-linux-android x86_64-linux-an
 targets=()
 for abi in $ABIS; do targets+=(--target "$abi"); done
 
+# The native Kotlin client (apps/mobile-android) needs the JNI exports in
+# addition to the C ABI; the Flutter client leaves this unset.
+features_args=()
+if [ -n "${KEYLEASE_ANDROID_FEATURES:-}" ]; then
+  features_args+=(--features "$KEYLEASE_ANDROID_FEATURES")
+fi
+
 # Android 15 requires 16 KB-aligned ELF segments on arm64. The NDK linker
 # defaults to it, but rustc drives the linker itself, so it must be explicit.
 # Verified below rather than trusted.
 RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-Wl,-z,max-page-size=16384" \
   cargo ndk "${targets[@]}" --platform 24 --output-dir "$OUTPUT" \
-    build --locked --"$PROFILE" -p keylease-mobile
+    build --locked --"$PROFILE" "${features_args[@]}" -p keylease-mobile
 
 READELF="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
 for abi in $ABIS; do

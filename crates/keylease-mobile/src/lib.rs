@@ -242,6 +242,110 @@ fn session(handle: u64) -> Option<Arc<SessionHandle>> {
 }
 
 // ---------------------------------------------------------------------------
+// Transport-independent cores.
+//
+// The C ABI (below) and the JNI ABI (`jni` module, for the native Kotlin
+// client) are both thin wrappers over these three functions, so the two
+// transports cannot answer the same request differently — the same invariant
+// `keylease-rpc` keeps between the socket and the C ABI.
+// ---------------------------------------------------------------------------
+
+/// Opens `path` and returns its handle id alongside the outcome envelope.
+fn open_json(path: &str) -> (u64, Value) {
+    match open_session(path) {
+        Ok((handle, value)) => (handle, value),
+        Err(value) => (NO_HANDLE, value),
+    }
+}
+
+/// Dispatches one request against an open vault, splicing the owner credential
+/// in on the Rust side so it never reaches the caller's heap.
+fn call_json(handle: u64, request: &str) -> Value {
+    if request.len() > MAX_LOCAL_JSON_BYTES {
+        return envelope_error("invalid_request", "the request exceeds the size limit");
+    }
+    let Some(session) = session(handle) else {
+        return envelope_error("not_found", "no vault is open for this handle");
+    };
+    let Ok(mut parsed) = serde_json::from_str::<Value>(request) else {
+        return envelope_error("invalid_request", "the request is not valid JSON");
+    };
+    let command = parsed.get("command").and_then(Value::as_str);
+    if command != Some("status") {
+        let credential = match session.credential.lock() {
+            Ok(credential) => credential,
+            Err(_) => return envelope_error("storage", "the mobile session is unavailable"),
+        };
+        let Some(credential) = credential.as_ref() else {
+            return envelope_error("vault_locked", "unlock the vault to continue");
+        };
+        let Some(object) = parsed.as_object_mut() else {
+            return envelope_error("invalid_request", "the request is not a JSON object");
+        };
+        // The caller cannot supply or override an owner credential. Keeping
+        // this insertion in Rust is the mobile equivalent of the desktop
+        // token file boundary.
+        object.insert(
+            "auth".into(),
+            json!({
+                "agent_id": credential.agent_id,
+                "token": credential.token.as_str(),
+                "session_id": "mobile",
+            }),
+        );
+    }
+    session
+        .runtime
+        .block_on(dispatch_value(&session.service, RpcCapabilities::MOBILE, parsed))
+}
+
+/// Runs one vault lifecycle operation, keeping the minted owner credential on
+/// the Rust side. See [`keylease_provision`] for why this is a separate
+/// channel from [`call_json`].
+fn provision_json(handle: u64, request: &str) -> Value {
+    if request.len() > MAX_LOCAL_JSON_BYTES {
+        return envelope_error("invalid_request", "the request exceeds the size limit");
+    }
+    let Some(session) = session(handle) else {
+        return envelope_error("not_found", "no vault is open for this handle");
+    };
+    let raw = session.runtime.block_on(dispatch_provision_line(
+        &session.service,
+        ProvisionContext::MOBILE,
+        request,
+    ));
+    let mut response = serde_json::from_str::<Value>(&raw)
+        .unwrap_or_else(|_| envelope_error("storage", "the response could not be encoded"));
+    if response.get("ok") == Some(&Value::Bool(true)) {
+        let result = response.get_mut("result").and_then(Value::as_object_mut);
+        if let Some(result) = result {
+            let agent_id = result
+                .get("agent_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let token = match result.remove("token") {
+                Some(Value::String(token)) => Some(Zeroizing::new(token)),
+                _ => None,
+            };
+            if let (Some(agent_id), Some(token)) = (agent_id, token) {
+                match session.credential.lock() {
+                    Ok(mut credential) => {
+                        *credential = Some(MobileCredential { agent_id, token });
+                    }
+                    Err(_) => {
+                        return envelope_error(
+                            "storage",
+                            "the mobile session could not be established",
+                        );
+                    }
+                }
+            }
+        }
+    }
+    response
+}
+
+// ---------------------------------------------------------------------------
 // The C surface.
 // ---------------------------------------------------------------------------
 
@@ -269,10 +373,7 @@ pub unsafe extern "C" fn keylease_open(
                 envelope_error("invalid_request", "the database path is not valid UTF-8"),
             );
         };
-        match open_session(path) {
-            Ok((handle, value)) => (handle, value),
-            Err(value) => (NO_HANDLE, value),
-        }
+        open_json(path)
     }));
     match outcome {
         Ok((handle, value)) => {
@@ -309,48 +410,11 @@ pub unsafe extern "C" fn keylease_call(
 ) -> i32 {
     install_panic_hook();
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        if request_len > MAX_LOCAL_JSON_BYTES {
-            return envelope_error("invalid_request", "the request exceeds the size limit");
-        }
         // SAFETY: forwarded from this function's own contract.
         let Some(request) = (unsafe { borrow_str(request_ptr, request_len) }) else {
             return envelope_error("invalid_request", "the request is not valid UTF-8");
         };
-        let Some(session) = session(handle) else {
-            return envelope_error("not_found", "no vault is open for this handle");
-        };
-        let Ok(mut parsed) = serde_json::from_str::<Value>(request) else {
-            return envelope_error("invalid_request", "the request is not valid JSON");
-        };
-        let command = parsed.get("command").and_then(Value::as_str);
-        if command != Some("status") {
-            let credential = match session.credential.lock() {
-                Ok(credential) => credential,
-                Err(_) => return envelope_error("storage", "the mobile session is unavailable"),
-            };
-            let Some(credential) = credential.as_ref() else {
-                return envelope_error("vault_locked", "unlock the vault to continue");
-            };
-            let Some(object) = parsed.as_object_mut() else {
-                return envelope_error("invalid_request", "the request is not a JSON object");
-            };
-            // Dart cannot supply or override an owner credential. Keeping this
-            // insertion in Rust is the mobile equivalent of the desktop token
-            // file boundary.
-            object.insert(
-                "auth".into(),
-                json!({
-                    "agent_id": credential.agent_id,
-                    "token": credential.token.as_str(),
-                    "session_id": "mobile",
-                }),
-            );
-        }
-        session.runtime.block_on(dispatch_value(
-            &session.service,
-            RpcCapabilities::MOBILE,
-            parsed,
-        ))
+        call_json(handle, request)
     }));
     match outcome {
         Ok(value) => emit_value(value, out_ptr, out_len),
@@ -379,50 +443,11 @@ pub unsafe extern "C" fn keylease_provision(
 ) -> i32 {
     install_panic_hook();
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        if request_len > MAX_LOCAL_JSON_BYTES {
-            return envelope_error("invalid_request", "the request exceeds the size limit");
-        }
         // SAFETY: forwarded from this function's own contract.
         let Some(request) = (unsafe { borrow_str(request_ptr, request_len) }) else {
             return envelope_error("invalid_request", "the request is not valid UTF-8");
         };
-        let Some(session) = session(handle) else {
-            return envelope_error("not_found", "no vault is open for this handle");
-        };
-        let raw = session.runtime.block_on(dispatch_provision_line(
-            &session.service,
-            ProvisionContext::MOBILE,
-            request,
-        ));
-        let mut response = serde_json::from_str::<Value>(&raw)
-            .unwrap_or_else(|_| envelope_error("storage", "the response could not be encoded"));
-        if response.get("ok") == Some(&Value::Bool(true)) {
-            let result = response.get_mut("result").and_then(Value::as_object_mut);
-            if let Some(result) = result {
-                let agent_id = result
-                    .get("agent_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                let token = match result.remove("token") {
-                    Some(Value::String(token)) => Some(Zeroizing::new(token)),
-                    _ => None,
-                };
-                if let (Some(agent_id), Some(token)) = (agent_id, token) {
-                    match session.credential.lock() {
-                        Ok(mut credential) => {
-                            *credential = Some(MobileCredential { agent_id, token });
-                        }
-                        Err(_) => {
-                            return envelope_error(
-                                "storage",
-                                "the mobile session could not be established",
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        response
+        provision_json(handle, request)
     }));
     match outcome {
         Ok(value) => emit_value(value, out_ptr, out_len),
@@ -490,6 +515,129 @@ pub unsafe extern "C" fn keylease_free(ptr: *mut u8, len: usize) {
         let slice = ptr::slice_from_raw_parts_mut(ptr, len);
         (*slice).zeroize();
         drop(Box::from_raw(slice));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The JNI surface.
+//
+// Built only with `--features jni` for the native Kotlin client in
+// `apps/mobile-android`; each symbol name matches that app's
+// `ai.leasegate.mobile.bridge.KeyleaseNative` class. Every export is a thin
+// adapter over the same
+// `open_json`/`call_json`/`provision_json` cores the C ABI uses, so the two
+// clients cannot be answered differently. The owner credential is still
+// spliced inside `call_json` and `provision_json` — nothing below moves it.
+//
+// `keylease_free` has no JNI counterpart: a `jstring` is owned by the JVM
+// once returned, so there is no caller-managed buffer. That trades the C
+// ABI's zeroise-then-free for the ordinary ART string lifecycle — the same
+// posture the Dart heap already has, per ADR 0004's accepted residual risk.
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "jni")]
+mod jni_bridge {
+    use super::*;
+    use jni::JNIEnv;
+    use jni::objects::{JClass, JString};
+    use jni::sys::{jint, jlong, jstring};
+
+    fn read_string(env: &mut JNIEnv, value: &JString) -> Option<String> {
+        env.get_string(value).ok().map(String::from)
+    }
+
+    fn write_value(env: &mut JNIEnv, value: Value) -> jstring {
+        match env.new_string(value.to_string()) {
+            Ok(text) => text.into_raw(),
+            Err(_) => ptr::null_mut(),
+        }
+    }
+
+    /// Opens the vault at `path`. Returns the outcome envelope; the handle id
+    /// is inside `result.handle`. Null means no output was produced at all.
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_ai_leasegate_mobile_bridge_KeyleaseNative_open(
+        mut env: JNIEnv,
+        _class: JClass,
+        path: JString,
+    ) -> jstring {
+        install_panic_hook();
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let Some(path) = read_string(&mut env, &path) else {
+                return envelope_error(
+                    "invalid_request",
+                    "the database path is not valid UTF-8",
+                );
+            };
+            open_json(&path).1
+        }));
+        match outcome {
+            Ok(value) => write_value(&mut env, value),
+            Err(_) => ptr::null_mut(),
+        }
+    }
+
+    /// Dispatches one request. Null means no output was produced at all.
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_ai_leasegate_mobile_bridge_KeyleaseNative_call(
+        mut env: JNIEnv,
+        _class: JClass,
+        handle: jlong,
+        request: JString,
+    ) -> jstring {
+        install_panic_hook();
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let Some(request) = read_string(&mut env, &request) else {
+                return envelope_error("invalid_request", "the request is not valid UTF-8");
+            };
+            call_json(handle as u64, &request)
+        }));
+        match outcome {
+            Ok(value) => write_value(&mut env, value),
+            Err(_) => ptr::null_mut(),
+        }
+    }
+
+    /// Runs one lifecycle operation. Null means no output was produced at all.
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_ai_leasegate_mobile_bridge_KeyleaseNative_provision(
+        mut env: JNIEnv,
+        _class: JClass,
+        handle: jlong,
+        request: JString,
+    ) -> jstring {
+        install_panic_hook();
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let Some(request) = read_string(&mut env, &request) else {
+                return envelope_error("invalid_request", "the request is not valid UTF-8");
+            };
+            provision_json(handle as u64, &request)
+        }));
+        match outcome {
+            Ok(value) => write_value(&mut env, value),
+            Err(_) => ptr::null_mut(),
+        }
+    }
+
+    /// Locks the vault. Same contract as [`keylease_lock`].
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_ai_leasegate_mobile_bridge_KeyleaseNative_lock(
+        _env: JNIEnv,
+        _class: JClass,
+        handle: jlong,
+    ) -> jint {
+        keylease_lock(handle as u64)
+    }
+
+    /// Closes the vault and drops its keys. Same contract as
+    /// [`keylease_close`].
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_ai_leasegate_mobile_bridge_KeyleaseNative_close(
+        _env: JNIEnv,
+        _class: JClass,
+        handle: jlong,
+    ) -> jint {
+        keylease_close(handle as u64)
     }
 }
 
