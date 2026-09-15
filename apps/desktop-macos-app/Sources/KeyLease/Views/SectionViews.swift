@@ -48,7 +48,7 @@ private struct SectionScaffold<Content: View>: View {
 
 /// The empty/error/loading body shared by list sections.
 @ViewBuilder
-private func sectionBody<Item>(
+@MainActor private func sectionBody<Item: Sendable>(
     _ controller: SectionController<Item>,
     empty: String,
     @ViewBuilder rows: ([Item]) -> some View

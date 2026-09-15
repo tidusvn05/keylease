@@ -11,7 +11,7 @@ struct StaleApprovalError: Error, Equatable {
 /// Shared loading/error plumbing for the read-mostly sections
 /// (Dart `SectionController`).
 @MainActor @Observable
-final class SectionController<Item> {
+final class SectionController<Item: Sendable> {
     private(set) var items: [Item] = []
     var error: UserMessage?
     private(set) var loaded = false
@@ -240,9 +240,9 @@ extension AuditEvent {
 
 extension ISO8601DateFormatter {
     /// Lenient parser for daemon timestamps (with or without fractions).
-    static let `default`: ISO8601DateFormatter = {
+    static var `default`: ISO8601DateFormatter {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter
-    }()
+    }
 }

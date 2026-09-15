@@ -310,7 +310,7 @@ public struct SshConfigError: Error, Equatable, Sendable {
 /// port of `resolveSshPrivateKeyPaths`. A single discovered key is safe to
 /// select automatically; otherwise `select` asks the user. Returning nil
 /// means the user cancelled.
-public func resolveSshPrivateKeyPaths(
+@MainActor public func resolveSshPrivateKeyPaths(
     endpoints: [SshEndpointConfig],
     currentPaths: [String: String],
     discover: () async throws -> [String],

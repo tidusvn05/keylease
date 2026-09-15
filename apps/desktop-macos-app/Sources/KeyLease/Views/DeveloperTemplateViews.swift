@@ -92,18 +92,18 @@ struct EnvironmentTemplateEditor: View {
                     parseResult = parseDotEnv(pasteText)
                 }
             if let parseResult {
-                Text(
-                    parseResult.valid
-                        ? "\(parseResult.variables.count) variables · "
-                            + "\(parseResult.ignoredComments) comments and "
-                            + "\(parseResult.ignoredBlankLines) blank lines "
-                            + "will be normalized."
-                        : parseResult.issues.map {
-                            "Line \($0.line): \($0.message)"
-                        }.joined(separator: "\n"))
+                let summary = parseResult.valid
+                    ? "\(parseResult.variables.count) variables · "
+                        + "\(parseResult.ignoredComments) comments and "
+                        + "\(parseResult.ignoredBlankLines) blank lines "
+                        + "will be normalized."
+                    : parseResult.issues.map {
+                        "Line \($0.line): \($0.message)"
+                    }.joined(separator: "\n")
+                Text(summary)
                     .font(.caption)
                     .foregroundStyle(
-                        parseResult.valid ? .secondary : .red)
+                        parseResult.valid ? Color.secondary : Color.red)
             }
             HStack {
                 Spacer()
@@ -692,11 +692,17 @@ private struct EnvironmentDetail: View {
 
     private func copyField(_ field: FieldView) {
         Task {
-            let value = field.protected
-                ? (app.vault.revealedValue(item.id, field.id)
-                    ?? await app.vault.fetchField(
-                        entryId: item.id, field: field))
-                : field.displayValue
+            let value: String?
+            if field.protected {
+                if let revealed = app.vault.revealedValue(item.id, field.id) {
+                    value = revealed
+                } else {
+                    value = await app.vault.fetchField(
+                        entryId: item.id, field: field)
+                }
+            } else {
+                value = field.displayValue
+            }
             if let value, !value.isEmpty { _ = app.copySensitive(value) }
         }
     }
@@ -880,10 +886,15 @@ private struct SshDetail: View {
                         },
                         onCopy: {
                             Task {
-                                let value = app.vault.revealedValue(
+                                let value: String?
+                                if let revealed = app.vault.revealedValue(
                                     item.id, field.id)
-                                    ?? await app.vault.fetchField(
+                                {
+                                    value = revealed
+                                } else {
+                                    value = await app.vault.fetchField(
                                         entryId: item.id, field: field)
+                                }
                                 if let value, !value.isEmpty {
                                     _ = app.copySensitive(value)
                                 }

@@ -62,7 +62,7 @@ struct OnboardingView: View {
                         "Continue with the vault from an earlier KeyLease "
                             + "setup")
                     {
-                        adopt(legacy)
+                        Task { await adopt(legacy) }
                     }
                     .buttonStyle(.link)
                 }

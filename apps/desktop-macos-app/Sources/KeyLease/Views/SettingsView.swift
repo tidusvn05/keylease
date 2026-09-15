@@ -196,7 +196,8 @@ private struct VaultsSettingsTab: View {
                 guard !name.isEmpty, name != profile.name else { return }
                 Task {
                     do {
-                        try await app.renameManagedVault(profile.id, name)
+                        try await app.renameManagedVault(
+                            profile.id, name: name)
                     } catch {
                         failure = UserMessage(error)
                     }

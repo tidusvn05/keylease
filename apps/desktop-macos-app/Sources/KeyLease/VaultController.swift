@@ -51,8 +51,9 @@ final class VaultController {
 
     var orderedGroups: [VaultGroup] {
         groups.sorted { left, right in
-            let order = (left.sortOrder ?? .max).compare(right.sortOrder ?? .max)
-            if order != .orderedSame { return order == .orderedAscending }
+            let leftOrder = left.sortOrder ?? .max
+            let rightOrder = right.sortOrder ?? .max
+            if leftOrder != rightOrder { return leftOrder < rightOrder }
             let name = left.name.lowercased()
                 .localizedStandardCompare(right.name.lowercased())
             return name == .orderedSame

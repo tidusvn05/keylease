@@ -85,7 +85,12 @@ final class HostIntegrations {
         {
             if #available(macOS 15.4, *) {
                 do {
-                    let image = try await SCScreenshotManager.captureImage()
+                    let captureRect = NSScreen.screens.reduce(CGRect.null) {
+                        $0.union($1.frame)
+                    }
+                    guard !captureRect.isNull else { return (nil, false) }
+                    let image = try await SCScreenshotManager.captureImage(
+                        in: captureRect)
                     if let uri = firstOtpAuthUri(in: image) {
                         return (uri, false)
                     }

@@ -299,8 +299,13 @@ struct EntryDetailView: View {
     /// Copy must not un-mask: fetch without displaying (Dart `_copy`).
     private func copy(_ item: ItemMetadata, field: String, label: String) {
         Task {
-            let value = app.vault.revealedValue(item.id, field)
-                ?? await app.vault.fetchSecret(entryId: item.id, field: field)
+            let value: String?
+            if let revealed = app.vault.revealedValue(item.id, field) {
+                value = revealed
+            } else {
+                value = await app.vault.fetchSecret(
+                    entryId: item.id, field: field)
+            }
             if let value, !value.isEmpty {
                 _ = app.copySensitive(value)
             }
@@ -309,11 +314,17 @@ struct EntryDetailView: View {
 
     private func copyField(_ item: ItemMetadata, field: FieldView) {
         Task {
-            let value = field.protected
-                ? (app.vault.revealedValue(item.id, field.id)
-                    ?? await app.vault.fetchField(entryId: item.id,
-                                                  field: field))
-                : field.displayValue
+            let value: String?
+            if field.protected {
+                if let revealed = app.vault.revealedValue(item.id, field.id) {
+                    value = revealed
+                } else {
+                    value = await app.vault.fetchField(
+                        entryId: item.id, field: field)
+                }
+            } else {
+                value = field.displayValue
+            }
             if let value, !value.isEmpty {
                 _ = app.copySensitive(value)
             }
