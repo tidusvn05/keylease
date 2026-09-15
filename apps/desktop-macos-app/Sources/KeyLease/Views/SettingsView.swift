@@ -6,17 +6,33 @@ import KeyLeaseCore
 /// vaults and security destinations as native tabs.
 struct SettingsView: View {
     let app: AppController
+    @State private var tab = SettingsTab.general
+
+    enum SettingsTab {
+        case general, vaults, migrations, security
+    }
 
     var body: some View {
-        TabView {
-            GeneralSettingsTab(app: app)
+        TabView(selection: $tab) {
+            GeneralSettingsTab(
+                app: app, onOpenMigrations: { tab = .migrations })
                 .tabItem { Label("General", systemImage: "gearshape") }
+                .tag(SettingsTab.general)
             VaultsSettingsTab(app: app)
                 .tabItem { Label("Vaults", systemImage: "externaldrive") }
+                .tag(SettingsTab.vaults)
+            MigrationsView(app: app)
+                .tabItem {
+                    Label(
+                        "Migrations",
+                        systemImage: "arrow.triangle.2.circlepath")
+                }
+                .tag(SettingsTab.migrations)
             SecuritySettingsTab()
                 .tabItem { Label("Security", systemImage: "lock") }
+                .tag(SettingsTab.security)
         }
-        .frame(width: 520, height: 380)
+        .frame(width: 560, height: 420)
     }
 }
 
@@ -24,6 +40,7 @@ struct SettingsView: View {
 
 private struct GeneralSettingsTab: View {
     let app: AppController
+    let onOpenMigrations: () -> Void
     @State private var repairPassword = ""
     @State private var repairing = false
     @State private var failure: UserMessage?
@@ -55,6 +72,10 @@ private struct GeneralSettingsTab: View {
                                 + "checkpoints."
                             : "\(app.vault.migrationStatus?.pending.first?.proposals.count ?? 0) items need review.")
                         .font(.caption).foregroundStyle(.secondary)
+                    KLButton(title: "Review", icon: "arrow.right") {
+                        onOpenMigrations()
+                    }
+                    .controlSize(.small)
                 }
                 LabeledContent("Background service") {
                     Text(

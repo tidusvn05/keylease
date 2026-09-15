@@ -23,17 +23,14 @@ struct KeyLeaseApp: App {
                 Button("Vault") { app.section = .vault }
                     .keyboardShortcut("1", modifiers: .command)
                     .disabled(app.phase != .ready)
-                Button("Connections") { app.section = .connections }
+                Button("Approvals") { app.section = .approvals }
                     .keyboardShortcut("2", modifiers: .command)
                     .disabled(app.phase != .ready)
-                Button("Approvals") { app.section = .approvals }
+                Button("Activity") { app.section = .activity }
                     .keyboardShortcut("3", modifiers: .command)
                     .disabled(app.phase != .ready)
-                Button("Activity") { app.section = .activity }
+                Button("Connections") { app.section = .connections }
                     .keyboardShortcut("4", modifiers: .command)
-                    .disabled(app.phase != .ready)
-                Button("Migrations") { app.section = .migrations }
-                    .keyboardShortcut("5", modifiers: .command)
                     .disabled(app.phase != .ready)
             }
             CommandMenu("Vault") {

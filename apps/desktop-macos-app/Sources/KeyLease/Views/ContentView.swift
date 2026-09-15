@@ -6,20 +6,18 @@ import KeyLeaseCore
 /// tree and the entry list; the rest are the read/manage surfaces.
 enum AppSection: String, CaseIterable, Identifiable {
     case vault = "Vault"
-    case connections = "Connections"
     case approvals = "Approvals"
     case activity = "Activity"
-    case migrations = "Migrations"
+    case connections = "Connections"
 
     var id: String { rawValue }
 
     var icon: String {
         switch self {
         case .vault: "lock.shield"
-        case .connections: "link"
         case .approvals: "checkmark.shield"
         case .activity: "clock.arrow.circlepath"
-        case .migrations: "arrow.triangle.2.circlepath"
+        case .connections: "link"
         }
     }
 }
@@ -74,14 +72,12 @@ struct ContentView: View {
         switch app.section {
         case .vault:
             Task { await app.vault.reload() }
-        case .connections:
-            Task { await app.connections.list.load() }
         case .approvals:
             Task { await app.approvals.list.load() }
         case .activity:
             Task { await app.activity.list.load() }
-        case .migrations:
-            Task { await app.vault.loadMigrations() }
+        case .connections:
+            Task { await app.connections.list.load() }
         }
     }
 
@@ -89,14 +85,12 @@ struct ContentView: View {
         switch app.section {
         case .vault:
             EmptyView()
-        case .connections:
-            ConnectionsView(app: app)
         case .approvals:
             ApprovalsView(app: app)
         case .activity:
             ActivityView(app: app)
-        case .migrations:
-            MigrationsView(app: app)
+        case .connections:
+            ConnectionsView(app: app)
         }
     }
 
@@ -171,6 +165,12 @@ private struct SidebarView: View {
                     if item == .approvals, pendingApprovals > 0 {
                         Label(item.rawValue, systemImage: item.icon)
                             .badge(pendingApprovals)
+                            .tag(SidebarItem.section(item))
+                    } else if item == .connections {
+                        // Not wired end-to-end yet — demoted to the
+                        // bottom of the rail with a "Soon" badge.
+                        Label(item.rawValue, systemImage: item.icon)
+                            .badge("Soon")
                             .tag(SidebarItem.section(item))
                     } else {
                         Label(item.rawValue, systemImage: item.icon)

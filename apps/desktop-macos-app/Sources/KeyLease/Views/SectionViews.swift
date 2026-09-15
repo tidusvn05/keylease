@@ -725,83 +725,117 @@ struct ActivityView: View {
     }
 }
 
-// MARK: - Migrations (`migration_center.dart`)
+// MARK: - Migrations (`migration_center.dart`) — lives in Settings
 
 struct MigrationsView: View {
     let app: AppController
     @State private var failure: UserMessage?
+    /// `loadMigrations` swallows RPC errors — without this flag a locked
+    /// vault or a failed call would leave the spinner up forever.
+    @State private var attempted = false
 
     private var vault: VaultController { app.vault }
 
+    private func load() async {
+        await vault.loadMigrations()
+        attempted = true
+    }
+
     var body: some View {
-        SectionScaffold(
-            title: "Vault migrations",
-            subtitle: "Pending upgrades and applied history",
-            centered: vault.migrationStatus.map {
-                $0.pending.isEmpty && $0.history.isEmpty
-            } ?? true)
-        {
-            Button {
-                Task { await vault.loadMigrations() }
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
+        VStack(alignment: .leading, spacing: KL.Space.m) {
+            HStack {
+                Text("Pending upgrades and applied history")
+                    .font(.callout).foregroundStyle(.secondary)
+                Spacer()
+                KLIconButton(label: "Refresh", icon: "arrow.clockwise") {
+                    Task { await load() }
+                }
             }
-            .help("Refresh")
-        } content: {
             if let failure {
                 MessageBanner(
                     message: failure, onDismiss: { self.failure = nil })
             }
-            if let status = vault.migrationStatus {
-                if status.pending.isEmpty && status.history.isEmpty {
-                    ContentUnavailableView(
-                        "Vault is up to date",
-                        systemImage: "checkmark.seal",
-                        description: Text("No migrations are pending."))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    SectionLabel(title: "Pending")
-                    if status.pending.isEmpty {
-                        Text("Nothing to migrate.")
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(status.pending, id: \.migrationId) { preview in
-                        migrationCard(preview)
-                    }
-                }
-                if !status.history.isEmpty {
-                    SectionLabel(title: "History").padding(.top, 8)
-                    FieldGroup {
-                        ForEach(status.history, id: \.migrationId) {
-                            entry in
-                            DetailRow(
-                                label: entry.migrationId,
-                                value: "\(entry.state) · "
-                                    + "\(entry.itemCount) items · "
-                                    + entry.appliedAt)
-                            {
-                                if entry.rolledBackAt == nil {
-                                    IconAction(
-                                        label: "Roll back",
-                                        icon: "arrow.uturn.backward",
-                                        danger: true)
-                                    {
-                                        Task {
-                                            await rollback(
-                                                entry.migrationId)
+            Group {
+                if let status = vault.migrationStatus {
+                    if status.pending.isEmpty && status.history.isEmpty {
+                        ContentUnavailableView(
+                            "Vault is up to date",
+                            systemImage: "checkmark.seal",
+                            description: Text("No migrations are pending."))
+                    } else {
+                        ScrollView {
+                            VStack(
+                                alignment: .leading, spacing: KL.Space.l
+                            ) {
+                                SectionLabel(title: "Pending")
+                                if status.pending.isEmpty {
+                                    Text("Nothing to migrate.")
+                                        .foregroundStyle(.secondary)
+                                }
+                                ForEach(
+                                    status.pending, id: \.migrationId
+                                ) { preview in
+                                    migrationCard(preview)
+                                }
+                                if !status.history.isEmpty {
+                                    SectionLabel(title: "History")
+                                        .padding(.top, 8)
+                                    FieldGroup {
+                                        ForEach(
+                                            status.history,
+                                            id: \.migrationId
+                                        ) { entry in
+                                            DetailRow(
+                                                label: entry.migrationId,
+                                                value: "\(entry.state) · "
+                                                    + "\(entry.itemCount) items · "
+                                                    + entry.appliedAt)
+                                            {
+                                                if entry.rolledBackAt
+                                                    == nil
+                                                {
+                                                    IconAction(
+                                                        label: "Roll back",
+                                                        icon:
+                                                            "arrow.uturn.backward",
+                                                        danger: true)
+                                                    {
+                                                        Task {
+                                                            await rollback(
+                                                                entry
+                                                                    .migrationId)
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
+                } else if attempted {
+                    ContentUnavailableView {
+                        Label(
+                            "Couldn't load migrations",
+                            systemImage: "exclamationmark.triangle")
+                    } description: {
+                        Text(
+                            "Unlock the vault and try again.")
+                    } actions: {
+                        Button("Retry") { Task { await load() } }
+                    }
+                } else {
+                    ProgressView()
                 }
-            } else {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .task { await vault.loadMigrations() }
+        .padding()
+        .frame(
+            maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .task { await load() }
     }
 
     private func migrationCard(_ preview: MigrationPreview) -> some View {
