@@ -236,6 +236,33 @@ struct SecretRow: View {
     }
 }
 
+/// The one secure field language across unlock/onboarding/repair —
+/// label above, rounded border — matching the editor's `labeledField`
+/// pattern instead of a lone placeholder inside the field.
+struct KLSecureField: View {
+    let label: String
+    @Binding var text: String
+    var focused: FocusState<Bool>.Binding? = nil
+    var onSubmit: (() -> Void)? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: KL.Space.xs) {
+            Text(label).font(.callout)
+            field
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { onSubmit?() }
+        }
+    }
+
+    @ViewBuilder private var field: some View {
+        if let focused {
+            SecureField("", text: $text).focused(focused)
+        } else {
+            SecureField("", text: $text)
+        }
+    }
+}
+
 /// Wraps rows in the card the Dart `FieldGroup` draws.
 struct FieldGroup<Content: View>: View {
     @ViewBuilder var content: () -> Content

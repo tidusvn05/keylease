@@ -21,9 +21,12 @@ struct RepairView: View {
                         .foregroundStyle(KL.Colors.danger)
                         .font(.callout)
                 }
-                SecureField("Master password", text: $password)
-                    .frame(maxWidth: 320)
-                    .onSubmit { Task { await submit() } }
+                KLSecureField(
+                    label: "Master password", text: $password
+                ) {
+                    Task { await submit() }
+                }
+                .frame(width: 320)
                 HStack(spacing: KL.Space.m) {
                     KLButton(
                         title: "Repair", role: .primary, prominent: true)

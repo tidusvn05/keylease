@@ -83,6 +83,7 @@ private struct GeneralSettingsTab: View {
                             + "unchanged.")
                         .font(.caption).foregroundStyle(.secondary)
                     SecureField("Master password", text: $repairPassword)
+                        .textFieldStyle(.roundedBorder)
                     KLButton(
                         title: repairing
                             ? "Repairing…" : "Repair connection",
@@ -178,6 +179,7 @@ private struct VaultsSettingsTab: View {
         .alert("New vault", isPresented: $creating) {
             TextField("Vault name", text: $newName)
             SecureField("Master password", text: $newPassword)
+                .textFieldStyle(.roundedBorder)
             Button("Create") {
                 let name = newName.trimmingCharacters(in: .whitespaces)
                 guard !name.isEmpty, !newPassword.isEmpty else { return }

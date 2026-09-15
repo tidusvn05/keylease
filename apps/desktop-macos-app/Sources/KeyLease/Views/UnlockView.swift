@@ -22,10 +22,13 @@ struct UnlockView: View {
                         .foregroundStyle(KL.Colors.danger)
                         .font(.callout)
                 }
-                SecureField("Master password", text: $password)
-                    .frame(maxWidth: 320)
-                    .focused($passwordFocused)
-                    .onSubmit { Task { await submit() } }
+                KLSecureField(
+                    label: "Master password", text: $password,
+                    focused: $passwordFocused
+                ) {
+                    Task { await submit() }
+                }
+                .frame(width: 320)
                 HStack(spacing: KL.Space.m) {
                     KLButton(
                         title: "Unlock", role: .primary, prominent: true)

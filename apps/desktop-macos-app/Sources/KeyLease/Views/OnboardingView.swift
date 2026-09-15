@@ -82,20 +82,23 @@ struct OnboardingView: View {
                 }
 
                 if needsSourcePassword {
-                    SecureField(
-                        "Existing vault password", text: $sourcePassword)
-                        .frame(maxWidth: 320)
+                    KLSecureField(
+                        label: "Existing vault password",
+                        text: $sourcePassword)
+                        .frame(width: 320)
                     Toggle(
                         "Use a different password in KeyLease",
                         isOn: $differentPassword)
                 }
                 if needsTargetPassword {
-                    SecureField(
-                        importing ? "KeyLease password" : "Master password",
+                    KLSecureField(
+                        label: importing
+                            ? "KeyLease password" : "Master password",
                         text: $password)
-                        .frame(maxWidth: 320)
-                    SecureField("Confirm password", text: $confirm)
-                        .frame(maxWidth: 320)
+                        .frame(width: 320)
+                    KLSecureField(
+                        label: "Confirm password", text: $confirm)
+                        .frame(width: 320)
                     if !confirm.isEmpty && !passwordsMatch {
                         Text("Passwords do not match")
                             .foregroundStyle(KL.Colors.danger)
