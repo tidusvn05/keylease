@@ -24,22 +24,49 @@ enum AppSection: String, CaseIterable, Identifiable {
     }
 }
 
+/// Unified sidebar selection — one `List(selection:)` drives both the
+/// section rail and the vault group tree.
+private enum SidebarItem: Hashable {
+    case section(AppSection)
+    case allItems
+    case favorites
+    case group(String)
+}
+
 struct ContentView: View {
     let app: AppController
     @State private var section: AppSection = .vault
 
     var body: some View {
-        NavigationSplitView {
-            SidebarView(app: app, section: $section)
-                .navigationSplitViewColumnWidth(min: 170, ideal: 210)
-        } content: {
-            content
-                .navigationSplitViewColumnWidth(min: 260, ideal: 320)
-        } detail: {
-            detail
+        Group {
+            if section == .vault {
+                // Vault keeps the classic three-pane mail layout.
+                NavigationSplitView {
+                    sidebar
+                } content: {
+                    VaultListView(app: app)
+                        .navigationSplitViewColumnWidth(
+                            min: 260, ideal: 306, max: 400)
+                } detail: {
+                    vaultDetail
+                }
+            } else {
+                // Manage sections want the full window width — the old
+                // middle column was only ever a placeholder for them.
+                NavigationSplitView {
+                    sidebar
+                } detail: {
+                    sectionContent
+                }
+            }
         }
         .onChange(of: section) { loadSection() }
         .task { loadSection() }
+    }
+
+    private var sidebar: some View {
+        SidebarView(app: app, section: $section)
+            .navigationSplitViewColumnWidth(min: 180, ideal: 214, max: 280)
     }
 
     /// Section switches trigger the controller loads, like the Dart
@@ -59,10 +86,10 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder private var content: some View {
+    @ViewBuilder private var sectionContent: some View {
         switch section {
         case .vault:
-            VaultListView(app: app)
+            EmptyView()
         case .connections:
             ConnectionsView(app: app)
         case .approvals:
@@ -74,53 +101,29 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder private var detail: some View {
-        switch section {
-        case .vault:
-            switch app.vault.workspaceMode {
-            case .create, .edit:
-                EntryEditorView(app: app)
-            case .passwordGenerator:
-                PasswordGeneratorView(app: app)
-            case .detail:
-                if app.vault.selectedEntry != nil {
-                    EntryDetailView(app: app)
-                } else {
-                    ContentUnavailableView(
-                        "Select an item",
-                        systemImage: "doc.text.magnifyingglass",
-                        description: Text(
-                            "Choose an item on the left to see its details."))
-                }
+    @ViewBuilder private var vaultDetail: some View {
+        switch app.vault.workspaceMode {
+        case .create, .edit:
+            EntryEditorView(app: app)
+        case .passwordGenerator:
+            PasswordGeneratorView(app: app)
+        case .detail:
+            if app.vault.selectedEntry != nil {
+                EntryDetailView(app: app)
+            } else {
+                ContentUnavailableView(
+                    "Select an item",
+                    systemImage: "doc.text.magnifyingglass",
+                    description: Text(
+                        "Choose an item on the left to see its details."))
             }
-        default:
-            // The manage sections render their own content; the detail
-            // column mirrors the current section header.
-            ContentUnavailableView(
-                section.rawValue,
-                systemImage: section.icon,
-                description: Text(sectionDetailHint))
-        }
-    }
-
-    private var sectionDetailHint: String {
-        switch section {
-        case .connections:
-            "Connections are managed in the list on the left."
-        case .approvals:
-            "Decide a request from the list on the left."
-        case .activity:
-            "Recent access decisions appear in the list on the left."
-        case .migrations:
-            "Review pending migrations and history on the left."
-        case .vault:
-            ""
         }
     }
 }
 
 /// Sidebar: section rail plus the vault group tree (All items / Favorites /
-/// nested groups with create-rename-delete-reorder).
+/// nested groups with create-rename-delete-reorder). Rows ride on the
+/// native sidebar selection — no hand-drawn highlight.
 private struct SidebarView: View {
     let app: AppController
     @Binding var section: AppSection
@@ -130,24 +133,41 @@ private struct SidebarView: View {
     @State private var renameText = ""
     @State private var groupError: UserMessage?
 
+    /// Maps between the flat `SidebarItem` selection and the two pieces
+    /// of state it controls (top-level section + vault group filter).
+    private var selection: Binding<SidebarItem?> {
+        Binding(
+            get: {
+                guard section == .vault else { return .section(section) }
+                if app.vault.favoritesOnly { return .favorites }
+                if let id = app.vault.selectedGroupId { return .group(id) }
+                return .allItems
+            },
+            set: { newValue in
+                switch newValue {
+                case .section(let item):
+                    section = item
+                case .allItems:
+                    section = .vault
+                    app.vault.selectGroup(nil)
+                case .favorites:
+                    section = .vault
+                    app.vault.selectFavorites()
+                case .group(let id):
+                    section = .vault
+                    app.vault.selectGroup(id)
+                case nil:
+                    break
+                }
+            })
+    }
+
     var body: some View {
-        List {
+        List(selection: selection) {
             Section {
                 ForEach(AppSection.allCases) { item in
-                    Button {
-                        section = item
-                    } label: {
-                        Label(item.rawValue, systemImage: item.icon)
-                    }
-                    .buttonStyle(.plain)
-                    .font(section == item ? .body.weight(.semibold) : .body)
-                    .foregroundStyle(
-                        section == item ? Color.accentColor : .primary)
-                    .listRowBackground(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(section == item
-                                ? Color.accentColor.opacity(0.15)
-                                : Color.clear))
+                    Label(item.rawValue, systemImage: item.icon)
+                        .tag(SidebarItem.section(item))
                 }
             }
 
@@ -155,6 +175,7 @@ private struct SidebarView: View {
                 vaultGroups
             }
         }
+        .listStyle(.sidebar)
         .alert("New group", isPresented: $newGroupAlert) {
             TextField("Group name", text: $newGroupName)
             Button("Create") {
@@ -195,19 +216,10 @@ private struct SidebarView: View {
 
     @ViewBuilder private var vaultGroups: some View {
         Section("Items") {
-            groupRow(
-                id: "__all", label: "All items", icon: "tray.full",
-                selected: app.vault.selectedGroupId == nil
-                    && !app.vault.favoritesOnly
-            ) {
-                app.vault.selectGroup(nil)
-            }
-            groupRow(
-                id: "__favorites", label: "Favorites", icon: "star",
-                selected: app.vault.favoritesOnly
-            ) {
-                app.vault.selectFavorites()
-            }
+            Label("All items", systemImage: "tray.full")
+                .tag(SidebarItem.allItems)
+            Label("Favorites", systemImage: "star")
+                .tag(SidebarItem.favorites)
         }
 
         Section {
@@ -226,14 +238,13 @@ private struct SidebarView: View {
             HStack {
                 Text("Groups")
                 Spacer()
-                Button {
+                KLIconButton(
+                    label: "New group inside the selected group",
+                    icon: "plus")
+                {
                     newGroupName = ""
                     newGroupAlert = true
-                } label: {
-                    Image(systemName: "plus")
                 }
-                .buttonStyle(.borderless)
-                .help("New group inside the selected group")
             }
         }
     }
@@ -244,22 +255,6 @@ private struct SidebarView: View {
 
     private func childrenOf(_ group: VaultGroup) -> [VaultGroup] {
         app.vault.orderedGroups.filter { $0.parentId == group.id }
-    }
-
-    @ViewBuilder
-    private func groupRow(
-        id: String, label: String, icon: String, selected: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Label(label, systemImage: icon)
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(selected ? Color.accentColor : .primary)
-        .font(selected ? .body.weight(.semibold) : .body)
-        .listRowBackground(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(selected ? Color.accentColor.opacity(0.15) : .clear))
     }
 
     private func deleteGroup(_ group: VaultGroup) {
@@ -312,31 +307,16 @@ private struct GroupRow: View {
     let onMove: (VaultGroup, Int) -> Void
 
     var body: some View {
-        Button {
-            app.vault.selectGroup(group.id)
-        } label: {
-            Label(group.name, systemImage: "folder")
-                .padding(.leading, CGFloat(depth) * 14)
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(
-            app.vault.selectedGroupId == group.id ? Color.accentColor
-                : .primary)
-        .font(
-            app.vault.selectedGroupId == group.id
-                ? .body.weight(.semibold) : .body)
-        .listRowBackground(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(
-                    app.vault.selectedGroupId == group.id
-                        ? Color.accentColor.opacity(0.15) : .clear))
-        .contextMenu {
-            Button("Rename") { onRename(group) }
-            Button("Move up") { onMove(group, -1) }
-            Button("Move down") { onMove(group, 1) }
-            Divider()
-            Button("Delete", role: .destructive) { onDelete(group) }
-        }
+        Label(group.name, systemImage: "folder")
+            .padding(.leading, CGFloat(depth) * 14)
+            .tag(SidebarItem.group(group.id))
+            .contextMenu {
+                Button("Rename") { onRename(group) }
+                Button("Move up") { onMove(group, -1) }
+                Button("Move down") { onMove(group, 1) }
+                Divider()
+                Button("Delete", role: .destructive) { onDelete(group) }
+            }
         ForEach(children(group)) { child in
             GroupRow(
                 group: child, depth: depth + 1, app: app,

@@ -4,7 +4,9 @@ import KeyLeaseCore
 
 // MARK: - Shared section scaffolding
 
-/// The header + scroll body each top-level section uses.
+/// The toolbar title + scroll body each top-level section uses. Sections
+/// render in the detail column, so `.navigationTitle` lands in the real
+/// window toolbar instead of a hand-drawn header.
 private struct SectionScaffold<Content: View>: View {
     let title: String
     let subtitle: String
@@ -23,24 +25,20 @@ private struct SectionScaffold<Content: View>: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.headline)
-                    Text(subtitle)
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                actions()
+        ScrollView {
+            VStack(alignment: .leading, spacing: KL.Space.l) {
+                Text(subtitle)
+                    .font(.callout).foregroundStyle(.secondary)
+                content()
             }
-            .padding(12)
-            Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    content()
-                }
-                .padding(20)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(KL.Space.xxl)
+            .frame(maxWidth: 840, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .navigationTitle(title)
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                actions()
             }
         }
     }
@@ -90,17 +88,14 @@ struct ConnectionsView: View {
             title: "Connections",
             subtitle: "Accounts and providers KeyLease may reach")
         {
-            HStack(spacing: 8) {
+            HStack(spacing: KL.Space.m) {
                 Button("Add token connection") { addToken = true }
-                    .controlSize(.small)
                 Button("Connect Google") { connectGoogle = true }
-                    .controlSize(.small)
                 Button {
                     Task { await controller.list.load() }
                 } label: {
-                    Image(systemName: "arrow.clockwise")
+                    Label("Refresh", systemImage: "arrow.clockwise")
                 }
-                .controlSize(.small)
                 .help("Refresh")
             }
         } content: {
@@ -137,9 +132,9 @@ private struct ConnectionCard: View {
 
     private var healthColor: Color {
         switch connection.health {
-        case .connected: .green
-        case .degraded: .orange
-        case .expired, .revoked, .disconnected: .red
+        case .connected: KL.Colors.success
+        case .degraded: KL.Colors.warning
+        case .expired, .revoked, .disconnected: KL.Colors.danger
         }
     }
 
@@ -172,9 +167,10 @@ private struct ConnectionCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        KLCard {
+            VStack(alignment: .leading, spacing: KL.Space.m) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: KL.Space.xs) {
                     Text(connection.provider).font(.callout.weight(.semibold))
                     HStack(spacing: 6) {
                         Circle().fill(healthColor).frame(width: 8)
@@ -259,7 +255,7 @@ private struct ConnectionCard: View {
                 HStack {
                     TextField("Canonical resource ID", text: $resource)
                         .textFieldStyle(.roundedBorder)
-                    Button("Enroll") {
+                    KLButton(title: "Enroll", role: .primary) {
                         let value = resource.trimmingCharacters(
                             in: .whitespaces)
                         guard !value.isEmpty else { return }
@@ -272,21 +268,19 @@ private struct ConnectionCard: View {
                         }
                     }
                     .controlSize(.small)
-                    Button("Cancel") {
+                    KLButton(title: "Cancel", role: .ghost) {
                         enrolling = false
                         resource = ""
                     }
                     .controlSize(.small)
                 }
             } else {
-                Button("Enroll a resource") { enrolling = true }
+                KLButton(title: "Enroll a resource",
+                         icon: "plus") { enrolling = true }
                     .controlSize(.small)
             }
+            }
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.primary.opacity(0.12)))
     }
 
     private func run(_ operation: String) {
@@ -330,21 +324,22 @@ private struct AddTokenSheet: View {
                 TextEditor(text: $resources)
                     .frame(minHeight: 48, maxHeight: 100)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color.primary.opacity(0.15)))
+                        RoundedRectangle(cornerRadius: KL.Radius.small)
+                            .stroke(KL.Colors.cardStroke))
             }
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
-                Button(busy ? "Adding…" : "Add") {
+                KLButton(title: "Cancel", role: .ghost) { dismiss() }
+                KLButton(
+                    title: busy ? "Adding…" : "Add", role: .primary)
+                {
                     Task { await add() }
                 }
-                .buttonStyle(.borderedProminent)
                 .disabled(credential.isEmpty || busy)
                 .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(20)
+        .padding(KL.Space.xxxl)
         .frame(width: 420)
     }
 
@@ -398,17 +393,19 @@ private struct GoogleConnectSheet: View {
             }
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
-                Button(busy ? "Opening…" : "Open Google") {
+                KLButton(title: "Cancel", role: .ghost) { dismiss() }
+                KLButton(
+                    title: busy ? "Opening…" : "Open Google",
+                    role: .primary)
+                {
                     Task { await begin() }
                 }
-                .buttonStyle(.borderedProminent)
                 .disabled(clientId.trimmingCharacters(in: .whitespaces)
                     .isEmpty || busy)
                 .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(20)
+        .padding(KL.Space.xxxl)
         .frame(width: 420)
     }
 
@@ -454,9 +451,8 @@ struct ApprovalsView: View {
             Button {
                 Task { await controller.list.load() }
             } label: {
-                Image(systemName: "arrow.clockwise")
+                Label("Refresh", systemImage: "arrow.clockwise")
             }
-            .controlSize(.small)
             .help("Refresh")
         } content: {
             if let failure {
@@ -515,7 +511,8 @@ private struct ApprovalCard: View {
     var body: some View {
         let summary = approval.semanticSummary
         let expired = (expiresAt ?? .distantPast) <= Date()
-        return VStack(alignment: .leading, spacing: 4) {
+        return KLCard {
+            VStack(alignment: .leading, spacing: KL.Space.xs) {
             HStack {
                 Text(
                     summary?.operation ?? approval.action
@@ -529,8 +526,8 @@ private struct ApprovalCard: View {
                         .background(
                             Capsule().fill(
                                 risk == .r3 || risk == .r4
-                                    ? Color.red.opacity(0.15)
-                                    : Color.primary.opacity(0.08)))
+                                    ? KL.Colors.danger.opacity(0.14)
+                                    : KL.Colors.warning.opacity(0.14)))
                 }
                 if !approval.isPending || expired {
                     Text(expired ? "Expired" : approval.state.rawValue)
@@ -563,7 +560,7 @@ private struct ApprovalCard: View {
                 .textSelection(.enabled)
             HStack {
                 Spacer()
-                Button("Deny") {
+                KLButton(title: "Deny", role: .destructive) {
                     busy = true
                     Task {
                         await onDecide(false)
@@ -571,22 +568,18 @@ private struct ApprovalCard: View {
                     }
                 }
                 .disabled(busy || !approval.decidableNow)
-                Button("Approve") {
+                KLButton(title: "Approve", role: .primary) {
                     busy = true
                     Task {
                         await onDecide(true)
                         busy = false
                     }
                 }
-                .buttonStyle(.borderedProminent)
                 .disabled(busy || !approval.decidableNow)
             }
-            .padding(.top, 4)
+            .padding(.top, KL.Space.xs)
+            }
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.primary.opacity(0.12)))
     }
 
     private func line(_ label: String, _ value: String) -> some View {
@@ -610,7 +603,7 @@ struct ActivityView: View {
             title: "Activity",
             subtitle: "What the daemon allowed, denied, or changed")
         {
-            HStack(spacing: 8) {
+            HStack(spacing: KL.Space.m) {
                 Picker(
                     "",
                     selection: Binding(
@@ -626,9 +619,8 @@ struct ActivityView: View {
                 Button {
                     Task { await controller.list.load() }
                 } label: {
-                    Image(systemName: "arrow.clockwise")
+                    Label("Refresh", systemImage: "arrow.clockwise")
                 }
-                .controlSize(.small)
                 .help("Refresh")
             }
         } content: {
@@ -649,7 +641,8 @@ struct ActivityView: View {
             Image(
                 systemName: event.denied
                     ? "exclamationmark.shield" : "checkmark.circle")
-                .foregroundStyle(event.denied ? .orange : .green)
+                .foregroundStyle(
+                    event.denied ? KL.Colors.warning : KL.Colors.success)
             VStack(alignment: .leading, spacing: 2) {
                 Text(event.action).font(.callout)
                 Text(
@@ -663,7 +656,8 @@ struct ActivityView: View {
             Spacer()
             Text(event.denied ? "Denied" : "Allowed")
                 .font(.caption)
-                .foregroundStyle(event.denied ? .orange : .secondary)
+                .foregroundStyle(
+                    event.denied ? KL.Colors.warning : .secondary)
         }
         .padding(.vertical, 4)
     }
@@ -685,9 +679,8 @@ struct MigrationsView: View {
             Button {
                 Task { await vault.loadMigrations() }
             } label: {
-                Image(systemName: "arrow.clockwise")
+                Label("Refresh", systemImage: "arrow.clockwise")
             }
-            .controlSize(.small)
             .help("Refresh")
         } content: {
             if let failure {
@@ -738,7 +731,8 @@ struct MigrationsView: View {
     }
 
     private func migrationCard(_ preview: MigrationPreview) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        KLCard {
+            VStack(alignment: .leading, spacing: KL.Space.s) {
             HStack {
                 Text(preview.title).font(.callout.weight(.semibold))
                 Spacer()
@@ -757,16 +751,12 @@ struct MigrationsView: View {
             }
             HStack {
                 Spacer()
-                Button("Apply migration") {
+                KLButton(title: "Apply migration", role: .primary) {
                     Task { await apply(preview) }
                 }
-                .buttonStyle(.borderedProminent)
+            }
             }
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.primary.opacity(0.12)))
     }
 
     private func apply(_ preview: MigrationPreview) async {

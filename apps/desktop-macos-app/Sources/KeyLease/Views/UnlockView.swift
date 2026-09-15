@@ -7,32 +7,30 @@ struct UnlockView: View {
     @State private var busy = false
 
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "lock.fill")
-                .font(.system(size: 40))
-                .foregroundStyle(.secondary)
-            Text("Unlock KeyLease").font(.title2).bold()
-            if let message = app.unlockMessage {
-                Text(message.title)
-                    .foregroundStyle(.red)
-                    .font(.callout)
-            }
-            SecureField("Master password", text: $password)
-                .frame(maxWidth: 320)
-                .onSubmit { Task { await submit() } }
-            Button {
-                Task { await submit() }
-            } label: {
-                if busy {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text("Unlock")
+        KLStateScreen(icon: "lock.fill", title: "Unlock KeyLease") {
+            VStack(spacing: KL.Space.xl) {
+                if let message = app.unlockMessage {
+                    Text(message.title)
+                        .foregroundStyle(KL.Colors.danger)
+                        .font(.callout)
+                }
+                SecureField("Master password", text: $password)
+                    .frame(maxWidth: 320)
+                    .onSubmit { Task { await submit() } }
+                HStack(spacing: KL.Space.m) {
+                    KLButton(
+                        title: "Unlock", role: .primary, prominent: true)
+                    {
+                        Task { await submit() }
+                    }
+                    .disabled(password.isEmpty || busy)
+                    .keyboardShortcut(.defaultAction)
+                    if busy {
+                        ProgressView().controlSize(.small)
+                    }
                 }
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(password.isEmpty || busy)
         }
-        .padding(40)
     }
 
     private func submit() async {

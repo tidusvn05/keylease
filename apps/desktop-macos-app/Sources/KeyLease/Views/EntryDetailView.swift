@@ -45,8 +45,40 @@ struct EntryDetailView: View {
 
                     metadataSection(item)
                 }
-                .padding(24)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(KL.Space.xxxxl)
+                .frame(maxWidth: 840, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .navigationTitle(item.title)
+            .toolbar {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    IconAction(
+                        label: item.favorite
+                            ? "Remove from favorites" : "Add to favorites",
+                        icon: item.favorite ? "star.slash" : "star")
+                    {
+                        Task { await app.vault.toggleFavorite(item) }
+                    }
+                    IconAction(
+                        label: "Copy prompt for agent",
+                        icon: "doc.on.clipboard")
+                    {
+                        _ = app.copyAgentPrompt(item)
+                    }
+                    IconAction(
+                        label: "Copy CLI command", icon: "terminal")
+                    {
+                        _ = app.copyCliCommand(item)
+                    }
+                    IconAction(label: "Edit", icon: "square.and.pencil") {
+                        app.vault.beginEdit(item)
+                    }
+                    IconAction(
+                        label: "Delete", icon: "trash", danger: true)
+                    {
+                        deleting = true
+                    }
+                }
             }
             .id(item.id)
             .sheet(isPresented: $showHistory) {
@@ -83,34 +115,6 @@ struct EntryDetailView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                HStack(spacing: 4) {
-                    IconAction(
-                        label: item.favorite
-                            ? "Remove from favorites" : "Add to favorites",
-                        icon: item.favorite ? "star.slash" : "star")
-                    {
-                        Task { await app.vault.toggleFavorite(item) }
-                    }
-                    IconAction(
-                        label: "Copy prompt for agent",
-                        icon: "doc.on.clipboard")
-                    {
-                        _ = app.copyAgentPrompt(item)
-                    }
-                    IconAction(
-                        label: "Copy CLI command", icon: "terminal")
-                    {
-                        _ = app.copyCliCommand(item)
-                    }
-                    IconAction(label: "Edit", icon: "square.and.pencil") {
-                        app.vault.beginEdit(item)
-                    }
-                    IconAction(
-                        label: "Delete", icon: "trash", danger: true)
-                    {
-                        deleting = true
-                    }
-                }
             }
             Spacer()
         }
@@ -368,9 +372,13 @@ private struct NotesSection: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else if let error {
                     HStack {
-                        Text(error).foregroundStyle(.red).font(.callout)
-                        Button("Retry") { Task { await load() } }
-                            .controlSize(.small)
+                        Text(error)
+                            .foregroundStyle(KL.Colors.danger)
+                            .font(.callout)
+                        KLButton(title: "Retry", role: .ghost) {
+                            Task { await load() }
+                        }
+                        .controlSize(.small)
                     }
                 } else {
                     Text(notes ?? "")
@@ -378,10 +386,13 @@ private struct NotesSection: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .padding(12)
+            .padding(KL.Space.xl)
             .background(
-                RoundedRectangle(cornerRadius: 9)
-                    .stroke(Color.primary.opacity(0.12)))
+                RoundedRectangle(cornerRadius: KL.Radius.medium)
+                    .fill(KL.Colors.insetFill)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: KL.Radius.medium)
+                            .stroke(KL.Colors.cardStroke)))
         }
         .task(id: entry.id) { await load() }
     }

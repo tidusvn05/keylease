@@ -24,7 +24,7 @@ struct EnvironmentTemplateEditor: View {
                     text: $state.project)
                     .textFieldStyle(.roundedBorder)
                 if let error = draft.structuredErrors["environment_project"] {
-                    Text(error).font(.caption).foregroundStyle(.red)
+                    Text(error).font(.caption).foregroundStyle(KL.Colors.danger)
                 }
             }
 
@@ -86,8 +86,8 @@ struct EnvironmentTemplateEditor: View {
                 .font(.body.monospaced())
                 .frame(minHeight: 140, maxHeight: 320)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.primary.opacity(0.15)))
+                    RoundedRectangle(cornerRadius: KL.Radius.small)
+                        .stroke(KL.Colors.cardStroke))
                 .onChange(of: pasteText) {
                     parseResult = parseDotEnv(pasteText)
                 }
@@ -107,14 +107,13 @@ struct EnvironmentTemplateEditor: View {
             }
             HStack {
                 Spacer()
-                Button("Replace all") {
+                KLButton(title: "Replace all", role: .destructive) {
                     applyPaste(replace: true)
                 }
                 .disabled(parseResult?.valid == false)
-                Button("Merge") {
+                KLButton(title: "Merge", role: .primary) {
                     applyPaste(replace: false)
                 }
-                .buttonStyle(.borderedProminent)
                 .disabled(parseResult?.valid == false)
             }
         }
@@ -123,7 +122,7 @@ struct EnvironmentTemplateEditor: View {
     private var variablesPane: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let error = draft.structuredErrors["environment_variables"] {
-                Text(error).font(.caption).foregroundStyle(.red)
+                Text(error).font(.caption).foregroundStyle(KL.Colors.danger)
             }
             ForEach(state.variables, id: \.id) { variable in
                 EnvironmentVariableRow(
@@ -134,8 +133,10 @@ struct EnvironmentTemplateEditor: View {
                     onRemove: { state.removeVariable(variable) },
                     onMove: { offset in state.move(variable, offset: offset) })
             }
-            Button("Add variable") { state.addVariable() }
-                .controlSize(.small)
+            KLButton(title: "Add variable", icon: "plus") {
+                state.addVariable()
+            }
+            .controlSize(.small)
         }
     }
 
@@ -208,10 +209,13 @@ private struct EnvironmentVariableRow: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
-        .padding(8)
+        .padding(KL.Space.m)
         .background(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.primary.opacity(0.1)))
+            RoundedRectangle(cornerRadius: KL.Radius.medium)
+                .fill(KL.Colors.insetFill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: KL.Radius.medium)
+                        .stroke(KL.Colors.cardStroke)))
     }
 }
 
@@ -238,11 +242,13 @@ struct SshTemplateEditor: View {
             HStack {
                 SectionLabel(title: "SSH servers")
                 Spacer()
-                Button("Add server") { state.addEndpoint() }
-                    .controlSize(.small)
+                KLButton(title: "Add server", icon: "plus") {
+                    state.addEndpoint()
+                }
+                .controlSize(.small)
             }
             if let error = draft.structuredErrors["ssh_endpoints"] {
-                Text(error).font(.caption).foregroundStyle(.red)
+                Text(error).font(.caption).foregroundStyle(KL.Colors.danger)
             }
             ForEach(state.endpoints, id: \.id) { endpoint in
                 SshEndpointCard(
@@ -271,12 +277,14 @@ struct SshTemplateEditor: View {
             HStack {
                 SectionLabel(title: "SSH tunnels")
                 Spacer()
-                Button("Add tunnel") { state.addForward() }
-                    .controlSize(.small)
-                    .disabled(state.endpoints.isEmpty)
+                KLButton(title: "Add tunnel", icon: "plus") {
+                    state.addForward()
+                }
+                .controlSize(.small)
+                .disabled(state.endpoints.isEmpty)
             }
             if let error = draft.structuredErrors["ssh_forwards"] {
-                Text(error).font(.caption).foregroundStyle(.red)
+                Text(error).font(.caption).foregroundStyle(KL.Colors.danger)
             }
             ForEach(state.forwards, id: \.id) { forward in
                 SshForwardCard(
@@ -320,7 +328,8 @@ private struct SshEndpointCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        KLCard {
+            VStack(alignment: .leading, spacing: KL.Space.m) {
             HStack {
                 Text(endpoint.name.isEmpty ? "SSH server" : endpoint.name)
                 Spacer()
@@ -361,7 +370,7 @@ private struct SshEndpointCard: View {
                 }
             }
             if let error = errors["connectVia"] {
-                Text(error).font(.caption).foregroundStyle(.red)
+                Text(error).font(.caption).foregroundStyle(KL.Colors.danger)
             }
 
             Picker(
@@ -404,7 +413,7 @@ private struct SshEndpointCard: View {
                 }
                 HStack {
                     Spacer()
-                    Button("Choose file…") {
+                    KLButton(title: "Choose file…", icon: "folder") {
                         if let url = app.host.pickFile(
                             title: "Choose a private key",
                             message: "Select the SSH private key to bind.",
@@ -434,7 +443,7 @@ private struct SshEndpointCard: View {
                 Text("Separate password").tag("separate_password")
             }
             if let error = errors["sudo"] {
-                Text(error).font(.caption).foregroundStyle(.red)
+                Text(error).font(.caption).foregroundStyle(KL.Colors.danger)
             }
             if endpoint.sudoMode == "separate_password" {
                 secretField(
@@ -447,11 +456,8 @@ private struct SshEndpointCard: View {
                 "Host key fingerprint (optional)",
                 text: $endpoint.fingerprint,
                 error: errors["fingerprint"])
+            }
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 9)
-                .stroke(Color.primary.opacity(0.12)))
     }
 
     /// Changing away from `private_key` clears the device binding after
@@ -477,7 +483,7 @@ private struct SshEndpointCard: View {
                 .textFieldStyle(.roundedBorder)
                 .onChange(of: text.wrappedValue) { onChanged() }
             if let error {
-                Text(error).font(.caption).foregroundStyle(.red)
+                Text(error).font(.caption).foregroundStyle(KL.Colors.danger)
             }
         }
     }
@@ -496,7 +502,7 @@ private struct SshEndpointCard: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let error {
-                Text(error).font(.caption).foregroundStyle(.red)
+                Text(error).font(.caption).foregroundStyle(KL.Colors.danger)
             }
         }
     }
@@ -509,7 +515,8 @@ private struct SshForwardCard: View {
     let onRemove: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        KLCard {
+            VStack(alignment: .leading, spacing: KL.Space.m) {
             HStack {
                 Text("SSH tunnel")
                 Spacer()
@@ -559,13 +566,10 @@ private struct SshForwardCard: View {
             {
                 Text("Warning: this bind address may expose the tunnel "
                     + "publicly.")
-                    .font(.caption).foregroundStyle(.red)
+                    .font(.caption).foregroundStyle(KL.Colors.danger)
+            }
             }
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 9)
-                .stroke(Color.primary.opacity(0.12)))
     }
 
     private func portField(_ label: String, text: Binding<String>)

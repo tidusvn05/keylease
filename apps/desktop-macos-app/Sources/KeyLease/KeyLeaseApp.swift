@@ -10,6 +10,7 @@ struct KeyLeaseApp: App {
         WindowGroup {
             RootView(app: app)
                 .frame(minWidth: 900, minHeight: 560)
+                .tint(KL.Colors.accent)
                 .task {
                     app.installLockObservers()
                     await app.bootstrap()
@@ -52,6 +53,7 @@ struct KeyLeaseApp: App {
 
         Settings {
             SettingsView(app: app)
+                .tint(KL.Colors.accent)
         }
     }
 }

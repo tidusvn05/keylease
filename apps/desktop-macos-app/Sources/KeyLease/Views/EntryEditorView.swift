@@ -58,35 +58,34 @@ private struct EditorBody: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if let failure {
-                        MessageBanner(
-                            message: failure,
-                            actionLabel: failureAction == nil
-                                ? nil : "Fix",
-                            onAction: failureAction,
-                            onDismiss: {
-                                self.failure = nil
-                                failureAction = nil
-                            })
-                    }
-
-                    if draft.isNew, agentDriven, let agentDraft = vault
-                        .agentCreationDraft
-                    {
-                        AgentCreationPane(app: app, draft: agentDraft)
-                    } else {
-                        form
-                    }
+        ScrollView {
+            VStack(alignment: .leading, spacing: KL.Space.xl) {
+                if let failure {
+                    MessageBanner(
+                        message: failure,
+                        actionLabel: failureAction == nil
+                            ? nil : "Fix",
+                        onAction: failureAction,
+                        onDismiss: {
+                            self.failure = nil
+                            failureAction = nil
+                        })
                 }
-                .padding(20)
-                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if draft.isNew, agentDriven, let agentDraft = vault
+                    .agentCreationDraft
+                {
+                    AgentCreationPane(app: app, draft: agentDraft)
+                } else {
+                    form
+                }
             }
+            .padding(KL.Space.xxl)
+            .frame(maxWidth: 840, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .navigationTitle(draft.isNew ? "New item" : "Edit item")
+        .toolbar { editorToolbar }
         .onAppear {
             if draft.isNew, vault.creationMode == .agentDriven,
                 vault.agentCreationDraft == nil
@@ -109,11 +108,8 @@ private struct EditorBody: View {
 
     // MARK: Header
 
-    private var header: some View {
-        HStack {
-            Text(draft.isNew ? "New item" : "Edit item")
-                .font(.headline)
-            Spacer()
+    @ToolbarContentBuilder private var editorToolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .primaryAction) {
             if draft.isNew {
                 Button {
                     Task { await toggleMode() }
@@ -123,20 +119,20 @@ private struct EditorBody: View {
                         systemImage: agentDriven
                             ? "square.and.pencil" : "sparkles")
                 }
-                .controlSize(.small)
             }
-            Button("Cancel") { Task { await cancel() } }
-                .disabled(saving)
+            KLButton(title: "Cancel") {
+                Task { await cancel() }
+            }
+            .disabled(saving)
             if !agentDriven {
-                Button(saving ? "Saving…" : "Save") {
+                KLButton(title: saving ? "Saving…" : "Save",
+                         role: .primary) {
                     Task { await save() }
                 }
-                .buttonStyle(.borderedProminent)
                 .disabled(saving)
                 .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(12)
     }
 
     // MARK: Form
@@ -184,8 +180,8 @@ private struct EditorBody: View {
                         || draft.kind == "core.secure_note" ? 160 : 72,
                     maxHeight: 320)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.primary.opacity(0.15)))
+                    RoundedRectangle(cornerRadius: KL.Radius.small)
+                        .stroke(KL.Colors.cardStroke))
             Text(notesLabel).font(.caption).foregroundStyle(.secondary)
         }
 
@@ -201,19 +197,19 @@ private struct EditorBody: View {
                 .font(.body.monospaced())
                 .frame(minHeight: 48, maxHeight: 140)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.primary.opacity(0.15)))
+                    RoundedRectangle(cornerRadius: KL.Radius.small)
+                        .stroke(KL.Colors.cardStroke))
             if let message = errors["custom_fields"] {
-                Text(message).font(.caption).foregroundStyle(.red)
+                Text(message).font(.caption).foregroundStyle(KL.Colors.danger)
             }
         }
 
         if let message = errors["sections"] {
-            Text(message).font(.caption).foregroundStyle(.red)
+            Text(message).font(.caption).foregroundStyle(KL.Colors.danger)
         }
         ForEach(draft.structuredErrors.keys.sorted(), id: \.self) { key in
             if let message = draft.structuredErrors[key] {
-                Text(message).font(.caption).foregroundStyle(.red)
+                Text(message).font(.caption).foregroundStyle(KL.Colors.danger)
             }
         }
     }
@@ -282,7 +278,7 @@ private struct EditorBody: View {
             }
             .labelsHidden()
             if let message = errors["group"] {
-                Text(message).font(.caption).foregroundStyle(.red)
+                Text(message).font(.caption).foregroundStyle(KL.Colors.danger)
             }
         }
     }
@@ -464,7 +460,7 @@ private struct EditorBody: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let message = errors[key] ?? errors["template_\(key)"] {
-                Text(message).font(.caption).foregroundStyle(.red)
+                Text(message).font(.caption).foregroundStyle(KL.Colors.danger)
             }
         }
     }
@@ -472,11 +468,7 @@ private struct EditorBody: View {
     private func iconButton(
         _ icon: String, help: String, action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-        }
-        .buttonStyle(.borderless)
-        .help(help)
+        KLIconButton(label: help, icon: icon, action: action)
     }
 
     @ViewBuilder

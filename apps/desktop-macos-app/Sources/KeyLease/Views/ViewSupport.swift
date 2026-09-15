@@ -30,18 +30,19 @@ func confirmAction(
 
 // MARK: - Shared chrome
 
-/// `SectionLabel` — the small heading above a field group.
+/// `SectionLabel` — the small caps heading above a field group.
 struct SectionLabel: View {
     let title: String
     var body: some View {
-        Text(title)
-            .font(.callout.weight(.semibold))
+        Text(title.uppercased())
+            .font(.caption.weight(.semibold))
+            .tracking(0.6)
             .foregroundStyle(.secondary)
     }
 }
 
 /// `KeyLeaseMark` — the rounded monogram tile on list rows and the detail
-/// header.
+/// header. Tinted brand surface + accent glyph, per the mark tokens.
 struct MonogramMark: View {
     let text: String
     var large = false
@@ -51,26 +52,30 @@ struct MonogramMark: View {
         Text(text)
             .font(.system(
                 size: large ? 15 : 11, weight: .semibold, design: .rounded))
-            .foregroundStyle(.white)
+            .foregroundStyle(KL.Colors.markForeground)
             .frame(width: side, height: side)
             .background(
                 RoundedRectangle(cornerRadius: side * 0.28)
-                    .fill(Color.accentColor.gradient))
+                    .fill(KL.Colors.markSurface)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: side * 0.28)
+                            .stroke(KL.Colors.cardStroke)))
     }
 }
 
 /// `MessageBanner` — inline error/info strip with retry/dismiss.
 struct MessageBanner: View {
     let message: UserMessage
+    var tone: BannerTone = .error
     var actionLabel: String? = nil
     var onAction: (() -> Void)? = nil
     var onDismiss: (() -> Void)? = nil
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.triangle")
-                .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .top, spacing: KL.Space.l) {
+            Image(systemName: tone.icon)
+                .foregroundStyle(tone.color)
+            VStack(alignment: .leading, spacing: KL.Space.xxs) {
                 Text(message.title).font(.callout.weight(.medium))
                 if let detail = message.detail, !detail.isEmpty {
                     Text(detail)
@@ -81,23 +86,21 @@ struct MessageBanner: View {
             }
             Spacer()
             if let actionLabel, let onAction {
-                Button(actionLabel, action: onAction)
+                KLButton(title: actionLabel, action: onAction)
                     .controlSize(.small)
             }
             if let onDismiss {
-                Button(action: onDismiss) {
-                    Image(systemName: "xmark")
-                }
-                .buttonStyle(.borderless)
+                KLIconButton(label: "Dismiss", icon: "xmark",
+                             action: onDismiss)
             }
         }
-        .padding(10)
+        .padding(KL.Space.l)
         .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.orange.opacity(0.08))
+            RoundedRectangle(cornerRadius: KL.Radius.medium)
+                .fill(KL.Colors.bannerFill(tone))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.orange.opacity(0.35))))
+                    RoundedRectangle(cornerRadius: KL.Radius.medium)
+                        .stroke(KL.Colors.bannerStroke(tone))))
     }
 }
 
@@ -108,22 +111,23 @@ struct GuidanceCard: View {
     let useWhen: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: KL.Space.s) {
             Label(title, systemImage: "info.circle")
                 .font(.callout.weight(.medium))
+                .foregroundStyle(KL.Colors.accentText)
             Text(summary).font(.callout)
             Text(useWhen)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .padding(KL.Space.xl)
         .background(
-            RoundedRectangle(cornerRadius: 9)
-                .fill(Color.primary.opacity(0.04))
+            RoundedRectangle(cornerRadius: KL.Radius.medium)
+                .fill(KL.Colors.insetFill)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 9)
-                        .stroke(Color.primary.opacity(0.12))))
+                    RoundedRectangle(cornerRadius: KL.Radius.medium)
+                        .stroke(KL.Colors.cardStroke)))
     }
 }
 
@@ -208,7 +212,10 @@ struct SecretRow: View {
             if busy {
                 ProgressView().controlSize(.small)
             } else {
-                Button {
+                KLIconButton(
+                    label: revealed == nil ? "Reveal" : "Hide",
+                    icon: revealed == nil ? "eye" : "eye.slash")
+                {
                     if revealed == nil {
                         busy = true
                         Task {
@@ -218,56 +225,36 @@ struct SecretRow: View {
                     } else {
                         onHide()
                     }
-                } label: {
-                    Image(systemName: revealed == nil ? "eye" : "eye.slash")
                 }
-                .buttonStyle(.borderless)
-                .help(revealed == nil ? "Reveal" : "Hide")
-                Button(action: onCopy) {
-                    Image(systemName: "doc.on.doc")
-                }
-                .buttonStyle(.borderless)
-                .help("Copy (clears after 30 s)")
+                KLIconButton(
+                    label: "Copy (clears after 30 s)",
+                    icon: "doc.on.doc",
+                    action: onCopy)
             }
         }
         .padding(.vertical, 6)
     }
 }
 
-/// Wraps rows in the bordered card the Dart `FieldGroup` draws.
+/// Wraps rows in the card the Dart `FieldGroup` draws.
 struct FieldGroup<Content: View>: View {
     @ViewBuilder var content: () -> Content
     var body: some View {
         VStack(spacing: 0) {
             content()
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, KL.Space.xl)
         .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.primary.opacity(0.03))
+            RoundedRectangle(cornerRadius: KL.Radius.card)
+                .fill(KL.Colors.cardFill)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(Color.primary.opacity(0.1))))
+                    RoundedRectangle(cornerRadius: KL.Radius.card)
+                        .stroke(KL.Colors.cardStroke)))
     }
 }
 
-/// A small icon-only button — the Dart `IconAction`.
-struct IconAction: View {
-    let label: String
-    let icon: String
-    var danger = false
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .foregroundStyle(danger ? .red : .primary)
-        }
-        .buttonStyle(.borderless)
-        .help(label)
-        .accessibilityLabel(label)
-    }
-}
+/// A small icon-only button — the Dart `IconAction`, now on KL chrome.
+typealias IconAction = KLIconButton
 
 // MARK: - Time formatting (`friendlyTime` in activity_page.dart)
 

@@ -12,22 +12,21 @@ struct PasswordGeneratorView: View {
     @State private var settings = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
+        ScrollView {
+            PasswordGeneratorForm(app: app, useLabel: "Create Login") {
+                password in
+                app.vault.beginCreate(initialPassword: password)
+            }
+            .padding(KL.Space.xxl)
+            .frame(maxWidth: 640, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .navigationTitle("Password generator")
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
                 IconAction(label: "Back", icon: "chevron.left") {
                     app.vault.closePasswordGenerator()
                 }
-                Text("Password generator").font(.headline)
-                Spacer()
-            }
-            .padding(12)
-            Divider()
-            ScrollView {
-                PasswordGeneratorForm(app: app, useLabel: "Create Login") {
-                    password in
-                    app.vault.beginCreate(initialPassword: password)
-                }
-                .padding(20)
             }
         }
         .sheet(isPresented: $settings) {
@@ -73,7 +72,7 @@ struct PasswordGeneratorForm: View {
                     if copied {
                         Label("Copied", systemImage: "checkmark")
                             .font(.caption)
-                            .foregroundStyle(.green)
+                            .foregroundStyle(KL.Colors.success)
                     }
                 }
             }
@@ -108,12 +107,9 @@ struct PasswordGeneratorForm: View {
                     showSettings = true
                 }
             }
-            Button {
+            KLButton(title: useLabel, icon: "plus", role: .primary) {
                 onUse(password)
-            } label: {
-                Label(useLabel, systemImage: "plus")
             }
-            .buttonStyle(.borderedProminent)
             .disabled(password.isEmpty)
         }
         .sheet(isPresented: $showSettings) {
@@ -226,17 +222,19 @@ struct PasswordSettingsSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
+                KLButton(title: "Cancel", role: .ghost) { dismiss() }
                     .disabled(saving)
-                Button(saving ? "Saving…" : "Save settings") {
+                KLButton(
+                    title: saving ? "Saving…" : "Save settings",
+                    role: .primary)
+                {
                     Task { await save() }
                 }
-                .buttonStyle(.borderedProminent)
                 .disabled(saving)
                 .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(20)
+        .padding(KL.Space.xxxl)
         .frame(width: 420)
         .onAppear { value = app.passwordGeneratorSettings }
     }
@@ -377,8 +375,8 @@ struct AgentCreationPane: View {
                 TextEditor(text: $draft.context)
                     .frame(minHeight: 60, maxHeight: 140)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color.primary.opacity(0.15)))
+                        RoundedRectangle(cornerRadius: KL.Radius.small)
+                            .stroke(KL.Colors.cardStroke))
                     .onChange(of: draft.context) {
                         draft.invalidateHandoff()
                         message = nil
@@ -390,31 +388,24 @@ struct AgentCreationPane: View {
             }
 
             stepTitle(3, "Copy the CLI handoff")
-            VStack(alignment: .leading, spacing: 8) {
-                Text(launchText)
-                    .font(.body.monospaced())
-                    .textSelection(.enabled)
-                if let handoff = draft.handoff, !handoff.expired {
-                    Text("Available until \(handoff.expiresAt)")
-                        .font(.caption).foregroundStyle(.secondary)
+            KLInsetBlock {
+                VStack(alignment: .leading, spacing: KL.Space.m) {
+                    Text(launchText)
+                        .font(.body.monospaced())
+                        .textSelection(.enabled)
+                    if let handoff = draft.handoff, !handoff.expired {
+                        Text("Available until \(handoff.expiresAt)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.primary.opacity(0.04))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.primary.opacity(0.12))))
             HStack {
                 Spacer()
-                Button {
+                KLButton(
+                    title: copying ? "Preparing…" : "Copy agent command",
+                    icon: "doc.on.doc", role: .primary)
+                {
                     Task { await copyAgentInstruction() }
-                } label: {
-                    Label(
-                        copying ? "Preparing…" : "Copy agent command",
-                        systemImage: "doc.on.doc")
                 }
                 .disabled(copying)
             }
@@ -424,12 +415,11 @@ struct AgentCreationPane: View {
                 + "in KeyLease” and returns an item ID. Then refresh here "
                 + "to review and edit the result.")
                 .font(.callout).foregroundStyle(.secondary)
-            Button {
+            KLButton(
+                title: refreshing ? "Refreshing…" : "Refresh & review",
+                icon: "arrow.clockwise")
+            {
                 Task { await refreshAndReview() }
-            } label: {
-                Label(
-                    refreshing ? "Refreshing…" : "Refresh & review",
-                    systemImage: "arrow.clockwise")
             }
             .disabled(!draft.handoffCopied || refreshing)
 
@@ -448,21 +438,22 @@ struct AgentCreationPane: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .buttonStyle(.bordered)
+                    .controlSize(.large)
                 }
             }
         }
     }
 
     private func stepTitle(_ number: Int, _ title: String) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: KL.Space.m) {
             Text("\(number)")
                 .font(.caption.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 24, height: 24)
-                .background(Circle().fill(Color.accentColor))
+                .foregroundStyle(KL.Colors.onAccent)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(KL.Colors.accent))
             SectionLabel(title: title)
         }
-        .padding(.top, 8)
+        .padding(.top, KL.Space.m)
     }
 
     private func groupBreadcrumb(_ group: VaultGroup) -> String {
@@ -570,26 +561,26 @@ private struct RecipeCard: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: KL.Space.xs) {
                 Text(recipe.title).font(.callout.weight(.medium))
                 Text(recipe.description)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(10)
+            .padding(KL.Space.l)
             .background(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: KL.Radius.medium)
                     .fill(
                         selected
-                            ? Color.accentColor.opacity(0.12)
-                            : Color.primary.opacity(0.04))
+                            ? KL.Colors.markSurface
+                            : KL.Colors.insetFill)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 8)
+                        RoundedRectangle(cornerRadius: KL.Radius.medium)
                             .stroke(
                                 selected
-                                    ? Color.accentColor
-                                    : Color.primary.opacity(0.12))))
+                                    ? KL.Colors.accent
+                                    : KL.Colors.cardStroke)))
         }
         .buttonStyle(.plain)
     }

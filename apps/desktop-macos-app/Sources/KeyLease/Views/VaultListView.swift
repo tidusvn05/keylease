@@ -56,6 +56,7 @@ struct VaultListView: View {
                 } label: {
                     Label("Password generator", systemImage: "wand.and.stars")
                 }
+                .labelStyle(.iconOnly)
                 .help("Password generator")
             }
         }
@@ -114,14 +115,14 @@ private struct EntryRow: View {
     let kindLabel: String
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: KL.Space.l) {
             MonogramMark(text: entry.monogram)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: KL.Space.xxs) {
+                HStack(spacing: KL.Space.s) {
                     Text(entry.title).font(.headline).lineLimit(1)
                     if entry.favorite {
                         Image(systemName: "star.fill")
-                            .foregroundStyle(.yellow)
+                            .foregroundStyle(KL.Colors.warning)
                             .font(.caption)
                     }
                     if entry.hasTotp {
@@ -136,6 +137,6 @@ private struct EntryRow: View {
                     .lineLimit(1)
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, KL.Space.xs)
     }
 }

@@ -8,39 +8,36 @@ struct RepairView: View {
     @State private var busy = false
 
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "wrench.and.screwdriver")
-                .font(.system(size: 40))
-                .foregroundStyle(.secondary)
-            Text("Repair this Mac's access").font(.title2).bold()
-            Text(
+        KLStateScreen(
+            icon: "wrench.and.screwdriver",
+            title: "Repair this Mac's access",
+            detail:
                 "Your vault exists but this client is not registered. "
-                    + "Enter the master password to re-register it."
-            )
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: 420)
-            if let message = app.message {
-                Text(message.title)
-                    .foregroundStyle(.red)
-                    .font(.callout)
-            }
-            SecureField("Master password", text: $password)
-                .frame(maxWidth: 320)
-                .onSubmit { Task { await submit() } }
-            Button {
-                Task { await submit() }
-            } label: {
-                if busy {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text("Repair")
+                + "Enter the master password to re-register it."
+        ) {
+            VStack(spacing: KL.Space.xl) {
+                if let message = app.message {
+                    Text(message.title)
+                        .foregroundStyle(KL.Colors.danger)
+                        .font(.callout)
+                }
+                SecureField("Master password", text: $password)
+                    .frame(maxWidth: 320)
+                    .onSubmit { Task { await submit() } }
+                HStack(spacing: KL.Space.m) {
+                    KLButton(
+                        title: "Repair", role: .primary, prominent: true)
+                    {
+                        Task { await submit() }
+                    }
+                    .disabled(password.isEmpty || busy)
+                    .keyboardShortcut(.defaultAction)
+                    if busy {
+                        ProgressView().controlSize(.small)
+                    }
                 }
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(password.isEmpty || busy)
         }
-        .padding(40)
     }
 
     private func submit() async {

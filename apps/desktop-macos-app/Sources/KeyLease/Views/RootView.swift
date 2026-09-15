@@ -65,27 +65,19 @@ struct MessageView: View {
     var retry: (() -> Void)? = nil
 
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "lock.shield")
-                .font(.system(size: 40))
-                .foregroundStyle(.secondary)
-            Text(title).font(.title2).bold()
-            if let detail {
-                Text(detail)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 420)
-            }
-            HStack {
-                if let actionLabel, let action {
-                    Button(actionLabel, action: action)
-                        .buttonStyle(.borderedProminent)
-                }
-                if let retry {
-                    Button("Retry", action: retry)
+        KLStateScreen(icon: "lock.shield", title: title, detail: detail) {
+            if actionLabel != nil || retry != nil {
+                HStack(spacing: KL.Space.m) {
+                    if let actionLabel, let action {
+                        KLButton(
+                            title: actionLabel, role: .primary,
+                            prominent: true, action: action)
+                    }
+                    if let retry {
+                        KLButton(title: "Retry", action: retry)
+                    }
                 }
             }
         }
-        .padding(40)
     }
 }

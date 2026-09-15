@@ -27,100 +27,108 @@ struct OnboardingView: View {
     }
 
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "key.fill")
-                .font(.system(size: 40))
-                .foregroundStyle(.secondary)
-            Text(importing ? "Bring your vault to KeyLease"
-                : "Welcome to KeyLease")
-                .font(.title2).bold()
-            Text(
+        KLStateScreen(
+            icon: "key.fill",
+            title: importing
+                ? "Bring your vault to KeyLease" : "Welcome to KeyLease",
+            detail:
                 importing
                     ? "Your original file stays unchanged. KeyLease "
                         + "creates a managed copy on this Mac."
                     : "Create a new encrypted vault, or use one you "
-                        + "already have.")
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
-
-            if let message = app.message {
-                Text(message.title).foregroundStyle(.red).font(.callout)
-            }
-            if let error {
-                Text(error).foregroundStyle(.red).font(.callout)
-            }
-
-            if !importing {
-                Button("Create a new vault") {
-                    sourcePath = nil
-                    sourceKind = nil
+                        + "already have."
+        ) {
+            VStack(spacing: KL.Space.xl) {
+                if let message = app.message {
+                    Text(message.title)
+                        .foregroundStyle(KL.Colors.danger).font(.callout)
                 }
-                Button("Use an existing vault") { choose() }
-                if let legacy = app.legacyDatabase {
-                    Button(
-                        "Continue with the vault from an earlier KeyLease "
-                            + "setup")
-                    {
-                        Task { await adopt(legacy) }
+                if let error {
+                    Text(error)
+                        .foregroundStyle(KL.Colors.danger).font(.callout)
+                }
+
+                if !importing {
+                    HStack(spacing: KL.Space.m) {
+                        KLButton(
+                            title: "Create a new vault", role: .primary,
+                            prominent: true)
+                        {
+                            sourcePath = nil
+                            sourceKind = nil
+                        }
+                        KLButton(title: "Use an existing vault") {
+                            choose()
+                        }
                     }
-                    .buttonStyle(.link)
-                }
-            } else {
-                Text(sourcePath!)
-                    .lineLimit(2).truncationMode(.middle)
-                    .font(.caption)
-                    .frame(maxWidth: 420)
-                Button("Choose another file") {
-                    sourcePath = nil
-                    sourceKind = nil
-                }
-            }
-
-            if needsSourcePassword {
-                SecureField(
-                    "Existing vault password", text: $sourcePassword)
-                    .frame(maxWidth: 320)
-                Toggle(
-                    "Use a different password in KeyLease",
-                    isOn: $differentPassword)
-            }
-            if needsTargetPassword {
-                SecureField(
-                    importing ? "KeyLease password" : "Master password",
-                    text: $password)
-                    .frame(maxWidth: 320)
-                SecureField("Confirm password", text: $confirm)
-                    .frame(maxWidth: 320)
-                if !confirm.isEmpty && !passwordsMatch {
-                    Text("Passwords do not match")
-                        .foregroundStyle(.red).font(.callout)
-                }
-            }
-            if sourceKind == "onepux" {
-                Toggle(
-                    "I understand this export may contain plaintext "
-                        + "secrets",
-                    isOn: $acknowledgePlaintext)
-            }
-
-            Button {
-                Task { await submit() }
-            } label: {
-                if busy {
-                    ProgressView().controlSize(.small)
+                    if let legacy = app.legacyDatabase {
+                        KLButton(
+                            title: "Continue with the vault from an "
+                                + "earlier KeyLease setup",
+                            role: .ghost)
+                        {
+                            Task { await adopt(legacy) }
+                        }
+                    }
                 } else {
-                    Text(importing ? "Import and continue" : "Create vault")
+                    Text(sourcePath!)
+                        .lineLimit(2).truncationMode(.middle)
+                        .font(.caption)
+                        .frame(maxWidth: 420)
+                    KLButton(title: "Choose another file", role: .ghost) {
+                        sourcePath = nil
+                        sourceKind = nil
+                    }
                 }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(busy)
 
-            Text("KeyLease stores its managed files privately in "
-                + "~/.keylease.")
-                .font(.caption).foregroundStyle(.secondary)
+                if needsSourcePassword {
+                    SecureField(
+                        "Existing vault password", text: $sourcePassword)
+                        .frame(maxWidth: 320)
+                    Toggle(
+                        "Use a different password in KeyLease",
+                        isOn: $differentPassword)
+                }
+                if needsTargetPassword {
+                    SecureField(
+                        importing ? "KeyLease password" : "Master password",
+                        text: $password)
+                        .frame(maxWidth: 320)
+                    SecureField("Confirm password", text: $confirm)
+                        .frame(maxWidth: 320)
+                    if !confirm.isEmpty && !passwordsMatch {
+                        Text("Passwords do not match")
+                            .foregroundStyle(KL.Colors.danger)
+                            .font(.callout)
+                    }
+                }
+                if sourceKind == "onepux" {
+                    Toggle(
+                        "I understand this export may contain plaintext "
+                            + "secrets",
+                        isOn: $acknowledgePlaintext)
+                }
+
+                HStack(spacing: KL.Space.m) {
+                    KLButton(
+                        title: importing
+                            ? "Import and continue" : "Create vault",
+                        role: .primary, prominent: true)
+                    {
+                        Task { await submit() }
+                    }
+                    .disabled(busy)
+                    .keyboardShortcut(.defaultAction)
+                    if busy {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+
+                Text("KeyLease stores its managed files privately in "
+                    + "~/.keylease.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
-        .padding(40)
     }
 
     private func choose() {

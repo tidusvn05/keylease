@@ -43,7 +43,10 @@ private struct GeneralSettingsTab: View {
                         "Vault, backups, and runtime files are kept "
                             + "privately in ~/.keylease.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Button("Open folder") { app.openDataFolder() }
+                    KLButton(title: "Open folder", icon: "folder") {
+                        app.openDataFolder()
+                    }
+                    .controlSize(.small)
                 }
                 LabeledContent("Vault migrations") {
                     Text(
@@ -60,9 +63,12 @@ private struct GeneralSettingsTab: View {
                                 + "are signed in."
                         } ?? "Runs automatically while you are signed in.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Button("Restart") {
+                    KLButton(
+                        title: "Restart", icon: "arrow.clockwise")
+                    {
                         Task { await app.restartService() }
                     }
+                    .controlSize(.small)
                 }
                 LabeledContent("Version") {
                     Text(app.serviceVersion ?? "unknown")
@@ -77,7 +83,11 @@ private struct GeneralSettingsTab: View {
                             + "unchanged.")
                         .font(.caption).foregroundStyle(.secondary)
                     SecureField("Master password", text: $repairPassword)
-                    Button(repairing ? "Repairing…" : "Repair connection") {
+                    KLButton(
+                        title: repairing
+                            ? "Repairing…" : "Repair connection",
+                        role: .primary)
+                    {
                         let password = repairPassword
                         guard !password.isEmpty else { return }
                         repairing = true
@@ -88,6 +98,7 @@ private struct GeneralSettingsTab: View {
                         }
                     }
                     .disabled(repairPassword.isEmpty || repairing)
+                    .controlSize(.small)
                 }
             }
         }
@@ -134,7 +145,7 @@ private struct VaultsSettingsTab: View {
                                 renameText = profile.name
                             }
                             if !profile.active {
-                                Button("Switch") {
+                                KLButton(title: "Switch") {
                                     Task {
                                         await app.switchManagedVault(
                                             profile.id)
@@ -149,12 +160,14 @@ private struct VaultsSettingsTab: View {
                 HStack {
                     Text("Vaults")
                     Spacer()
-                    Button("Import") { importVault() }
-                    Button("New vault") {
+                    KLButton(title: "Import") { importVault() }
+                        .controlSize(.small)
+                    KLButton(title: "New vault", icon: "plus") {
                         newName = ""
                         newPassword = ""
                         creating = true
                     }
+                    .controlSize(.small)
                 }
             }
         }
@@ -291,18 +304,19 @@ private struct ImportVaultSheet: View {
             }
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
-                Button(busy ? "Importing…" : "Import") {
+                KLButton(title: "Cancel", role: .ghost) { dismiss() }
+                KLButton(
+                    title: busy ? "Importing…" : "Import", role: .primary)
+                {
                     Task { await run() }
                 }
-                .buttonStyle(.borderedProminent)
                 .disabled(
                     name.trimmingCharacters(in: .whitespaces).isEmpty
                         || password.isEmpty || busy)
                 .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(20)
+        .padding(KL.Space.xxxl)
         .frame(width: 420)
     }
 
