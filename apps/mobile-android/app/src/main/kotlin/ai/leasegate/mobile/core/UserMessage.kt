@@ -38,6 +38,7 @@ data class UserMessage(
         }
 
         fun from(error: Throwable): UserMessage {
+            android.util.Log.e("KeyLease", "UserMessage.from: $error", error)
             when (error) {
                 is UnsupportedPlatformCapability -> return UserMessage(
                     title = "Not available in this build",

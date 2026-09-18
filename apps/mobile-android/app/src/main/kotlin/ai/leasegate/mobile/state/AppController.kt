@@ -12,9 +12,11 @@ import ai.leasegate.mobile.core.VaultSession
 import ai.leasegate.mobile.core.VaultStatus
 import ai.leasegate.mobile.core.VaultStorage
 import ai.leasegate.mobile.core.EntrySummary
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -215,6 +217,7 @@ class AppController(
         val raw = try {
             client.unauthenticated(mapOf("command" to "status"))
         } catch (caught: Throwable) {
+            if (caught is CancellationException) throw caught
             val code = (caught as? KeyLeaseException)?.code
             enter(
                 if (code == KeyLeaseErrorCode.CLIENT) {
@@ -247,6 +250,7 @@ class AppController(
         try {
             client.authorized(mapOf("command" to "groups_list"))
         } catch (caught: Throwable) {
+            if (caught is CancellationException) throw caught
             val code = (caught as? KeyLeaseException)?.code
             enter(
                 when (code) {
@@ -300,7 +304,7 @@ class AppController(
      * `restore_keylease_backup`, `import_kdbx`), then unlocks with the same
      * password when the request carried one.
      */
-    suspend fun provision(request: JsonMap): Boolean {
+    suspend fun provision(request: JsonMap): Boolean = withContext(NonCancellable) {
         var completed = false
         createFirstItemRequested = request["mode"] == "create"
         enter(AppPhase.PROVISIONING, null)
@@ -317,7 +321,7 @@ class AppController(
                 unlock(password, enableBiometric = request["enable_biometric"] == true)
             }
         }
-        return completed
+        completed
     }
 
     fun consumeCreateFirstItemRequest(): Boolean {
@@ -328,34 +332,35 @@ class AppController(
 
     // --- unlock / lock -----------------------------------------------------
 
-    suspend fun unlock(password: String, enableBiometric: Boolean = false): Boolean {
-        var unlocked = false
-        _state.update { it.copy(unlockMessage = null) }
-        track("app.unlock", onError = { caught ->
-            _state.update { it.copy(unlockMessage = UserMessage.fromUnlock(caught)) }
-        }) {
-            client.unlock(password)
-            unlocked = true
-        }
-        if (unlocked) {
+    suspend fun unlock(password: String, enableBiometric: Boolean = false): Boolean =
+        withContext(NonCancellable) {
+            var unlocked = false
             _state.update { it.copy(unlockMessage = null) }
-            syncVaultProfiles()
-            if (enableBiometric) {
-                val vaultId = _state.value.activeVaultProfile?.vaultId
-                val adapter = biometric
-                if (vaultId != null && adapter != null) {
-                    try {
-                        adapter.enable(vaultId, password)
-                    } catch (caught: Throwable) {
-                        _state.update { it.copy(banner = UserMessage.from(caught)) }
+            track("app.unlock", onError = { caught ->
+                _state.update { it.copy(unlockMessage = UserMessage.fromUnlock(caught)) }
+            }) {
+                client.unlock(password)
+                unlocked = true
+            }
+            if (unlocked) {
+                _state.update { it.copy(unlockMessage = null) }
+                syncVaultProfiles()
+                if (enableBiometric) {
+                    val vaultId = _state.value.activeVaultProfile?.vaultId
+                    val adapter = biometric
+                    if (vaultId != null && adapter != null) {
+                        try {
+                            adapter.enable(vaultId, password)
+                        } catch (caught: Throwable) {
+                            _state.update { it.copy(banner = UserMessage.from(caught)) }
+                        }
                     }
                 }
+                refresh()
+                restartIdleTimer()
             }
-            refresh()
-            restartIdleTimer()
+            unlocked
         }
-        return unlocked
-    }
 
     suspend fun canUnlockWithBiometrics(): Boolean {
         val vaultId = _state.value.activeVaultProfile?.vaultId ?: return false
@@ -371,21 +376,24 @@ class AppController(
             val password = adapter.unlock(vaultId)
             if (password.isNullOrEmpty()) false else unlock(password)
         } catch (caught: Throwable) {
+            if (caught is CancellationException) throw caught
             _state.update { it.copy(unlockMessage = UserMessage.from(caught)) }
             false
         }
     }
 
-    suspend fun lock() = track("app.lock", onError = { caught ->
-        _state.update { it.copy(banner = UserMessage.from(caught)) }
-    }) {
-        clipboard.clearIfUnchanged()
-        try {
-            client.authorized(mapOf("command" to "lock"))
-        } finally {
-            clearSessionData()
+    suspend fun lock() = withContext(NonCancellable) {
+        track("app.lock", onError = { caught ->
+            _state.update { it.copy(banner = UserMessage.from(caught)) }
+        }) {
+            clipboard.clearIfUnchanged()
+            try {
+                client.authorized(mapOf("command" to "lock"))
+            } finally {
+                clearSessionData()
+            }
+            refresh()
         }
-        refresh()
     }
 
     // --- vault profiles ----------------------------------------------------
@@ -401,7 +409,7 @@ class AppController(
         }
     }
 
-    suspend fun createManagedVault(name: String, request: JsonMap) {
+    suspend fun createManagedVault(name: String, request: JsonMap) = withContext(NonCancellable) {
         if (_state.value.isReady) lock()
         clearSessionData()
         storage.createVault(name, storage.mobileProvisionRequest(request))
@@ -410,14 +418,14 @@ class AppController(
         refresh()
     }
 
-    suspend fun renameManagedVault(id: String, name: String) {
+    suspend fun renameManagedVault(id: String, name: String) = withContext(NonCancellable) {
         storage.renameVault(id, name)
         reloadVaultProfiles()
     }
 
-    suspend fun switchManagedVault(id: String) {
+    suspend fun switchManagedVault(id: String) = withContext(NonCancellable) {
         val previous = _state.value.activeVaultProfile
-        if (previous?.id == id) return
+        if (previous?.id == id) return@withContext
         if (_state.value.isReady) lock()
         clearSessionData()
         try {
@@ -508,6 +516,7 @@ class AppController(
         try {
             return operation()
         } catch (caught: Throwable) {
+            if (caught is CancellationException) throw caught
             if (onError == null) throw caught
             onError(caught)
             return null

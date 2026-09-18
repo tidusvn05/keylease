@@ -64,7 +64,12 @@ class VaultSession {
         // out of the JVM string, and Kotlin cannot zeroise a String — this is
         // the same exposure the Dart heap already has.
         val raw = fn(handle, jsonEncode(request)) ?: throw KeyLeaseNativeFailure(operation)
-        jsonDecode(raw)
+        try {
+            jsonDecode(raw)
+        } catch (caught: Throwable) {
+            android.util.Log.e("KeyLease", "jsonDecode failed for $operation (${raw.length}B)", caught)
+            throw caught
+        }
     }
 
     private fun closeLocked() {

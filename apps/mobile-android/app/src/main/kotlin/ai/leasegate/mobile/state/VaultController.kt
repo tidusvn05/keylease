@@ -19,6 +19,7 @@ import ai.leasegate.mobile.core.VaultProjectModel
 import ai.leasegate.mobile.core.asJsonMap
 import ai.leasegate.mobile.core.parseList
 import java.time.LocalDateTime
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -136,6 +137,7 @@ class VaultController(
         try {
             return operation()
         } catch (error: Throwable) {
+            if (error is CancellationException) throw error
             if (onError == null) throw error
             onError(error)
             return null
@@ -325,6 +327,7 @@ class VaultController(
             normalizeSelection()
             _state.value.selectedEntryId?.let { loadEntryView(it) }
         } catch (caught: Throwable) {
+            if (caught is CancellationException) throw caught
             if (sequence <= applied) return
             applied = sequence
             _state.update { it.copy(error = UserMessage.from(caught)) }
@@ -703,6 +706,7 @@ abstract class SectionController<T>(
             val items = fetch()
             _state.update { it.copy(items = items, error = null, loaded = true) }
         } catch (caught: Throwable) {
+            if (caught is CancellationException) throw caught
             _state.update { it.copy(error = UserMessage.from(caught)) }
         } finally {
             _state.update { it.copy(loading = false) }
