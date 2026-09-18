@@ -18,6 +18,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -58,8 +60,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -1037,10 +1042,28 @@ private fun VaultsSettings(app: AppController) {
     if (create) {
         var name by remember { mutableStateOf("") }
         var password by remember { mutableStateOf("") }
+        fun submit() {
+            val vaultName = name.trim()
+            val secret = password
+            password = ""
+            if (vaultName.isEmpty() || secret.isEmpty()) return
+            create = false
+            scope.launch {
+                try {
+                    app.createManagedVault(
+                        vaultName,
+                        mapOf("mode" to "create", "password" to secret),
+                    )
+                } catch (caught: Throwable) {
+                    failure = UserMessage.from(caught)
+                }
+            }
+        }
         AlertDialog(
             onDismissRequest = { create = false },
             title = { Text("New vault") },
             text = {
+                val focusManager = LocalFocusManager.current
                 Column {
                     Text("This vault has its own master password.")
                     Spacer(Modifier.height(10.dp))
@@ -1049,6 +1072,10 @@ private fun VaultsSettings(app: AppController) {
                         onValueChange = { name = it },
                         label = { Text("Vault name") },
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        keyboardActions = KeyboardActions(
+                            onNext = { focusManager.moveFocus(FocusDirection.Down) },
+                        ),
                     )
                     Spacer(Modifier.height(10.dp))
                     OutlinedTextField(
@@ -1057,27 +1084,13 @@ private fun VaultsSettings(app: AppController) {
                         label = { Text("Master password") },
                         visualTransformation = PasswordVisualTransformation(),
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { submit() }),
                     )
                 }
             },
             confirmButton = {
-                TextButton(onClick = {
-                    val vaultName = name.trim()
-                    val secret = password
-                    password = ""
-                    if (vaultName.isEmpty() || secret.isEmpty()) return@TextButton
-                    create = false
-                    scope.launch {
-                        try {
-                            app.createManagedVault(
-                                vaultName,
-                                mapOf("mode" to "create", "password" to secret),
-                            )
-                        } catch (caught: Throwable) {
-                            failure = UserMessage.from(caught)
-                        }
-                    }
-                }) { Text("Create") }
+                TextButton(onClick = ::submit) { Text("Create") }
             },
             dismissButton = {
                 TextButton(onClick = { create = false; password = "" }) { Text("Cancel") }
@@ -1087,6 +1100,21 @@ private fun VaultsSettings(app: AppController) {
 
     rename?.let { profile ->
         var name by remember { mutableStateOf(profile.name) }
+        fun submit() {
+            val value = name.trim()
+            if (value.isEmpty() || value == profile.name) {
+                rename = null
+                return
+            }
+            rename = null
+            scope.launch {
+                try {
+                    app.renameManagedVault(profile.id, value)
+                } catch (caught: Throwable) {
+                    failure = UserMessage.from(caught)
+                }
+            }
+        }
         AlertDialog(
             onDismissRequest = { rename = null },
             title = { Text("Rename vault") },
@@ -1096,24 +1124,12 @@ private fun VaultsSettings(app: AppController) {
                     onValueChange = { name = it },
                     label = { Text("Vault name") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { submit() }),
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    val value = name.trim()
-                    if (value.isEmpty() || value == profile.name) {
-                        rename = null
-                        return@TextButton
-                    }
-                    rename = null
-                    scope.launch {
-                        try {
-                            app.renameManagedVault(profile.id, value)
-                        } catch (caught: Throwable) {
-                            failure = UserMessage.from(caught)
-                        }
-                    }
-                }) { Text("Rename") }
+                TextButton(onClick = ::submit) { Text("Rename") }
             },
             dismissButton = {
                 TextButton(onClick = { rename = null }) { Text("Cancel") }
@@ -1125,10 +1141,42 @@ private fun VaultsSettings(app: AppController) {
         var name by remember { mutableStateOf("") }
         var sourcePassword by remember { mutableStateOf("") }
         var password by remember { mutableStateOf("") }
+        fun submit() {
+            val vaultName = name.trim()
+            val sourceSecret = sourcePassword
+            val secret = password
+            sourcePassword = ""
+            password = ""
+            if (vaultName.isEmpty() || secret.isEmpty()) return
+            importingSource = null
+            val request = buildMap {
+                put(
+                    "mode",
+                    when (kind) {
+                        "keylease_database" -> "adopt_keylease_database"
+                        "keylease_backup" -> "restore_keylease_backup"
+                        "kdbx" -> "import_kdbx"
+                        else -> "import_onepux"
+                    },
+                )
+                put("source_path", path)
+                put("password", secret)
+                if (kind == "kdbx") put("source_password", sourceSecret)
+                if (kind == "onepux") put("acknowledge_plaintext", true)
+            }
+            scope.launch {
+                try {
+                    app.createManagedVault(vaultName, request)
+                } catch (caught: Throwable) {
+                    failure = UserMessage.from(caught)
+                }
+            }
+        }
         AlertDialog(
             onDismissRequest = { importingSource = null },
             title = { Text("Import as a new vault") },
             text = {
+                val focusManager = LocalFocusManager.current
                 Column {
                     Text("The imported vault remains independent from your current vault.")
                     Spacer(Modifier.height(10.dp))
@@ -1137,6 +1185,10 @@ private fun VaultsSettings(app: AppController) {
                         onValueChange = { name = it },
                         label = { Text("Vault name") },
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        keyboardActions = KeyboardActions(
+                            onNext = { focusManager.moveFocus(FocusDirection.Down) },
+                        ),
                     )
                     if (kind == "kdbx") {
                         Spacer(Modifier.height(10.dp))
@@ -1146,6 +1198,10 @@ private fun VaultsSettings(app: AppController) {
                             label = { Text("Source password") },
                             visualTransformation = PasswordVisualTransformation(),
                             singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                            keyboardActions = KeyboardActions(
+                                onNext = { focusManager.moveFocus(FocusDirection.Down) },
+                            ),
                         )
                     }
                     Spacer(Modifier.height(10.dp))
@@ -1160,41 +1216,13 @@ private fun VaultsSettings(app: AppController) {
                         },
                         visualTransformation = PasswordVisualTransformation(),
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { submit() }),
                     )
                 }
             },
             confirmButton = {
-                TextButton(onClick = {
-                    val vaultName = name.trim()
-                    val sourceSecret = sourcePassword
-                    val secret = password
-                    sourcePassword = ""
-                    password = ""
-                    if (vaultName.isEmpty() || secret.isEmpty()) return@TextButton
-                    importingSource = null
-                    val request = buildMap {
-                        put(
-                            "mode",
-                            when (kind) {
-                                "keylease_database" -> "adopt_keylease_database"
-                                "keylease_backup" -> "restore_keylease_backup"
-                                "kdbx" -> "import_kdbx"
-                                else -> "import_onepux"
-                            },
-                        )
-                        put("source_path", path)
-                        put("password", secret)
-                        if (kind == "kdbx") put("source_password", sourceSecret)
-                        if (kind == "onepux") put("acknowledge_plaintext", true)
-                    }
-                    scope.launch {
-                        try {
-                            app.createManagedVault(vaultName, request)
-                        } catch (caught: Throwable) {
-                            failure = UserMessage.from(caught)
-                        }
-                    }
-                }) { Text("Import") }
+                TextButton(onClick = ::submit) { Text("Import") }
             },
             dismissButton = {
                 TextButton(onClick = {

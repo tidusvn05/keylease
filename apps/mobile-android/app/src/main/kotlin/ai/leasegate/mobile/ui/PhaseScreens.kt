@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
@@ -39,8 +41,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -132,6 +137,7 @@ private fun OnboardingScreen(app: AppController) {
     val configuring = importing || creating
     val needsSourcePassword = sourceKind == "kdbx"
     val needsTargetPassword = !needsSourcePassword || differentPassword
+    val focusManager = LocalFocusManager.current
 
     fun choose() {
         if (choosing) return
@@ -270,6 +276,14 @@ private fun OnboardingScreen(app: AppController) {
                     onValueChange = { sourcePassword = it },
                     label = { Text("Existing vault password") },
                     visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        imeAction = if (needsTargetPassword) ImeAction.Next else ImeAction.Done,
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onNext = { focusManager.moveFocus(FocusDirection.Down) },
+                        onDone = { submit() },
+                    ),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(10.dp))
@@ -284,6 +298,11 @@ private fun OnboardingScreen(app: AppController) {
                     onValueChange = { password = it },
                     label = { Text(if (importing) "KeyLease password" else "Master password") },
                     visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                    keyboardActions = KeyboardActions(
+                        onNext = { focusManager.moveFocus(FocusDirection.Down) },
+                    ),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (mobile) {
@@ -298,6 +317,9 @@ private fun OnboardingScreen(app: AppController) {
                     onValueChange = { confirm = it },
                     label = { Text("Confirm password") },
                     visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { submit() }),
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
@@ -421,6 +443,9 @@ private fun UnlockScreen(app: AppController) {
                 },
                 isError = appState.unlockMessage != null,
                 visualTransformation = PasswordVisualTransformation(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { submit() }),
                 enabled = !busy,
                 modifier = Modifier.fillMaxWidth(),
             )
