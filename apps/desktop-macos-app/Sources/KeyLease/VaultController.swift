@@ -178,10 +178,22 @@ final class VaultController {
             destructive: true)
     }
 
+    /// The group a new item lands in: the sidebar selection, else the
+    /// vault's top-level "Root" group (KDBX imports name it), else the
+    /// first top-level group, else whatever sorts first.
+    private var defaultNewItemGroupId: String? {
+        groups.first {
+            $0.parentId == nil
+                && $0.name.caseInsensitiveCompare("Root") == .orderedSame
+        }?.id
+            ?? orderedGroups.first { $0.parentId == nil }?.id
+            ?? orderedGroups.first?.id
+    }
+
     func beginCreate(kind: String = "core.login", initialPassword: String = "") {
         activeDraft?.wipeSecrets()
         let draft = EntryDraft(
-            groupId: selectedGroupId ?? orderedGroups.first?.id,
+            groupId: selectedGroupId ?? defaultNewItemGroupId,
             kind: kind,
             initialPassword: initialPassword)
         activeDraft = draft

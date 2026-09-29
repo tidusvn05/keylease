@@ -70,6 +70,28 @@ struct UserMessage: Sendable, Equatable {
     }
 }
 
+/// Wraps a `KeyLeaseClient` and reports `vault_locked` rejections, so the
+/// app can drop to the lock screen no matter which feature issued the
+/// RPC — an idle daemon timeout otherwise leaves dead vault data on
+/// screen with every action failing.
+struct LockAwareClient: KeyLeaseClient {
+    let base: KeyLeaseClient
+    let onVaultLocked: @MainActor @Sendable () -> Void
+
+    func authorized(_ request: RpcRequest) async throws -> JSONValue {
+        do {
+            return try await base.authorized(request)
+        } catch let error as KeyLeaseError where error.code == .vaultLocked {
+            await onVaultLocked()
+            throw error
+        }
+    }
+
+    func unauthenticated(_ request: RpcRequest) async throws -> JSONValue {
+        try await base.unauthenticated(request)
+    }
+}
+
 /// Drives the app through inspect → service → status → ready, the same phase
 /// machine as the Dart `AppController`.
 @MainActor @Observable
@@ -111,12 +133,27 @@ final class AppController {
     private var tokenPath = ConnectionDefaults.tokenPath
     private let agentId = ConnectionDefaults.agentId
 
+    /// One-shot check armed for the daemon's `idle_expires_at` — sees the
+    /// auto-lock the moment it happens instead of the next failed RPC.
+    private var idleWatchTask: Task<Void, Never>?
+    /// Debounces `handleSessionLocked` — a burst of in-flight RPCs can all
+    /// fail `vault_locked` at once but only one refresh should run.
+    private var sessionLockCheck: Task<Void, Never>?
+
     private var client: KeyLeaseRpc {
         KeyLeaseRpc(
             socketPath: socketPath,
             agentId: agentId,
             tokenPath: tokenPath
         )
+    }
+
+    /// The client handed to feature controllers — `vault_locked` replies
+    /// route through `handleSessionLocked` before reaching the caller.
+    private var monitoredClient: KeyLeaseClient {
+        LockAwareClient(base: client) { [weak self] in
+            self?.handleSessionLocked()
+        }
     }
 
     func bootstrap() async {
@@ -171,6 +208,7 @@ final class AppController {
 
         let next = VaultStatus(raw)
         status = next
+        scheduleIdleWatch(next)
         if next.locked {
             vault.clear()
             connections.list.clear()
@@ -206,10 +244,10 @@ final class AppController {
 
         enter(.ready)
         preferences.load()
-        connections.use(client)
-        approvals.use(client)
-        activity.use(client)
-        await vault.load(using: client)
+        connections.use(monitoredClient)
+        approvals.use(monitoredClient)
+        activity.use(monitoredClient)
+        await vault.load(using: monitoredClient)
         // The sidebar badge needs pending approvals without a visit to
         // the section — load once here, the section itself polls.
         Task { await approvals.list.load() }
@@ -529,7 +567,97 @@ final class AppController {
     }
 
     private func enter(_ phase: AppPhase, _ message: UserMessage? = nil) {
+        if phase != .ready { idleWatchTask?.cancel() }
         self.phase = phase
         self.message = message
+    }
+
+    // MARK: - Idle auto-lock
+
+    /// True while an edit/create form holds an unsaved draft — locking
+    /// out from under it would discard the draft; the editor recovers
+    /// through its own unlock sheet instead.
+    private var draftIsOpen: Bool {
+        vault.workspaceMode == .edit || vault.workspaceMode == .create
+    }
+
+    /// An authorized RPC was rejected `vault_locked` (idle timeout, an
+    /// external `lock`, a restarted daemon). An open editor is left
+    /// alone; anywhere else the app refreshes into the lock screen.
+    func handleSessionLocked() {
+        guard phase == .ready, sessionLockCheck == nil, !draftIsOpen
+        else { return }
+        sessionLockCheck = Task { [weak self] in
+            await self?.refresh()
+            self?.sessionLockCheck = nil
+        }
+    }
+
+    /// Arms a one-shot check for the moment the daemon's idle timeout
+    /// should expire — `status` reports `idle_expires_at`, so no polling
+    /// is needed. Activity re-arms the watch through `checkIdleLock`.
+    private func scheduleIdleWatch(_ status: VaultStatus) {
+        idleWatchTask?.cancel()
+        idleWatchTask = nil
+        guard !status.locked,
+            let raw = status.idleExpiresAt,
+            let expiry = Self.idleExpiryFormatter.date(from: raw)
+                ?? ISO8601DateFormatter().date(from: raw)
+        else { return }
+        idleWatchTask = Task { [weak self] in
+            let delay = expiry.timeIntervalSinceNow
+            if delay > 0 {
+                try? await Task.sleep(for: .seconds(delay))
+            }
+            guard !Task.isCancelled else { return }
+            await self?.checkIdleLock()
+        }
+    }
+
+    /// `idle_expires_at` is RFC 3339 — chrono emits fractional seconds.
+    private static let idleExpiryFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [
+            .withInternetDateTime, .withFractionalSeconds,
+        ]
+        return formatter
+    }()
+
+    /// Probes `status` at the reported expiry. Activity since the last
+    /// refresh pushes the real expiry out — then the watch re-arms. A
+    /// genuinely expired session drops to the lock screen unless an
+    /// editor is holding a draft.
+    private func checkIdleLock() async {
+        guard phase == .ready else { return }
+        let next: VaultStatus
+        do {
+            next = VaultStatus(try await client.unauthenticated(.status))
+        } catch {
+            // Transient transport failure — keep watching instead of
+            // silently losing the auto-lock check.
+            idleWatchTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled else { return }
+                await self?.checkIdleLock()
+            }
+            return
+        }
+        status = next
+        if next.locked {
+            if draftIsOpen {
+                // The editor keeps its draft and recovers through the
+                // unlock sheet on save — but keep probing so the app
+                // still locks once the user leaves the editor.
+                idleWatchTask = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(30))
+                    guard !Task.isCancelled else { return }
+                    await self?.checkIdleLock()
+                }
+                return
+            }
+            await refresh()
+        } else {
+            scheduleIdleWatch(next)
+        }
     }
 }

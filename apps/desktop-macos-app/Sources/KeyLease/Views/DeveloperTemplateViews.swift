@@ -175,21 +175,12 @@ private struct EnvironmentVariableRow: View {
                 TextField("NAME", text: $variable.key)
                     .textFieldStyle(.roundedBorder)
                     .font(.body.monospaced())
-                    .frame(width: 220)
+                    .frame(maxWidth: 280)
                     .onChange(of: variable.key) { onChanged() }
-                Group {
-                    if variable.secret {
-                        SecureField("value", text: $variable.value)
-                    } else {
-                        TextField("value", text: $variable.value)
-                    }
-                }
-                .textFieldStyle(.roundedBorder)
-                .font(.body.monospaced())
-                .onChange(of: variable.value) { onChanged() }
                 Toggle("Secret", isOn: $variable.secret)
                     .toggleStyle(.checkbox)
                     .onChange(of: variable.secret) { onChanged() }
+                Spacer(minLength: 0)
                 IconAction(label: "Move up", icon: "arrow.up") {
                     onMove(-1)
                 }
@@ -204,6 +195,17 @@ private struct EnvironmentVariableRow: View {
                     onRemove()
                 }
             }
+            Group {
+                if variable.secret {
+                    SecureField("value", text: $variable.value)
+                } else {
+                    TextField("value", text: $variable.value)
+                }
+            }
+            .textFieldStyle(.roundedBorder)
+            .font(.body.monospaced())
+            .frame(maxWidth: .infinity)
+            .onChange(of: variable.value) { onChanged() }
             if variable.hasStoredValue {
                 Text("Stored; blank keeps current.")
                     .font(.caption).foregroundStyle(.secondary)

@@ -25,6 +25,9 @@ private struct EditorBody: View {
 
     /// Per-template-field text state — the Dart `_templateFields` map.
     @State private var edits: [String: TemplateFieldEdit] = [:]
+    /// User-added fields (1Password-style) — hydrated from `entries_view`
+    /// plus rows created in this session.
+    @State private var customFields: [CustomFieldEdit] = []
     @State private var errors: [String: String] = [:]
     @State private var failure: UserMessage?
     @State private var failureAction: (() -> Void)?
@@ -35,6 +38,10 @@ private struct EditorBody: View {
     @State private var generatorSettings = false
     @State private var environment: EnvironmentTemplateState?
     @State private var ssh: SshTemplateState?
+    @State private var unlockPrompt = false
+    @State private var unlockPassword = ""
+    @State private var unlockBusy = false
+    @State private var unlockError: String?
 
     private var vault: VaultController { app.vault }
     private var agentDriven: Bool {
@@ -94,17 +101,76 @@ private struct EditorBody: View {
                 Task { await vault.useAgentCreation() }
             }
             hydrateTemplateFields()
+            hydrateCustomFields()
             ensureTemplateStates()
         }
         // `entries_view` arrives asynchronously for the entry being edited
         // (which may differ from the selected row).
         .onChange(of: vault.entryViews) {
             hydrateTemplateFields()
+            hydrateCustomFields()
             ensureTemplateStates()
         }
         .sheet(isPresented: $generatorSettings) {
             PasswordSettingsSheet(app: app)
         }
+        .sheet(isPresented: $unlockPrompt) {
+            unlockSheet
+        }
+    }
+
+    /// Inline re-unlock shown when a save hits `vault_locked` — the idle
+    /// timeout can expire while a form sits open. Unlocking goes through
+    /// `app.unlock`/`refresh`, which keeps `activeDraft` (only the locked
+    /// branch calls `vault.clear()`), then the save retries itself.
+    private var unlockSheet: some View {
+        VStack(spacing: KL.Space.xl) {
+            Label("Vault locked", systemImage: "lock.fill")
+                .font(.headline)
+            Text("Your session expired while this form was open. Unlock "
+                + "to save without losing your changes.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            if let unlockError {
+                Text(unlockError)
+                    .font(.caption).foregroundStyle(KL.Colors.danger)
+            }
+            KLSecureField(label: "Master password", text: $unlockPassword) {
+                Task { await unlockAndSave() }
+            }
+            HStack {
+                KLButton(title: "Cancel") {
+                    unlockPassword = ""
+                    unlockError = nil
+                    unlockPrompt = false
+                }
+                KLButton(
+                    title: unlockBusy ? "Unlocking…" : "Unlock and save",
+                    role: .primary
+                ) {
+                    Task { await unlockAndSave() }
+                }
+                .disabled(unlockPassword.isEmpty || unlockBusy)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(KL.Space.xxxxl)
+        .frame(width: 380)
+    }
+
+    private func unlockAndSave() async {
+        unlockBusy = true
+        unlockError = nil
+        defer { unlockBusy = false }
+        let unlocked = await app.unlock(unlockPassword)
+        unlockPassword = ""
+        guard unlocked else {
+            unlockError = app.unlockMessage?.title ?? "Unlock failed."
+            return
+        }
+        unlockPrompt = false
+        await save()
     }
 
     // MARK: Header
@@ -162,6 +228,13 @@ private struct EditorBody: View {
         Toggle("Favorite", isOn: $draft.favorite)
 
         dynamicTemplateFields
+
+        // Free-form fields the template does not define — the 1Password/
+        // Strongbox "add field" flow. The raw JSON editor stays as the
+        // fallback for daemons without `templates_list`.
+        if !draft.isAgentContent, !isDeveloperTemplate, template != nil {
+            customFieldsSection
+        }
 
         if isDeveloperTemplate {
             if draft.kind == "core.environment", let environment {
@@ -449,6 +522,90 @@ private struct EditorBody: View {
         }
     }
 
+    // MARK: Custom fields (user-added, 1Password-style)
+
+    /// Stored fields no template definition claims — everything left after
+    /// reserved keys and template fields are taken out.
+    private var customStoredFields: [FieldView] {
+        guard let entryId = draft.entryId,
+            let detail = vault.entryViews[entryId]
+        else { return [] }
+        let reserved: Set<String> = ["username", "password", "otp"]
+        let definitions = template?.fields ?? []
+        return detail.fields.filter { field in
+            !reserved.contains(field.key)
+                && !definitions.contains { definition in
+                    definition.key == field.key
+                        || (!definition.semanticRole.isEmpty
+                            && field.semanticRole == definition.semanticRole)
+                }
+        }
+    }
+
+    /// Hydrate stored custom fields once `entries_view` arrives; rows the
+    /// user removed stay gone (they sit in `removeFieldIds`).
+    private func hydrateCustomFields() {
+        guard !isDeveloperTemplate, !draft.isAgentContent else { return }
+        for field in customStoredFields
+        where !customFields.contains(where: { $0.id == field.id })
+            && !draft.removeFieldIds.contains(field.id)
+        {
+            let text = entryFieldText(field) ?? ""
+            customFields.append(CustomFieldEdit(
+                id: field.id, key: field.key, label: field.label,
+                valueType: field.valueType, protected: field.protected,
+                text: text,
+                hasStoredValue: field.protected && field.hasValue,
+                stored: CustomFieldEdit.Snapshot(
+                    label: field.label, valueType: field.valueType,
+                    protected: field.protected, text: text)))
+        }
+    }
+
+    private func addCustomField(_ valueType: String, protected: Bool) {
+        customFields.append(CustomFieldEdit(
+            valueType: valueType, protected: protected))
+        syncTemplatePayload()
+    }
+
+    private func removeCustomField(_ row: CustomFieldEdit) {
+        customFields.removeAll { $0.id == row.id }
+        if row.stored != nil, !draft.removeFieldIds.contains(row.id) {
+            draft.removeFieldIds.append(row.id)
+        }
+        syncTemplatePayload()
+    }
+
+    private var customFieldsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                SectionLabel(title: "Custom fields")
+                Spacer()
+                Menu {
+                    ForEach(
+                        Array(customFieldTypes.enumerated()), id: \.offset
+                    ) { _, type in
+                        Button(type.label) {
+                            addCustomField(
+                                type.value, protected: type.protected)
+                        }
+                    }
+                } label: {
+                    Label("Add field", systemImage: "plus")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+            ForEach($customFields) { $row in
+                CustomFieldRow(
+                    row: $row,
+                    error: errors["custom_\(row.id)"],
+                    onChanged: { syncTemplatePayload() },
+                    onRemove: { removeCustomField(row) })
+            }
+        }
+    }
+
     @ViewBuilder
     private func labeledField<Content: View>(
         _ label: String, key: String, description: String? = nil,
@@ -551,13 +708,41 @@ private struct EditorBody: View {
     }
 
     /// `_templateFieldPayload` — writes the custom-fields JSON onto the
-    /// draft so the typed edits become `field_updates`.
+    /// draft so the typed edits become `field_updates`. Template-defined
+    /// fields and user-added rows are encoded together.
     private func syncTemplatePayload() {
         guard !isDeveloperTemplate else { return }
-        draft.customFields = templateFieldPayload(
+        // Without a template the raw JSON editor owns `customFields` —
+        // overwriting here would wipe hand-written JSON on save.
+        guard template != nil else { return }
+        var fields = templateFieldItemFields(
             definitions: template?.fields ?? [],
             edits: edits, isNew: draft.isNew, kind: draft.kind)
-            ?? draft.customFields
+        // New rows derive their key from the label; stored rows keep the
+        // key the daemon assigned. Taken keys prevent a new row from
+        // colliding with a template or sibling field.
+        var takenKeys = Set(fields.map(\.key))
+        takenKeys.formUnion((template?.fields ?? []).map(\.key))
+        takenKeys.formUnion(customStoredFields.map(\.key))
+        for index in customFields.indices {
+            if customFields[index].stored == nil {
+                let label = customFields[index].label
+                let key = uniqueCustomFieldKey(
+                    customFieldKeySlug(label.isEmpty ? "field" : label),
+                    taken: takenKeys)
+                customFields[index].key = key
+                takenKeys.insert(key)
+            }
+            let row = customFields[index]
+            if row.isEmptyDraft || row.unchanged { continue }
+            // Blank text on a stored protected field keeps the server
+            // value; validation blocks metadata changes in that state.
+            if row.hasStoredValue, row.protected,
+                row.text.trimmingCharacters(in: .whitespaces).isEmpty
+            { continue }
+            fields.append(row.itemField())
+        }
+        draft.customFields = fields.isEmpty ? "" : encodeItemFields(fields)
     }
 
     private func ensureTemplateStates() {
@@ -590,6 +775,7 @@ private struct EditorBody: View {
         draft.removeFieldIds = []
         draft.structuredErrors = [:]
         edits = [:]
+        customFields = []
         environment = nil
         ssh = nil
         ensureTemplateStates()
@@ -619,6 +805,23 @@ private struct EditorBody: View {
             }
             if let message = validateTemplateField(field, text: text) {
                 validation["template_\(field.key)"] = message
+            }
+        }
+        for row in customFields where !row.isEmptyDraft {
+            let key = "custom_\(row.id)"
+            if row.label.trimmingCharacters(in: .whitespaces).isEmpty {
+                validation[key] = "Give this field a label."
+            } else if row.hasStoredValue, !row.unchanged,
+                row.text.trimmingCharacters(in: .whitespaces).isEmpty
+            {
+                // `field_updates` replaces the whole field — a stored
+                // secret's label/type can only change with a new value.
+                validation[key] = "Enter a new value to update this "
+                    + "protected field."
+            } else if let message = validateTypedField(
+                row.valueType, text: row.text)
+            {
+                validation[key] = message
             }
         }
         guard validation.isEmpty else {
@@ -658,7 +861,12 @@ private struct EditorBody: View {
             vault.closeEditor()
         } catch {
             // The draft is untouched: the user keeps every typed value.
-            failure = UserMessage(error)
+            if (error as? KeyLeaseError)?.code == .vaultLocked {
+                unlockError = nil
+                unlockPrompt = true
+            } else {
+                failure = UserMessage(error)
+            }
         }
     }
 
@@ -725,5 +933,81 @@ private struct EditorBody: View {
                     detail: "The image did not contain an otpauth:// code.")
             }
         }
+    }
+}
+
+/// One user-managed field row — label, type and conceal controls on the
+/// first line, the value full-width on the second so narrow windows keep
+/// the value readable (same fix as the environment-variable rows).
+private struct CustomFieldRow: View {
+    @Binding var row: CustomFieldEdit
+    let error: String?
+    let onChanged: () -> Void
+    let onRemove: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                TextField("Label", text: $row.label)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: row.label) { onChanged() }
+                Picker(
+                    "",
+                    selection: Binding(
+                        get: { row.valueType },
+                        set: { row.valueType = $0; onChanged() })
+                ) {
+                    Text("Text").tag("text")
+                    Text("URL").tag("url")
+                    Text("Email").tag("email")
+                    Text("Phone").tag("phone")
+                    Text("Date").tag("date")
+                    Text("Month / year").tag("month_year")
+                    Text("Number").tag("number")
+                    // Stored fields can carry types the menu does not
+                    // offer (concealed, address, …) — keep them selectable.
+                    let standard = [
+                        "text", "url", "email", "phone", "date",
+                        "month_year", "number",
+                    ]
+                    if !standard.contains(row.valueType) {
+                        Text(row.valueType).tag(row.valueType)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 120)
+                Toggle("Conceal", isOn: $row.protected)
+                    .toggleStyle(.checkbox)
+                    .onChange(of: row.protected) { onChanged() }
+                Spacer(minLength: 0)
+                IconAction(label: "Remove field", icon: "trash", danger: true) {
+                    onRemove()
+                }
+            }
+            Group {
+                if row.protected {
+                    SecureField("value", text: $row.text)
+                } else {
+                    TextField("value", text: $row.text)
+                }
+            }
+            .textFieldStyle(.roundedBorder)
+            .frame(maxWidth: .infinity)
+            .onChange(of: row.text) { onChanged() }
+            if row.hasStoredValue {
+                Text("Stored; blank keeps current.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let error {
+                Text(error).font(.caption).foregroundStyle(KL.Colors.danger)
+            }
+        }
+        .padding(KL.Space.m)
+        .background(
+            RoundedRectangle(cornerRadius: KL.Radius.medium)
+                .fill(KL.Colors.insetFill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: KL.Radius.medium)
+                        .stroke(KL.Colors.cardStroke)))
     }
 }

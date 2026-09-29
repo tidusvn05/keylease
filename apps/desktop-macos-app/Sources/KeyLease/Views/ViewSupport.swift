@@ -193,44 +193,59 @@ struct SecretRow: View {
     var onCopy: () -> Void
     @State private var busy = false
 
+    /// Masked display for an unrevealed secret: last-4 hints like
+    /// `•••• 1234` pass through, but the generic "Stored" hint becomes a
+    /// bullet mask so concealed fields read as secrets at a glance.
+    private var maskedValue: String {
+        if let hint, hint.hasPrefix("••••") { return hint }
+        return "••••••••"
+    }
+
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             Text(label)
                 .foregroundStyle(.secondary)
                 .frame(width: 150, alignment: .leading)
-            if let revealed {
-                Text(revealed)
-                    .font(.body.monospaced())
-                    .textSelection(.enabled)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            } else {
-                Text(hint ?? "••••••••")
-                    .foregroundStyle(.secondary)
-            }
+            // One Text whose content changes — swapping two distinct
+            // Texts (selectable vs not) shifts the shared baseline.
+            Text(revealed ?? maskedValue)
+                .font(.body.monospaced())
+                .foregroundStyle(
+                    revealed == nil
+                        ? AnyShapeStyle(.secondary)
+                        : AnyShapeStyle(.primary))
+                .textSelection(.enabled)
+                .lineLimit(1)
+                .truncationMode(.middle)
             Spacer(minLength: 8)
-            if busy {
-                ProgressView().controlSize(.small)
-            } else {
-                KLIconButton(
-                    label: revealed == nil ? "Reveal" : "Hide",
-                    icon: revealed == nil ? "eye" : "eye.slash")
-                {
-                    if revealed == nil {
-                        busy = true
-                        Task {
-                            await onReveal()
-                            busy = false
-                        }
-                    } else {
-                        onHide()
+            // The button never leaves the layout — a ProgressView
+            // overlay stands in while busy, so the baseline-aligned
+            // row does not recompute and jolt.
+            KLIconButton(
+                label: revealed == nil ? "Reveal" : "Hide",
+                icon: revealed == nil ? "eye" : "eye.slash")
+            {
+                if revealed == nil {
+                    busy = true
+                    Task {
+                        await onReveal()
+                        busy = false
                     }
+                } else {
+                    onHide()
                 }
-                KLIconButton(
-                    label: "Copy (clears after 30 s)",
-                    icon: "doc.on.doc",
-                    action: onCopy)
             }
+            .disabled(busy)
+            .opacity(busy ? 0 : 1)
+            .overlay {
+                if busy {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            KLIconButton(
+                label: "Copy (clears after 30 s)",
+                icon: "doc.on.doc",
+                action: onCopy)
         }
         .padding(.vertical, 6)
     }
