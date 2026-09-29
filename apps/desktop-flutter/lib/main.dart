@@ -1,3 +1,4 @@
+import 'package:flutter/widgets.dart';
 import 'package:leasegate_vault_ui/app/keylease_app.dart';
 import 'package:leasegate_vault_ui/core/platform/local_runtime_adapter.dart';
 import 'package:leasegate_vault_ui/core/platform/security_adapter.dart';
@@ -28,9 +29,12 @@ AppController buildDesktopController() => AppController(
   clientFactory: socketClientFactory,
 );
 
-void main() => runApp(
-  KeyLeaseApp(controller: buildDesktopController(), ownsController: true),
-);
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(
+    KeyLeaseApp(controller: buildDesktopController(), ownsController: true),
+  );
+}
 
 /// Entrypoint used by the dedicated macOS Settings Flutter engine.
 @pragma('vm:entry-point')
