@@ -443,6 +443,43 @@ class _Sidebar extends StatelessWidget {
           children: [
             if (app.isReady)
               FSidebarGroup(
+                label: const Text('Projects'),
+                action: const Icon(FLucideIcons.folderPlus, size: 15),
+                onActionPress: () => _createProject(context),
+                children: [
+                  for (final project in vault.projects)
+                    FSidebarItem(
+                      key: ValueKey('project-${project.slug}'),
+                      icon: const Icon(FLucideIcons.folder),
+                      label: Text(project.name),
+                      selected:
+                          app.section == AppSection.vault &&
+                          vault.selectedProjectId == project.id,
+                      onPress: () async {
+                        if (!await confirmCloseEntryEditor(context, app)) {
+                          return;
+                        }
+                        app.selectSection(AppSection.vault);
+                        vault.selectProject(project.id);
+                      },
+                    ),
+                  FSidebarItem(
+                    key: const ValueKey('project-unassigned'),
+                    icon: const Icon(FLucideIcons.inbox),
+                    label: const Text('Unassigned'),
+                    selected:
+                        app.section == AppSection.vault &&
+                        vault.selectedProjectId == '',
+                    onPress: () async {
+                      if (!await confirmCloseEntryEditor(context, app)) return;
+                      app.selectSection(AppSection.vault);
+                      vault.selectProject('');
+                    },
+                  ),
+                ],
+              ),
+            if (app.isReady)
+              FSidebarGroup(
                 label: const Text('Groups'),
                 action: const Icon(FLucideIcons.folderPlus, size: 15),
                 onActionPress: () => _createGroup(context),
@@ -454,6 +491,7 @@ class _Sidebar extends StatelessWidget {
                     selected:
                         app.section == AppSection.vault &&
                         vault.selectedGroupId == null &&
+                        vault.selectedProjectId == null &&
                         !vault.favoritesOnly,
                     onPress: () async {
                       if (!await confirmCloseEntryEditor(context, app)) return;
@@ -602,6 +640,59 @@ class _Sidebar extends StatelessWidget {
     if (submitted != true || value.isEmpty || !context.mounted) return;
     try {
       await app.vault.createGroup(value);
+    } catch (caught) {
+      if (context.mounted) showFailure(context, caught);
+    }
+  }
+
+  Future<void> _createProject(BuildContext context) async {
+    final name = TextEditingController();
+    final slug = TextEditingController();
+    final submitted = await showKeyLeaseDialog<bool>(
+      context: context,
+      title: 'New project',
+      bodyBuilder: (context) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FTextField(
+            key: const ValueKey('project-name'),
+            label: const Text('Name'),
+            autofocus: true,
+            control: FTextFieldControl.managed(controller: name),
+          ),
+          const SizedBox(height: 12),
+          FTextField(
+            key: const ValueKey('project-slug'),
+            label: const Text('Slug'),
+            description: const Text('Lowercase letters, numbers and hyphens.'),
+            control: FTextFieldControl.managed(controller: slug),
+          ),
+        ],
+      ),
+      actionsBuilder: (context) => [
+        FButton(
+          variant: FButtonVariant.outline,
+          onPress: () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FButton(
+          onPress: () => Navigator.of(context).pop(true),
+          child: const Text('Create'),
+        ),
+      ],
+    );
+    final projectName = name.text.trim();
+    final projectSlug = slug.text.trim();
+    name.dispose();
+    slug.dispose();
+    if (submitted != true ||
+        projectName.isEmpty ||
+        projectSlug.isEmpty ||
+        !context.mounted) {
+      return;
+    }
+    try {
+      await app.vault.createProject(projectSlug, projectName);
     } catch (caught) {
       if (context.mounted) showFailure(context, caught);
     }

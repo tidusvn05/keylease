@@ -285,6 +285,8 @@ pub struct VaultProject {
 pub struct ItemMetadata {
     pub id: ItemId,
     pub group_id: GroupId,
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
     pub kind: String,
     pub title: String,
     pub username: Option<String>,
@@ -337,6 +339,7 @@ impl VaultItem {
         ItemMetadata {
             id: self.id.clone(),
             group_id: self.group_id.clone(),
+            project_id: self.project_id.clone(),
             kind: self.kind.clone(),
             title: self.title.clone(),
             username,

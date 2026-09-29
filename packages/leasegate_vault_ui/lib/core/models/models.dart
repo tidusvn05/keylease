@@ -73,6 +73,7 @@ class EntrySummary {
     required this.kind,
     required this.title,
     required this.revision,
+    this.projectId,
     this.username,
     this.urls = const [],
     this.hasPassword = false,
@@ -88,6 +89,7 @@ class EntrySummary {
     kind: _string<String>(json['kind']) ?? 'core.generic',
     title: _string<String>(json['title']) ?? 'Untitled',
     revision: (json['revision'] as num?)?.toInt() ?? 0,
+    projectId: _string<String>(json['project_id']),
     username: _string<String>(json['username']),
     urls: _strings(json['urls']),
     hasPassword: json['has_password'] == true,
@@ -102,6 +104,7 @@ class EntrySummary {
   final String kind;
   final String title;
   final int revision;
+  final String? projectId;
   final String? username;
   final List<String> urls;
   final bool hasPassword;

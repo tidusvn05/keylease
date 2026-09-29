@@ -203,6 +203,10 @@ pub enum RpcRequest {
     EntriesSearch {
         auth: RpcAuth,
         query: String,
+        #[serde(default)]
+        project_slug: Option<String>,
+        #[serde(default)]
+        unassigned: bool,
     },
     EntriesGet {
         auth: RpcAuth,
@@ -594,10 +598,20 @@ pub async fn handle_rpc(
             )?)
             .map_err(|_| KeyLeaseError::Storage)
         }
-        RpcRequest::EntriesSearch { auth, query } => {
+        RpcRequest::EntriesSearch {
+            auth,
+            query,
+            project_slug,
+            unassigned,
+        } => {
             let actor = actor(service, &auth)?;
-            serde_json::to_value(service.search_entries(&actor, &query)?)
-                .map_err(|_| KeyLeaseError::Storage)
+            serde_json::to_value(service.search_entries_scoped(
+                &actor,
+                &query,
+                project_slug.as_deref(),
+                unassigned,
+            )?)
+            .map_err(|_| KeyLeaseError::Storage)
         }
         RpcRequest::EntriesGet { auth, id } => {
             let actor = actor(service, &auth)?;

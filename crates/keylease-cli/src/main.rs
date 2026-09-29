@@ -472,6 +472,10 @@ enum ContentCommand {
 enum EntryCommand {
     Search {
         query: String,
+        #[arg(long, conflicts_with = "unassigned")]
+        project: Option<String>,
+        #[arg(long)]
+        unassigned: bool,
     },
     Get {
         id: String,
@@ -1832,12 +1836,18 @@ fn read_bounded_text(path: &Path, maximum: usize) -> Result<String> {
 
 async fn entry_command(cli: &Cli, socket: &Path, command: EntryCommand) -> Result<()> {
     match command {
-        EntryCommand::Search { query } => {
+        EntryCommand::Search {
+            query,
+            project,
+            unassigned,
+        } => {
             print_rpc(
                 socket,
                 RpcRequest::EntriesSearch {
                     auth: auth(cli)?,
                     query,
+                    project_slug: project,
+                    unassigned,
                 },
             )
             .await

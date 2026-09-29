@@ -155,6 +155,8 @@ pub struct NewEntryInput {
     pub kind: String,
     pub title: String,
     #[serde(default)]
+    pub project_slug: Option<String>,
+    #[serde(default)]
     pub favorite: bool,
     #[serde(default)]
     pub username: Option<String>,
@@ -189,6 +191,9 @@ impl std::fmt::Debug for NewEntryInput {
 #[serde(deny_unknown_fields)]
 pub struct EntryPatch {
     pub title: Option<String>,
+    pub project_slug: Option<String>,
+    #[serde(default)]
+    pub clear_project: bool,
     pub username: Option<String>,
     pub password: Option<String>,
     pub url: Option<String>,
@@ -1251,6 +1256,10 @@ impl KeyLeaseService {
             validate_sections(&input.sections, &input.custom_fields)?;
             validate_specialized_item(&input.kind, &input.sections, &input.custom_fields)?;
             validate_item_title(&input.title)?;
+            let project_id = resolve_project_id(
+                &self.store.list_projects(vault)?,
+                input.project_slug.as_deref(),
+            )?;
             validate_idempotency_key(idempotency_key)?;
             let request_value = serde_json::to_value(&input).map_err(|_| KeyLeaseError::Storage)?;
             let request_material = operation_material(&serde_json::json!({
@@ -1356,7 +1365,7 @@ impl KeyLeaseService {
                 template_version: item_kind(&input.kind)
                     .map(|definition| definition.template_version)
                     .unwrap_or(1),
-                project_id: None,
+                project_id,
                 agent_access: AgentAccess::None,
                 content_metadata: None,
                 schema_version: 1,
@@ -1441,6 +1450,19 @@ impl KeyLeaseService {
             if let Some(title) = &patch.title {
                 validate_item_title(title)?;
             }
+            if patch.project_slug.is_some() && patch.clear_project {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "project_slug and clear_project are mutually exclusive".into(),
+                });
+            }
+            let requested_project_id = if let Some(slug) = patch.project_slug.as_deref() {
+                Some(resolve_project_id(
+                    &self.store.list_projects(vault)?,
+                    Some(slug),
+                )?)
+            } else {
+                None
+            };
             let arguments = serde_json::to_value(&patch).map_err(|_| KeyLeaseError::Storage)?;
             let request_material = operation_material(&serde_json::json!({
                 "operation":"entry:update",
@@ -1451,6 +1473,8 @@ impl KeyLeaseService {
             }))?;
             let resource = format!("kl://{}/{}", vault.vault_id.0, id.0);
             let has_standard_fields = patch.title.is_some()
+                || patch.project_slug.is_some()
+                || patch.clear_project
                 || patch.username.is_some()
                 || patch.url.is_some()
                 || patch.notes.is_some()
@@ -1588,6 +1612,13 @@ impl KeyLeaseService {
                 item.group_id = v;
                 changed.push("group_id".into())
             }
+            if let Some(project_id) = requested_project_id {
+                item.project_id = project_id;
+                changed.push("project_id".into())
+            } else if patch.clear_project {
+                item.project_id = None;
+                changed.push("project_id".into())
+            }
             if let Some(v) = patch.favorite {
                 item.favorite = v;
                 item.extensions.remove("onepux.favorite_index");
@@ -1674,18 +1705,41 @@ impl KeyLeaseService {
     }
 
     pub fn search_entries(&self, actor: &ActorContext, query: &str) -> Result<Vec<ItemMetadata>> {
+        self.search_entries_scoped(actor, query, None, false)
+    }
+
+    pub fn search_entries_scoped(
+        &self,
+        actor: &ActorContext,
+        query: &str,
+        project_slug: Option<&str>,
+        unassigned: bool,
+    ) -> Result<Vec<ItemMetadata>> {
         self.with_vault(|vault| {
+            if project_slug.is_some() && unassigned {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "project_slug and unassigned are mutually exclusive".into(),
+                });
+            }
+            let project_id = resolve_project_id(
+                &self.store.list_projects(vault)?,
+                project_slug,
+            )?;
             self.authorize_vault(
                 actor,
                 "entry:search",
                 &format!("kl://{}", vault.vault_id.0),
-                serde_json::json!({"query":query}),
+                serde_json::json!({"query":query,"project_slug":project_slug,"unassigned":unassigned}),
             )?;
             let q = query.to_lowercase();
             let result = self
                 .store
                 .list_items(vault)?
                 .into_iter()
+                .filter(|i| {
+                    if unassigned { i.project_id.is_none() }
+                    else { project_id.as_ref().is_none_or(|id| i.project_id.as_ref() == Some(id)) }
+                })
                 .filter(|i| {
                     i.title.to_lowercase().contains(&q)
                         || i.metadata()
@@ -5744,11 +5798,13 @@ fn validate_agent_new_item_handoff(
                 reason: "entry handoffs require a destination group".into(),
             })?;
         let _ = store.get_group(vault, group_id)?;
-        if input.project_slug.is_some() || !input.tags.is_empty() {
+        if !input.tags.is_empty() {
             return Err(KeyLeaseError::InvalidRequest {
-                reason: "project and tags are supported only for Prompt, Runbook, and Note".into(),
+                reason: "tags are supported only for Prompt, Runbook, and Note".into(),
             });
         }
+        let projects = store.list_projects(vault)?;
+        let _ = resolve_project_id(&projects, input.project_slug.as_deref())?;
     }
     Ok(())
 }
@@ -5799,6 +5855,11 @@ fn build_agent_new_item_guide(
             "Build a `NewEntryInput` JSON payload with `group_id` `{}`, kind `{}`, a useful title, and only fields supported by the template.",
             group_id.0, input.kind
         ));
+        if let Some(project_slug) = &input.project_slug {
+            workflow.push(format!(
+                "Set `project_slug` to `{project_slug}` in that JSON payload. Stop if the Project is missing or changes."
+            ));
+        }
         workflow.push(format!(
             "Validate it through stdin with `keylease entries create --input-json - --idempotency-key {handoff_id}-validate --dry-run`."
         ));
@@ -6430,6 +6491,7 @@ mod tests {
                     group_id: group.id,
                     kind: "core.login".into(),
                     title: "VISA test".into(),
+                    project_slug: None,
                     username: None,
                     password: None,
                     url: None,
@@ -6765,6 +6827,7 @@ mod tests {
             group_id: group.id,
             kind: "core.login".into(),
             title: "GitHub".into(),
+            project_slug: None,
             username: Some("bot".into()),
             password: Some("new-secret".into()),
             url: Some("https://github.com".into()),
@@ -6959,6 +7022,110 @@ mod tests {
             !serde_json::to_string(&events)
                 .unwrap()
                 .contains("new-secret")
+        );
+    }
+
+    #[test]
+    fn structured_entries_keep_project_identity_through_search_and_reassignment() {
+        let (_dir, service, actor) = service();
+        let alpha = service
+            .create_project_agent(&actor, "alpha", Some("Alpha"), "project-alpha")
+            .unwrap();
+        let beta = service
+            .create_project_agent(&actor, "beta", Some("Beta"), "project-beta")
+            .unwrap();
+        let group = service.create_group("Servers", None).unwrap();
+        let item = service
+            .create_entry(
+                &actor,
+                NewEntryInput {
+                    group_id: group.id,
+                    kind: "core.server".into(),
+                    title: "Build host".into(),
+                    project_slug: Some("alpha".into()),
+                    favorite: false,
+                    username: None,
+                    password: None,
+                    url: None,
+                    notes: None,
+                    custom_fields: vec![],
+                    sections: vec![],
+                    totp: None,
+                    totp_uri: None,
+                },
+                "create-project-entry",
+                false,
+            )
+            .unwrap();
+        assert_eq!(item.project_id, Some(alpha.id));
+        assert_eq!(
+            service
+                .search_entries_scoped(&actor, "Build", Some("alpha"), false)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            service
+                .search_entries_scoped(&actor, "Build", Some("beta"), false)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            service
+                .search_entries_scoped(&actor, "Build", None, true)
+                .unwrap()
+                .is_empty()
+        );
+
+        let moved = service
+            .update_entry(
+                &actor,
+                &item.id,
+                EntryPatch {
+                    project_slug: Some("beta".into()),
+                    ..Default::default()
+                },
+                item.revision,
+                "move-project-entry",
+                false,
+            )
+            .unwrap();
+        assert_eq!(moved.project_id, Some(beta.id));
+        assert!(
+            service
+                .search_entries_scoped(&actor, "Build", Some("alpha"), false)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            service
+                .search_entries_scoped(&actor, "Build", Some("beta"), false)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let cleared = service
+            .update_entry(
+                &actor,
+                &item.id,
+                EntryPatch {
+                    clear_project: true,
+                    ..Default::default()
+                },
+                moved.revision,
+                "clear-project-entry",
+                false,
+            )
+            .unwrap();
+        assert_eq!(cleared.project_id, None);
+        assert_eq!(
+            service
+                .search_entries_scoped(&actor, "Build", None, true)
+                .unwrap()
+                .len(),
+            1
         );
     }
     #[test]
@@ -7757,6 +7924,7 @@ mod tests {
                     group_id: group.id,
                     kind: "core.api_credential".into(),
                     title: "Deploy token".into(),
+                    project_slug: None,
                     favorite: false,
                     username: None,
                     password: None,

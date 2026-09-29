@@ -712,8 +712,9 @@ class _EntryFormState extends State<_EntryForm> {
       final value = _controllerFor(field).text.trim();
       if (value.isEmpty) continue;
       if (field.valueType == 'month_year') {
-        final match = RegExp(r'^(\d{1,2})\s*[/\-]\s*(\d{4})$')
-            .firstMatch(value);
+        final match = RegExp(
+          r'^(\d{1,2})\s*[/\-]\s*(\d{4})$',
+        ).firstMatch(value);
         final month = match == null ? null : int.tryParse(match.group(1)!);
         if (month == null || month < 1 || month > 12) {
           result['template_${field.key}'] = 'Use MM/YYYY.';
@@ -936,7 +937,8 @@ class _EntryFormState extends State<_EntryForm> {
       final description = switch (field.valueType) {
         'month_year' => 'MM/YYYY',
         'date' => 'YYYY-MM-DD',
-        'totp' => 'Base32 secret or otpauth:// URI. Scan the screen or choose an image.',
+        'totp' =>
+          'Base32 secret or otpauth:// URI. Scan the screen or choose an image.',
         'address' => 'Street and address details',
         _ => null,
       };
@@ -1215,27 +1217,6 @@ class _EntryFormState extends State<_EntryForm> {
             description: const Text('Comma-separated'),
             control: FTextFieldControl.managed(controller: _tags),
           ),
-          const SizedBox(height: 10),
-          SearchableSelect<String>(
-            key: const ValueKey('entry-project'),
-            label: const Text('Project (optional)'),
-            options: [
-              const SearchSelectOption(value: '', label: 'No project'),
-              for (final project in vault.projects)
-                SearchSelectOption(
-                  value: project.slug,
-                  label: project.name,
-                  subtitle: project.slug,
-                  searchTerms: [project.slug],
-                ),
-            ],
-            value: draft.projectSlug ?? '',
-            onChange: (value) => setState(
-              () => draft.projectSlug = value == null || value.isEmpty
-                  ? null
-                  : value,
-            ),
-          ),
           if (draft.isNew) ...[
             const SizedBox(height: 10),
             FSelect<String>(
@@ -1254,6 +1235,27 @@ class _EntryFormState extends State<_EntryForm> {
             ),
           ],
         ],
+        const SizedBox(height: 10),
+        SearchableSelect<String>(
+          key: const ValueKey('entry-project'),
+          label: const Text('Project (optional)'),
+          options: [
+            const SearchSelectOption(value: '', label: 'No project'),
+            for (final project in vault.projects)
+              SearchSelectOption(
+                value: project.slug,
+                label: project.name,
+                subtitle: project.slug,
+                searchTerms: [project.slug],
+              ),
+          ],
+          value: draft.projectSlug ?? '',
+          onChange: (value) => setState(
+            () => draft.projectSlug = value == null || value.isEmpty
+                ? null
+                : value,
+          ),
+        ),
         if (_template == null && !draft.isAgentContent) ...[
           const SizedBox(height: 10),
           FTextField.multiline(

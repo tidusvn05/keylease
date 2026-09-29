@@ -180,8 +180,7 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
         setState(() {
           _message = const UserMessage(
             title: 'The agent has not created an item yet',
-            detail:
-                'If the agent asked for a title or fields, reply in that chat first. Refresh only after it says “Created in KeyLease” and returns an item ID.',
+            detail: 'If the agent asked for a title or fields, reply in that chat first. Refresh only after it says “Created in KeyLease” and returns an item ID.',
           );
         });
       } else {
@@ -219,10 +218,8 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
         const GuidanceCard(
           key: ValueKey('agent-driven-guidance'),
           title: 'Create this item with a local agent',
-          summary:
-              'Choose a starting point, then copy one short command into Codex or another agent with terminal access.',
-          useWhen:
-              'The KeyLease CLI supplies the complete, version-matched workflow. The handoff expires after two hours and never needs your master password.',
+          summary: 'Choose a starting point, then copy one short command into Codex or another agent with terminal access.',
+          useWhen: 'The KeyLease CLI supplies the complete, version-matched workflow. The handoff expires after two hours and never needs your master password.',
         ),
         const SizedBox(height: 20),
         const _StepTitle(number: 1, title: 'Choose a starting point'),
@@ -271,27 +268,27 @@ class _AgentDrivenCreationPaneState extends State<AgentDrivenCreationPane> {
           onChange: _changeTemplate,
         ),
         const SizedBox(height: 10),
+        SearchableSelect<String>(
+          key: const ValueKey('agent-entry-project'),
+          label: const Text('Project (optional)'),
+          clearable: true,
+          options: [
+            for (final project in widget.app.vault.projects)
+              SearchSelectOption(
+                value: project.slug,
+                label: project.name,
+                subtitle: project.slug,
+              ),
+          ],
+          value: draft.projectSlug,
+          onChange: (value) => setState(() {
+            draft
+              ..projectSlug = value
+              ..invalidateHandoff();
+          }),
+        ),
+        const SizedBox(height: 10),
         if (draft.isAgentContent) ...[
-          SearchableSelect<String>(
-            key: const ValueKey('agent-entry-project'),
-            label: const Text('Project (optional)'),
-            clearable: true,
-            options: [
-              for (final project in widget.app.vault.projects)
-                SearchSelectOption(
-                  value: project.slug,
-                  label: project.name,
-                  subtitle: project.slug,
-                ),
-            ],
-            value: draft.projectSlug,
-            onChange: (value) => setState(() {
-              draft
-                ..projectSlug = value
-                ..invalidateHandoff();
-            }),
-          ),
-          const SizedBox(height: 10),
           FTextField(
             key: const ValueKey('agent-entry-tags'),
             label: const Text('Tags (comma separated)'),

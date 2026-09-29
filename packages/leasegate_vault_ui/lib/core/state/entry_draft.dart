@@ -21,7 +21,7 @@ class EntryDraft {
     password = initialPassword;
   }
 
-  EntryDraft.edit(EntrySummary entry)
+  EntryDraft.edit(EntrySummary entry, {String? projectSlug})
     : entryId = entry.id,
       revision = entry.revision,
       kind = entry.kind,
@@ -35,6 +35,8 @@ class EntryDraft {
     url = entry.primaryUrl ?? '';
     favorite = entry.favorite;
     _originalFavorite = entry.favorite;
+    this.projectSlug = projectSlug;
+    _originalProjectSlug = projectSlug;
   }
 
   final String? entryId;
@@ -47,6 +49,7 @@ class EntryDraft {
   final String _originalUsername;
   final String _originalUrl;
   bool _originalFavorite = false;
+  String? _originalProjectSlug;
 
   String title = '';
   String username = '';
@@ -79,7 +82,7 @@ class EntryDraft {
       notes.isNotEmpty ||
       totp.isNotEmpty ||
       tags.isNotEmpty ||
-      projectSlug != null ||
+      projectSlug != _originalProjectSlug ||
       agentAccess != 'none' ||
       favorite != _originalFavorite ||
       customFields.isNotEmpty ||
@@ -146,6 +149,7 @@ class EntryDraft {
     'group_id': groupId,
     'kind': kind,
     'title': title.trim(),
+    'project_slug': projectSlug,
     'favorite': favorite,
     'username': username,
     'password': password.isEmpty ? null : password,
@@ -183,8 +187,9 @@ class EntryDraft {
           .toList(growable: false),
     'add_tags': <String>[],
     'remove_tags': <String>[],
-    if (projectSlug != null) 'project_slug': projectSlug,
-    'clear_project': false,
+    if (projectSlug != _originalProjectSlug && projectSlug != null)
+      'project_slug': projectSlug,
+    'clear_project': projectSlug != _originalProjectSlug && projectSlug == null,
     if (favorite != _originalFavorite) 'favorite': favorite,
   };
 
@@ -194,6 +199,10 @@ class EntryDraft {
     final parsed = _parseCustomFields();
     return <String, dynamic>{
       'title': title.trim(),
+      if (projectSlug != _originalProjectSlug && projectSlug != null)
+        'project_slug': projectSlug,
+      if (projectSlug != _originalProjectSlug && projectSlug == null)
+        'clear_project': true,
       'username': username,
       'url': url.isEmpty ? null : url,
       if (groupId != _originalGroupId) 'group_id': groupId,

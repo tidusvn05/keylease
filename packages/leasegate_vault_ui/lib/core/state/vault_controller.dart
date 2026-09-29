@@ -39,6 +39,9 @@ class VaultController extends ChangeNotifier with BusyRegistry {
   MigrationStatusModel? migrationStatus;
   String query = '';
   String? selectedGroupId;
+
+  /// Null means all projects; an empty string means Unassigned.
+  String? selectedProjectId;
   bool favoritesOnly = false;
   String? selectedEntryId;
   EntryWorkspaceMode workspaceMode = EntryWorkspaceMode.detail;
@@ -77,11 +80,19 @@ class VaultController extends ChangeNotifier with BusyRegistry {
   }
 
   List<EntrySummary> get visibleEntries {
+    final project = selectedProjectId;
+    final projectEntries = project == null
+        ? entries
+        : entries
+              .where((entry) => (entry.projectId ?? '') == project)
+              .toList(growable: false);
     if (favoritesOnly) {
-      return entries.where((entry) => entry.favorite).toList(growable: false);
+      return projectEntries
+          .where((entry) => entry.favorite)
+          .toList(growable: false);
     }
     final root = selectedGroupId;
-    if (root == null) return entries;
+    if (root == null) return projectEntries;
     final ids = <String>{root};
     var changed = true;
     while (changed) {
@@ -94,7 +105,7 @@ class VaultController extends ChangeNotifier with BusyRegistry {
         }
       }
     }
-    return entries
+    return projectEntries
         .where((entry) => ids.contains(entry.groupId))
         .toList(growable: false);
   }
@@ -153,6 +164,13 @@ class VaultController extends ChangeNotifier with BusyRegistry {
           (orderedGroups.isEmpty ? null : orderedGroups.first.id),
       initialPassword: initialPassword,
     );
+    if (selectedProjectId != null && selectedProjectId!.isNotEmpty) {
+      for (final project in projects) {
+        if (project.id == selectedProjectId) {
+          activeDraft!.projectSlug = project.slug;
+        }
+      }
+    }
     creationMode = EntryCreationMode.manual;
     agentCreationDraft = AgentCreationDraft(
       kind: activeDraft!.kind,
@@ -176,7 +194,11 @@ class VaultController extends ChangeNotifier with BusyRegistry {
   void beginEdit(EntrySummary entry) {
     agentCreationDraft = null;
     creationMode = EntryCreationMode.manual;
-    activeDraft = EntryDraft.edit(entry);
+    String? projectSlug;
+    for (final project in projects) {
+      if (project.id == entry.projectId) projectSlug = project.slug;
+    }
+    activeDraft = EntryDraft.edit(entry, projectSlug: projectSlug);
     workspaceMode = EntryWorkspaceMode.edit;
     hideSecrets();
     notifyListeners();
@@ -198,6 +220,9 @@ class VaultController extends ChangeNotifier with BusyRegistry {
       kind: manual.kind,
       groupId: manual.groupId,
     );
+    if (!draft.handoffCopied && draft.projectSlug == null) {
+      draft.projectSlug = manual.projectSlug;
+    }
     if (!draft.handoffCopied &&
         draft.recipeId == 'describe' &&
         draft.context.isEmpty &&
@@ -241,7 +266,7 @@ class VaultController extends ChangeNotifier with BusyRegistry {
         'recipe_id': draft.recipeId,
         'kind': draft.kind,
         'group_id': draft.isAgentContent ? null : draft.groupId,
-        'project_slug': draft.isAgentContent ? draft.projectSlug : null,
+        'project_slug': draft.projectSlug,
         'tags': draft.isAgentContent ? draft.parsedTags : <String>[],
         'agent_access': draft.agentAccess,
         'source_path': draft.sourcePath.trim().isEmpty
@@ -281,6 +306,7 @@ class VaultController extends ChangeNotifier with BusyRegistry {
     query = '';
     searchController.clear();
     selectedGroupId = null;
+    selectedProjectId = null;
     favoritesOnly = false;
     entries = [
       entry,
@@ -307,6 +333,7 @@ class VaultController extends ChangeNotifier with BusyRegistry {
 
   void selectGroup(String? groupId) {
     selectedGroupId = groupId;
+    selectedProjectId = null;
     favoritesOnly = false;
     workspaceMode = EntryWorkspaceMode.detail;
     hideSecrets();
@@ -316,7 +343,18 @@ class VaultController extends ChangeNotifier with BusyRegistry {
 
   void selectFavorites() {
     selectedGroupId = null;
+    selectedProjectId = null;
     favoritesOnly = true;
+    workspaceMode = EntryWorkspaceMode.detail;
+    hideSecrets();
+    _normalizeSelection();
+    notifyListeners();
+  }
+
+  void selectProject(String? projectId) {
+    selectedProjectId = projectId;
+    selectedGroupId = null;
+    favoritesOnly = false;
     workspaceMode = EntryWorkspaceMode.detail;
     hideSecrets();
     _normalizeSelection();
@@ -573,6 +611,7 @@ class VaultController extends ChangeNotifier with BusyRegistry {
     searchController.clear();
     selectedEntryId = null;
     selectedGroupId = null;
+    selectedProjectId = null;
     favoritesOnly = false;
     activeDraft?.wipeSecrets();
     activeDraft = null;
@@ -747,6 +786,16 @@ class VaultController extends ChangeNotifier with BusyRegistry {
       'parent_id': selectedGroupId,
       'idempotency_key': _idempotencyKey(),
       'dry_run': false,
+    });
+    await load();
+  }
+
+  Future<void> createProject(String slug, String name) async {
+    await clientOf().authorized({
+      'command': 'projects_create',
+      'slug': slug,
+      'name': name,
+      'idempotency_key': _idempotencyKey(),
     });
     await load();
   }
