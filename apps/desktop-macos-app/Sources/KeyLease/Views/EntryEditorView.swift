@@ -35,6 +35,7 @@ private struct EditorBody: View {
     @State private var passwordRevealed = false
     @State private var passwordCopied = false
     @State private var totpScanning = false
+    @State private var totpScanResult: TotpScanResult?
     @State private var generatorSettings = false
     @State private var environment: EnvironmentTemplateState?
     @State private var ssh: SshTemplateState?
@@ -449,20 +450,44 @@ private struct EditorBody: View {
                     "Base32 secret or otpauth:// URI. Scan the screen or "
                     + "choose an image."
             ) {
-                HStack {
-                    TextField("", text: $draft.totp)
-                        .textFieldStyle(.roundedBorder)
-                    iconButton(
-                        totpScanning ? "hourglass" : "qrcode.viewfinder",
-                        help: "Scan TOTP QR code from screen")
-                    {
-                        Task { await scanTotp(.screen) }
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        TextField("", text: $draft.totp)
+                            .textFieldStyle(.roundedBorder)
+                        iconButton(
+                            totpScanning ? "hourglass" : "qrcode.viewfinder",
+                            help: "Scan TOTP QR code from screen")
+                        {
+                            Task { await scanTotp(.screen) }
+                        }
+                        iconButton(
+                            "photo", help: "Choose TOTP QR code image")
+                        {
+                            Task { await scanTotp(.image) }
+                        }
                     }
-                    iconButton(
-                        "photo", help: "Choose TOTP QR code image")
-                    {
-                        Task { await scanTotp(.image) }
+                    .disabled(totpScanning)
+                    if totpScanning {
+                        Text("Scanning for a TOTP QR code…")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else if let hint = totpScanResult?.hint {
+                        Text(hint).font(.caption).foregroundStyle(.secondary)
+                        if totpScanResult == .permissionRequired {
+                            Button("Open Screen Recording Settings") {
+                                app.host.openScreenRecordingSettings()
+                            }
+                            .buttonStyle(.link).font(.caption)
+                        }
                     }
+                }
+                .onChange(of: draft.totp) {
+                    errors["otp"] = nil
+                    errors["template_otp"] = nil
+                    // A scanned value keeps its success hint; a manual edit clears it.
+                    if case .found(let uri) = totpScanResult, uri == draft.totp {
+                        return
+                    }
+                    totpScanResult = nil
                 }
             }
         case .primaryUrl:
@@ -864,6 +889,13 @@ private struct EditorBody: View {
             if (error as? KeyLeaseError)?.code == .vaultLocked {
                 unlockError = nil
                 unlockPrompt = true
+            } else if let error = error as? KeyLeaseError,
+                error.code == .invalidRequest,
+                let reason = error.details?["reason"]?.stringValue,
+                ["invalid otpauth TOTP URI", "invalid TOTP secret",
+                 "invalid TOTP configuration"].contains(reason)
+            {
+                errors["otp"] = "Enter a valid TOTP QR URI or Base32 secret."
             } else {
                 failure = UserMessage(error)
             }
@@ -899,40 +931,24 @@ private struct EditorBody: View {
     private func scanTotp(_ source: TotpScanSource) async {
         guard !totpScanning else { return }
         totpScanning = true
-        failure = nil
-        failureAction = nil
+        totpScanResult = nil
         defer { totpScanning = false }
+        let result: TotpScanResult
         switch source {
         case .screen:
-            #if canImport(ScreenCaptureKit)
-                let result = await app.host.captureScreenTotp()
-                if let uri = result.uri {
-                    draft.totp = uri
-                } else if result.needsPermission {
-                    failure = UserMessage(
-                        title: "Screen recording permission needed",
-                        detail: "Grant KeyLease screen recording to scan a "
-                            + "QR code from the screen.")
-                    failureAction = { app.host.openScreenRecordingSettings() }
-                }
-            #else
-                failure = UserMessage(
-                    title: "Screen capture unavailable",
-                    detail: "Use an image file instead.")
-            #endif
+            result = await app.host.captureScreenTotp()
         case .image:
             guard let url = app.host.pickFile(
                 title: "Choose a QR code image",
                 message: "Select an image containing a TOTP QR code.")
             else { return }
-            if let uri = app.host.scanTotpQrFromImage(url) {
-                draft.totp = uri
-            } else {
-                failure = UserMessage(
-                    title: "No TOTP QR code found",
-                    detail: "The image did not contain an otpauth:// code.")
-            }
+            result = app.host.scanTotpQrFromImage(url)
         }
+        guard !Task.isCancelled, vault.activeDraft === draft,
+            app.phase == .ready
+        else { return }
+        totpScanResult = result
+        if case .found(let uri) = result { draft.totp = uri }
     }
 }
 

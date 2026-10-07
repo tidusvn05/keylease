@@ -5935,10 +5935,28 @@ fn normalize_totp(config: &mut Option<TotpConfig>, uri: &mut Option<String>) -> 
         });
     }
     if let Some(source) = uri.take() {
-        let parsed =
-            totp_rs::TOTP::from_url(&source).map_err(|_| KeyLeaseError::InvalidRequest {
-                reason: "invalid otpauth TOTP URI".into(),
-            })?;
+        let source = source.trim().to_owned();
+        let invalid_uri = || KeyLeaseError::InvalidRequest {
+            reason: "invalid otpauth TOTP URI".into(),
+        };
+        // Guard the host before totp-rs, which assumes that malformed URLs
+        // always have one. Accept legacy short secrets, as current_totp does.
+        let url = url::Url::parse(&source).map_err(|_| invalid_uri())?;
+        if url.scheme() != "otpauth" || url.host_str() != Some("totp") {
+            return Err(invalid_uri());
+        }
+        let parsed = totp_rs::TOTP::from_url_unchecked(&source).map_err(|_| invalid_uri())?;
+        if parsed.secret.is_empty()
+            || !(6..=8).contains(&parsed.digits)
+            || parsed.step == 0
+            || parsed
+                .issuer
+                .as_ref()
+                .is_some_and(|issuer| issuer.contains(':'))
+            || parsed.account_name.contains(':')
+        {
+            return Err(invalid_uri());
+        }
         let algorithm = match parsed.algorithm {
             totp_rs::Algorithm::SHA1 => TotpAlgorithm::Sha1,
             totp_rs::Algorithm::SHA256 => TotpAlgorithm::Sha256,
@@ -5954,7 +5972,24 @@ fn normalize_totp(config: &mut Option<TotpConfig>, uri: &mut Option<String>) -> 
             source_representation: Some(source),
         });
     }
+    if let Some(config) = config {
+        validated_totp_secret(config)?;
+    }
     Ok(())
+}
+
+fn validated_totp_secret(config: &TotpConfig) -> Result<Vec<u8>> {
+    let secret = totp_rs::Secret::Encoded(config.secret_base32.clone())
+        .to_bytes()
+        .map_err(|_| KeyLeaseError::InvalidRequest {
+            reason: "invalid TOTP secret".into(),
+        })?;
+    if secret.is_empty() || !(6..=8).contains(&config.digits) || config.period == 0 {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "invalid TOTP configuration".into(),
+        });
+    }
+    Ok(secret)
 }
 fn validate_session_timeout(timeout: Duration) -> Result<()> {
     if timeout <= Duration::zero() {
@@ -6428,16 +6463,7 @@ pub fn current_totp(config: &TotpConfig) -> Result<(String, u64)> {
         TotpAlgorithm::Sha256 => totp_rs::Algorithm::SHA256,
         TotpAlgorithm::Sha512 => totp_rs::Algorithm::SHA512,
     };
-    let secret = totp_rs::Secret::Encoded(config.secret_base32.clone())
-        .to_bytes()
-        .map_err(|_| KeyLeaseError::InvalidRequest {
-            reason: "invalid TOTP secret".into(),
-        })?;
-    if secret.is_empty() || !(6..=8).contains(&config.digits) || config.period == 0 {
-        return Err(KeyLeaseError::InvalidRequest {
-            reason: "invalid TOTP configuration".into(),
-        });
-    }
+    let secret = validated_totp_secret(config)?;
     // Some long-lived KeePass and authenticator entries use secrets shorter
     // than RFC 4226's current 128-bit recommendation. They are already in
     // active use and generate interoperable codes, so accept them on import
@@ -7200,6 +7226,185 @@ mod tests {
             KeyLeaseError::Denied { reason } if reason.contains("rate limit")
         ));
     }
+    #[test]
+    fn totp_uri_accepts_short_secrets_with_structural_validation() {
+        for (algorithm, expected) in [
+            ("SHA1", TotpAlgorithm::Sha1),
+            ("SHA256", TotpAlgorithm::Sha256),
+            ("SHA512", TotpAlgorithm::Sha512),
+        ] {
+            let source = format!(
+                "otpauth://totp/Example:test?secret=JBSWY3DPEHPK3PXP&issuer=Example&algorithm={algorithm}&digits=8&period=45"
+            );
+            let mut uri = Some(format!(" \n{source}\r\n "));
+            let mut config = None;
+            normalize_totp(&mut config, &mut uri).unwrap();
+            let config = config.unwrap();
+            assert_eq!(config.secret_base32, "JBSWY3DPEHPK3PXP");
+            assert_eq!(config.issuer.as_deref(), Some("Example"));
+            assert_eq!(config.account.as_deref(), Some("test"));
+            assert_eq!(config.algorithm, expected);
+            assert_eq!(config.digits, 8);
+            assert_eq!(config.period, 45);
+            assert_eq!(
+                config.source_representation.as_deref(),
+                Some(source.as_str())
+            );
+            assert_eq!(current_totp(&config).unwrap().0.len(), 8);
+            assert!(uri.is_none());
+        }
+    }
+
+    #[test]
+    fn totp_uri_rejects_malformed_inputs_without_panicking() {
+        for source in [
+            "not a URI",
+            "otpauth:/test?secret=JBSWY3DPEHPK3PXP",
+            "https://totp/test?secret=JBSWY3DPEHPK3PXP",
+            "otpauth://hotp/test?secret=JBSWY3DPEHPK3PXP",
+            "otpauth://totp/test",
+            "otpauth://totp/test?secret=",
+            "otpauth://totp/test?secret=INVALID!",
+            "otpauth://totp/test?secret=JBSWY3DPEHPK3PXP&digits=5",
+            "otpauth://totp/test?secret=JBSWY3DPEHPK3PXP&digits=9",
+            "otpauth://totp/test?secret=JBSWY3DPEHPK3PXP&period=0",
+            "otpauth://totp/test?secret=JBSWY3DPEHPK3PXP&algorithm=MD5",
+            "otpauth://totp/Example:test?secret=JBSWY3DPEHPK3PXP&issuer=Other",
+            "otpauth://totp/Example:test:extra?secret=JBSWY3DPEHPK3PXP",
+            "otpauth://totp/test?secret=JBSWY3DPEHPK3PXP&issuer=Example:Other",
+        ] {
+            let error = normalize_totp(&mut None, &mut Some(source.into())).unwrap_err();
+            assert!(matches!(error, KeyLeaseError::InvalidRequest { .. }));
+            assert!(!format!("{error:?}").contains("JBSWY3DPEHPK3PXP"));
+        }
+    }
+
+    #[test]
+    fn totp_typed_config_validation_matches_generation() {
+        let valid = TotpConfig {
+            secret_base32: "JBSWY3DPEHPK3PXP".into(),
+            issuer: None,
+            account: None,
+            algorithm: TotpAlgorithm::Sha1,
+            digits: 6,
+            period: 30,
+            source_representation: None,
+        };
+        normalize_totp(&mut Some(valid.clone()), &mut None).unwrap();
+        for invalid in [
+            TotpConfig {
+                secret_base32: String::new(),
+                ..valid.clone()
+            },
+            TotpConfig {
+                secret_base32: "INVALID!".into(),
+                ..valid.clone()
+            },
+            TotpConfig {
+                digits: 5,
+                ..valid.clone()
+            },
+            TotpConfig {
+                period: 0,
+                ..valid.clone()
+            },
+        ] {
+            assert!(normalize_totp(&mut Some(invalid.clone()), &mut None).is_err());
+            assert!(current_totp(&invalid).is_err());
+        }
+        assert!(normalize_totp(&mut Some(valid), &mut Some("otpauth://totp/test".into())).is_err());
+    }
+
+    #[test]
+    fn totp_short_uri_survives_create_update_and_failed_save() {
+        let (_dir, service, _) = service();
+        let group = service.create_group("TOTP tests", None).unwrap();
+        let (owner_id, token) = service.register_desktop_client().unwrap();
+        service.lock().unwrap();
+        service
+            .unlock_for_client(&owner_id, b"password", Duration::hours(1))
+            .unwrap();
+        let owner = service
+            .authenticate(&owner_id, &token, "totp-test")
+            .unwrap();
+        let source = "otpauth://totp/Example:test?secret=JBSWY3DPEHPK3PXP&issuer=Example";
+        let input = NewEntryInput {
+            favorite: false,
+            group_id: group.id,
+            kind: "core.login".into(),
+            title: "TOTP fixture".into(),
+            project_slug: None,
+            username: None,
+            password: None,
+            url: None,
+            notes: None,
+            custom_fields: vec![],
+            sections: vec![],
+            totp: None,
+            totp_uri: Some(source.into()),
+        };
+        let created = service
+            .create_entry(&owner, input, "totp-create", false)
+            .unwrap();
+        assert!(created.has_totp);
+        let stored_totp = || {
+            service
+                .with_vault(|vault| {
+                    Ok(service
+                        .store
+                        .get_item(vault, &created.id)?
+                        .fields
+                        .into_iter()
+                        .find_map(|field| match field.value {
+                            FieldValue::Totp(config) if field.key == "otp" => Some(config),
+                            _ => None,
+                        }))
+                })
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(stored_totp().source_representation.as_deref(), Some(source));
+        assert_eq!(service.totp_for_human(&created.id).unwrap().0.len(), 6);
+        let updated_source = format!("{source}&digits=8&period=45");
+        let updated = service
+            .update_entry(
+                &owner,
+                &created.id,
+                EntryPatch {
+                    totp_uri: Some(updated_source.clone()),
+                    ..Default::default()
+                },
+                created.revision,
+                "totp-update",
+                false,
+            )
+            .unwrap();
+        assert!(updated.has_totp);
+        assert_eq!(service.totp_for_human(&created.id).unwrap().0.len(), 8);
+        assert!(
+            service
+                .update_entry(
+                    &owner,
+                    &created.id,
+                    EntryPatch {
+                        totp_uri: Some(format!("{source}&period=0")),
+                        ..Default::default()
+                    },
+                    updated.revision,
+                    "totp-invalid",
+                    false
+                )
+                .is_err()
+        );
+        assert_eq!(
+            stored_totp().source_representation.as_deref(),
+            Some(updated_source.as_str())
+        );
+        assert_eq!(stored_totp().digits, 8);
+        assert_eq!(stored_totp().period, 45);
+        assert_eq!(service.totp_for_human(&created.id).unwrap().0.len(), 8);
+    }
+
     #[test]
     fn password_generator_and_totp() {
         assert_eq!(generate_password(32).unwrap().len(), 32);

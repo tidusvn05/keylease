@@ -18,6 +18,13 @@ let package = Package(
             dependencies: [
                 .product(name: "KeyLeaseCore", package: "desktop-macos")
             ]
+        ),
+        .testTarget(
+            name: "KeyLeaseTests",
+            dependencies: [
+                "KeyLease",
+                .product(name: "KeyLeaseCore", package: "desktop-macos")
+            ]
         )
     ]
 )

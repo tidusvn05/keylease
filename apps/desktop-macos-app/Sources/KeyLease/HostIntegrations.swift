@@ -6,10 +6,43 @@ import Vision
     import ScreenCaptureKit
 #endif
 
-/// macOS host capabilities the Flutter app reaches through method channels:
-/// file pickers, `~/.ssh` key discovery, and TOTP QR capture.
+enum TotpScanResult: Equatable, Sendable {
+    case found(String)
+    case noCodeFound
+    case permissionRequired
+    case cancelled
+    case failed(String)
+
+    var hint: String? {
+        switch self {
+        case .found: "TOTP QR code found."
+        case .noCodeFound:
+            "No TOTP QR code found. Make the QR code visible or choose an image."
+        case .permissionRequired:
+            "Allow KeyLease in Screen Recording. If you just enabled it, quit and reopen KeyLease, then try again."
+        case .cancelled: nil
+        case .failed(let message): message
+        }
+    }
+}
+
+/// macOS file pickers, SSH key discovery, and local TOTP QR capture.
 @MainActor
 final class HostIntegrations {
+    private let screenCaptureAccess: () -> Bool
+    private let requestScreenCaptureAccess: () -> Bool
+    private let screenScan: () async throws -> TotpScanResult
+
+    init(
+        screenCaptureAccess: @escaping () -> Bool = { CGPreflightScreenCaptureAccess() },
+        requestScreenCaptureAccess: @escaping () -> Bool = { CGRequestScreenCaptureAccess() },
+        screenScan: (() async throws -> TotpScanResult)? = nil
+    ) {
+        self.screenCaptureAccess = screenCaptureAccess
+        self.requestScreenCaptureAccess = requestScreenCaptureAccess
+        self.screenScan = screenScan ?? { try await Self.scanDisplays() }
+    }
+
     // MARK: - File pickers (`pick_token_file` / `pick_ssh_key` / …)
 
     /// `NSOpenPanel` for the token file, SSH keys, and import sources.
@@ -57,51 +90,99 @@ final class HostIntegrations {
 
     // MARK: - TOTP QR (`scan_totp_qr`)
 
-    /// Vision barcode detection on a picked image file → `otpauth://` URI.
-    func scanTotpQrFromImage(_ url: URL) -> String? {
+    func scanTotpQrFromImage(_ url: URL) -> TotpScanResult {
         guard let image = NSImage(contentsOf: url)?.cgImage(
             forProposedRect: nil, context: nil, hints: nil)
-        else { return nil }
-        return firstOtpAuthUri(in: image)
+        else { return .failed("Could not read this image. Choose another image.") }
+        return Self.scanTotpQr(in: image)
     }
 
-    private func firstOtpAuthUri(in image: CGImage) -> String? {
+    nonisolated static func scanTotpQr(in image: CGImage) -> TotpScanResult {
         let request = VNDetectBarcodesRequest()
         request.symbologies = [.qr]
-        let handler = VNImageRequestHandler(cgImage: image)
-        try? handler.perform([request])
-        return (request.results ?? [])
-            .compactMap(\.payloadStringValue)
-            .first { $0.hasPrefix("otpauth://") }
+        do {
+            try VNImageRequestHandler(cgImage: image).perform([request])
+        } catch {
+            return .failed("Could not read QR codes. Try again or choose another image.")
+        }
+        for payload in (request.results ?? []).compactMap(\.payloadStringValue) {
+            let uri = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let components = URLComponents(string: uri),
+                components.scheme?.lowercased() == "otpauth",
+                components.host?.lowercased() == "totp"
+            {
+                return .found(uri)
+            }
+        }
+        return .noCodeFound
     }
 
-    /// Screen-capture QR flow. `SCScreenshotManager` (macOS 15.4+) takes a
-    /// user-guided screenshot; the capture lands on a file we feed to
-    /// Vision. Returns `nil` when the user cancels or permission is missing;
-    /// `outcome` tells the caller when to deep-link Screen Recording
-    /// settings.
-    #if canImport(ScreenCaptureKit)
-        func captureScreenTotp() async -> (uri: String?, needsPermission: Bool)
-        {
-            if #available(macOS 15.4, *) {
-                do {
-                    let captureRect = NSScreen.screens.reduce(CGRect.null) {
-                        $0.union($1.frame)
-                    }
-                    guard !captureRect.isNull else { return (nil, false) }
-                    let image = try await SCScreenshotManager.captureImage(
-                        in: captureRect)
-                    if let uri = firstOtpAuthUri(in: image) {
-                        return (uri, false)
-                    }
-                    return (nil, false)
-                } catch {
-                    return (nil, true)
-                }
-            }
-            return (nil, true)
+    func captureScreenTotp() async -> TotpScanResult {
+        guard screenCaptureAccess() || requestScreenCaptureAccess() else {
+            return .permissionRequired
         }
-    #endif
+        do {
+            try Task.checkCancellation()
+            return try await screenScan()
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            let error = error as NSError
+            if error.domain == SCStreamErrorDomain,
+                error.code == SCStreamError.Code.userDeclined.rawValue
+            {
+                return .permissionRequired
+            }
+            return .failed("Could not capture the screen. Try again or choose an image.")
+        }
+    }
+
+    /// Capture each display independently at its pixel scale, without KeyLease
+    /// windows covering the QR. Pixels stay in memory and are never saved.
+    private nonisolated static func scanDisplays() async throws -> TotpScanResult {
+        let content = try await SCShareableContent.excludingDesktopWindows(
+            false, onScreenWindowsOnly: true)
+        let ownApplications = content.applications.filter {
+            $0.processID == ProcessInfo.processInfo.processIdentifier
+        }
+        let mainDisplay = CGMainDisplayID()
+        let displays = content.displays.sorted {
+            if $0.displayID == mainDisplay { return $1.displayID != mainDisplay }
+            if $1.displayID == mainDisplay { return false }
+            return $0.displayID < $1.displayID
+        }
+        guard !displays.isEmpty else {
+            return .failed("No screen is available. Choose a QR code image instead.")
+        }
+        var captureError: Error?
+        var decodeFailure: TotpScanResult?
+        for display in displays {
+            try Task.checkCancellation()
+            let filter = SCContentFilter(
+                display: display, excludingApplications: ownApplications,
+                exceptingWindows: [])
+            let configuration = SCStreamConfiguration()
+            configuration.width = max(1, Int((filter.contentRect.width
+                * CGFloat(filter.pointPixelScale)).rounded()))
+            configuration.height = max(1, Int((filter.contentRect.height
+                * CGFloat(filter.pointPixelScale)).rounded()))
+            configuration.showsCursor = false
+            configuration.capturesAudio = false
+            do {
+                let image = try await SCScreenshotManager.captureImage(
+                    contentFilter: filter, configuration: configuration)
+                let result = scanTotpQr(in: image)
+                if case .found = result { return result }
+                if case .failed = result { decodeFailure = result }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                captureError = captureError ?? error
+            }
+        }
+        if let captureError { throw captureError }
+        return decodeFailure ?? .noCodeFound
+    }
 
     /// Deep-link to the Screen Recording pane so the user can grant the
     /// capture permission — `open_screen_recording_settings` in Flutter.

@@ -159,8 +159,8 @@ public final class EntryDraft {
     /// Base32 secrets become a default SHA-1/6-digit/30-second config;
     /// `otpauth://` input travels as `totpUri` instead.
     public func totpConfig() -> TotpConfig? {
-        let trimmed = totp.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, !totp.hasPrefix("otpauth://") else {
+        let trimmed = totp.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.lowercased().hasPrefix("otpauth://") else {
             return nil
         }
         return TotpConfig(
@@ -175,9 +175,8 @@ public final class EntryDraft {
     }
 
     public var totpUri: String? {
-        totp.hasPrefix("otpauth://")
-            ? totp.trimmingCharacters(in: .whitespaces)
-            : nil
+        let trimmed = totp.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.lowercased().hasPrefix("otpauth://") ? trimmed : nil
     }
 
     /// `entries_create` input.

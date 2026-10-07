@@ -127,6 +127,21 @@ final class EntryDraftTests: XCTestCase {
         XCTAssertEqual(draft.totpUri, "otpauth://totp/x?secret=ABC")
     }
 
+    func testTotpWhitespaceIsNormalizedForCreateAndUpdate() throws {
+        let uri = "otpauth://totp/Example:test?secret=JBSWY3DPEHPK3PXP&issuer=Example"
+        let draft = EntryDraft(groupId: "g")
+        draft.totp = " \n" + uri + "\r\n "
+        XCTAssertNil(draft.totpConfig())
+        XCTAssertEqual(try object(draft.createInput())["totp_uri"]?.stringValue, uri)
+        XCTAssertEqual(try object(draft.patch())["totp_uri"]?.stringValue, uri)
+        draft.totp = " \nJBSWY3DPEHPK3PXP\r\n "
+        XCTAssertNil(draft.totpUri)
+        XCTAssertEqual(draft.totpConfig()?.secretBase32, "JBSWY3DPEHPK3PXP")
+        draft.totp = " \r\n "
+        XCTAssertNil(draft.totpConfig())
+        XCTAssertNil(draft.totpUri)
+    }
+
     // MARK: Update patch
 
     func testPatchKeepsSecretsAndOnlySendsChanges() throws {
