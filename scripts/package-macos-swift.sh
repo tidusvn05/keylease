@@ -14,7 +14,8 @@ set -euo pipefail
 #   Contents/Info.plist                      apps/desktop-macos-app/Info.plist
 #
 # Environment overrides:
-#   EXPANDED_CODE_SIGN_IDENTITY   Signing identity (default: ad-hoc "-")
+#   EXPANDED_CODE_SIGN_IDENTITY   Certificate name/hash, or "-" for ad-hoc.
+# Default: the sole Apple Development identity; ad-hoc if none is available.
 #   KEYLEASE_APPLICATIONS_DIR     Install target (default: /Applications)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,6 +46,7 @@ fi
 
 CONFIG_LOWER="$(tr '[:upper:]' '[:lower:]' <<<"$CONFIGURATION")"
 BUILD_ROOT="$APP_PACKAGE/.build"
+source "$SCRIPT_DIR/macos-signing-identity.sh"
 
 echo "== Building KeyLease ($CONFIGURATION) =="
 if [[ "$CONFIGURATION" == "Release" ]]; then
@@ -89,7 +91,7 @@ cp "$APP_PACKAGE/Info.plist" "$APP/Contents/Info.plist"
 
 echo "== Signing =="
 codesign --force --options runtime \
-  --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" "$APP"
+  --sign "$EXPANDED_CODE_SIGN_IDENTITY" "$APP"
 codesign --verify --deep --strict "$APP"
 echo "built $APP"
 

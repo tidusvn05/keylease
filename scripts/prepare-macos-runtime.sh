@@ -6,6 +6,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUTPUT_DIR="${1:?output directory is required}"
 CONFIGURATION="${2:-Release}"
 HOST_ARCH="$(uname -m)"
+source "$SCRIPT_DIR/macos-signing-identity.sh"
 
 mkdir -p "$OUTPUT_DIR/Resources" "$OUTPUT_DIR/Library/LaunchAgents"
 
@@ -27,4 +28,4 @@ fi
 cp "$REPO_DIR/apps/desktop-flutter/macos/Runner/app.keylease.service.plist" \
   "$OUTPUT_DIR/Library/LaunchAgents/app.keylease.service.plist"
 chmod 0700 "$OUTPUT_DIR/Resources/keylease"
-codesign --force --options runtime --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" "$OUTPUT_DIR/Resources/keylease"
+codesign --force --options runtime --sign "$EXPANDED_CODE_SIGN_IDENTITY" "$OUTPUT_DIR/Resources/keylease"
