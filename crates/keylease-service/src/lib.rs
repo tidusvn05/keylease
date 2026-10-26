@@ -4431,6 +4431,14 @@ impl KeyLeaseService {
         match decision {
             PolicyDecision::Allow { matched_rule, .. } => {
                 self.confirm_standing_rule(&matched_rule)?;
+                // The kill switch stops every agent, whatever rule allowed it;
+                // only the vault's own owner clients keep working.
+                if !self.is_local_owner(&actor.agent_id)? && self.store.kill_switch_enabled()? {
+                    self.audit_vault(actor, action, resource, "deny", "kill_switch", vec![])?;
+                    return Err(KeyLeaseError::Denied {
+                        reason: "global kill switch is enabled".into(),
+                    });
+                }
                 if matched_rule.starts_with(TRUST_RULE_PREFIX) {
                     let mut event = self.vault_audit_event(
                         actor,
@@ -6105,6 +6113,7 @@ fn approval_semantic_summary(action: &CanonicalAction) -> ApprovalSemanticSummar
         &action.request.resource,
         &action.request.arguments,
         &action.spec.risk,
+        true,
     )
 }
 fn validate_action_budget(action: &CanonicalAction, budget: &DataBudget) -> Result<()> {

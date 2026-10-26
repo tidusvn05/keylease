@@ -38,8 +38,10 @@ keylease db proxy ITEM_ID --socket-dir ~/.keylease/run/db
 ```
 
 The proxy always connects as the item's role; a client cannot choose another
-user. It may choose another database on the same server (`psql -d other`),
-which is part of what is approved.
+user. It may choose another database on the same server (`psql -d other`).
+The approval shows the requested database, but the proxy runs in the agent's
+process, so that is what the agent declares, not something KeyLease enforces:
+approving a connection lets the role do anything it can on that server.
 
 ## TLS
 
@@ -62,7 +64,8 @@ for a window. Every connection under a trust is audited with its `trust_id`.
 
 - Query results reach the agent and the model. Give agents a read-only role
   where that is enough; the role, not KeyLease, limits what SQL can do.
-- The proxy sees the SCRAM exchange. Like a network observer of an
-  unencrypted handshake, it could try to guess a weak password offline from
-  it. Use a generated password.
+- The proxy sees the SCRAM exchange and chooses what challenge to submit, so
+  an approved connection gives the agent a proof it can attack offline with a
+  dictionary, even with a salt of its choosing. Use a long generated password,
+  and give each server its own.
 - PostgreSQL only; channel binding (`SCRAM-SHA-256-PLUS`) is not used.

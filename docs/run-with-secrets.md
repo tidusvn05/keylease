@@ -20,6 +20,9 @@ keylease run --env STRIPE_API_KEY=kl://VAULT_ID/ITEM_ID/password \
   Values shorter than 4 characters are not scrubbed.
 - The child's exit code is passed through; stdin is inherited.
 
+The program name in the approval is what the agent says it will run. KeyLease
+does not verify it: treat the approval exactly like a reveal.
+
 Scrubbing prevents accidental disclosure into an agent's transcript. It is not
 a boundary against a program, or an agent, that wants the value: prefer a
 broker whenever one exists.

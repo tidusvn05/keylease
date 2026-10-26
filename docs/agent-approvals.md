@@ -17,6 +17,16 @@ An **enrolled agent** gets its own client and a baseline:
 |---|---|
 | `entry:search`, `entry:read_metadata`, `entry:read_fields` (redacted view), `ssh:list_keys` (public keys only) | `entry:read_username`, `entry:read_secret` (reveal, TOTP), `entry:inject_secret` ([`keylease run`](run-with-secrets.md)), entry create/update/move/delete, group create/update, `ssh:sign` ([SSH](ssh-agent.md)), `db:connect` ([PostgreSQL](db-proxy.md)) |
 
+Search and metadata include each entry's username, so the separate
+`entry:read_username` approval only gates the dedicated reveal command.
+Turning on the kill switch stops every agent request, including baseline
+reads and pre-written grants.
+
+Known limits: an approval is consumed when its gate passes, so a create or
+update that needs several gates (for example a password and a TOTP) asks for
+one approval per gate, and `--dry-run` also uses them. `max_uses` on a
+hand-written grant is not counted for vault commands.
+
 Shared Prompt/Runbook/Note content keeps its own grant-free channel
 (`docs/agent-content.md`).
 

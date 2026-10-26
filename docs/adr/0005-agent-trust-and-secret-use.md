@@ -157,6 +157,13 @@ policy model is introduced, so simulation, effective-permission listing and
 audit already cover it. Each such rule carries a `trust_id` that every later
 use records in its audit event.
 
+*As implemented:* trust is offered only for vault commands (`conn_vault`). A
+connector approval is approved once, because the approval does not yet record
+the matched rule's budget, use and TTL limits for the trust to inherit. Trust
+cannot be granted while the kill switch is on. A trust (policy version 2) loses
+to a `require_approval` rule of a higher version; the UI should not offer
+trust in that case, which is not checked yet.
+
 Trust is granted to an agent identity, never to a device alone, because one
 machine runs many agents. Until key-bound identity (section 6) lands, that
 identity is the registered client; binding a trust to a host key as well is
@@ -172,6 +179,12 @@ option:
 | R3 | SSH to production, DB write role | 1 hour |
 | R4 | T4 reveal, DB migration/DDL role, root SSH to production | once only |
 
+*As implemented:* risk comes from the action plus the item's environment.
+Secret reveal and `keylease run` injection are R4. SSH signing and database
+connections are R2, or R3 when the item's environment is `production`; the
+code cannot yet tell a migration role or a root login apart, so use separate
+items for those and approve them once.
+
 Expiry is absolute; use does not extend it. Trust rules survive a vault lock
 but are only usable while the vault is unlocked; this refines security
 invariant 8, which continues to apply to sessions and leases. The app gains an
@@ -186,7 +199,9 @@ store the private key mode 0600 under `~/.keylease/clients/`). Each request is
 signed over its canonical digest, a timestamp and a nonce; the node rejects
 stale or replayed signatures. Bearer tokens remain accepted for clients
 registered without a key and are marked `legacy` in the UI and audit.
-Time-boxed trust may only be granted to key-bound clients.
+Time-boxed trust may only be granted to key-bound clients. *Not enforced yet:*
+until key-bound identity lands (rollout step 6), trust is granted to the
+registered client.
 
 ### 7. Standalone VPS (mode A: self-trust)
 

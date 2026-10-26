@@ -78,11 +78,16 @@ fn blast_radius(risk: &RiskTier) -> &'static str {
 }
 
 /// Fingerprints arguments for an approver without copying their values.
+///
+/// Vault commands pass `hash_values = false`: their arguments can carry a new
+/// password, and an unsalted SHA-256 of it in a plaintext approval row could be
+/// brute-forced offline. They keep only each argument's type and length.
 pub(crate) fn semantic_summary(
     operation: &str,
     target: &str,
     arguments: &Value,
     risk: &RiskTier,
+    hash_values: bool,
 ) -> ApprovalSemanticSummary {
     let mut changed_fields = arguments
         .as_object()
@@ -112,7 +117,11 @@ pub(crate) fn semantic_summary(
                 field: field.clone(),
                 value_type: value_type.into(),
                 length,
-                sha256: hex(&Sha256::digest(canonical)),
+                sha256: if hash_values {
+                    hex(&Sha256::digest(canonical))
+                } else {
+                    String::new()
+                },
             })
         })
         .collect();
@@ -329,6 +338,7 @@ impl KeyLeaseService {
                 &request.resource,
                 &request.arguments,
                 &risk,
+                false,
             )),
             risk: Some(risk),
             purpose: actor.purpose.clone(),
@@ -387,6 +397,11 @@ impl KeyLeaseService {
         if trust.is_some() && !approve {
             return Err(KeyLeaseError::InvalidRequest {
                 reason: "only an approval can grant trust".into(),
+            });
+        }
+        if trust.is_some() && self.store.kill_switch_enabled()? {
+            return Err(KeyLeaseError::Denied {
+                reason: "trust cannot be granted while the kill switch is enabled".into(),
             });
         }
         let granted = self.with_vault(|vault| {
@@ -564,6 +579,13 @@ fn materialize_trust(
         .resource
         .clone()
         .ok_or_else(|| invalid("approval has no resource"))?;
+    if approval.connection_id.as_ref().map(|id| id.0.as_str()) != Some(VAULT_CONNECTION_ID) {
+        // A connector trust would need the matched rule's budget, use and TTL
+        // limits, which the approval does not record yet.
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "time-boxed trust is only available for vault commands; approve once".into(),
+        });
+    }
     let risk = approval.risk.clone().unwrap_or(RiskTier::R4);
     let ceiling = max_trust_seconds(&risk).ok_or_else(|| KeyLeaseError::Denied {
         reason: "this risk tier may only be approved once".into(),
@@ -947,6 +969,52 @@ mod tests {
                 .unwrap()
                 .iter()
                 .all(|rule| rule.agent_id.as_ref() != Some(&f.agent.agent_id))
+        );
+    }
+
+    #[test]
+    fn kill_switch_stops_baseline_allows_but_not_the_owner() {
+        let f = fixture();
+        assert!(f.service.search_entries(&f.agent, "").is_ok());
+        f.service.kill_switch(true).unwrap();
+        assert!(matches!(
+            f.service.search_entries(&f.agent, ""),
+            Err(KeyLeaseError::Denied { .. })
+        ));
+        assert!(f.service.search_entries(&f.owner, "").is_ok());
+    }
+
+    #[test]
+    fn vault_approvals_keep_no_value_hashes_and_connector_trust_is_refused() {
+        let f = fixture();
+        let id = approval_id(
+            f.service
+                .reveal_field_authorized(&f.agent, &f.item, "username"),
+        );
+        let record = f.service.store.get_approval(&id).unwrap();
+        let summary = record.semantic_summary.clone().unwrap();
+        assert!(!summary.argument_fingerprints.is_empty());
+        assert!(
+            summary
+                .argument_fingerprints
+                .iter()
+                .all(|fp| fp.sha256.is_empty())
+        );
+        let connector = ApprovalRecord {
+            connection_id: Some(ConnectionId("conn_github".into())),
+            risk: Some(RiskTier::R1),
+            ..record
+        };
+        assert!(
+            materialize_trust(
+                &connector,
+                TrustDecision {
+                    scope: TrustScope::Resource,
+                    duration: TrustDuration::Hour1,
+                },
+                &f.owner_id,
+            )
+            .is_err()
         );
     }
 
