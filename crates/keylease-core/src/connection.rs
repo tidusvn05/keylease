@@ -85,6 +85,9 @@ pub struct ApprovalRecord {
     pub risk: Option<crate::RiskTier>,
     #[serde(default)]
     pub semantic_summary: Option<ApprovalSemanticSummary>,
+    /// The requesting agent's stated purpose. Untrusted; display only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]

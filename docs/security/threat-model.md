@@ -50,6 +50,8 @@ never fall back when the local Gateway is unavailable.
 | Mobile device loss | Vault is app-private and excluded from cloud backup and device transfer; `FLAG_SECURE` blocks screenshots and the recents thumbnail; locking on background and on idle drops the session keys; the `mobile_owner` role cannot create connections, run migrations or execute gates, so a stolen unlocked phone cannot mint new connector credentials | A phone unlocked and in the attacker's hands while the vault is open is outside the boundary, as on any platform |
 | Mobile local IPC spoofing | Not applicable: there is no socket. The vault is opened in process, the owner credential is minted per unlock and never leaves the Rust side, and vault provisioning is a separate dispatcher that no request command can reach | Any code running inside the app process shares the address space; see ADR 0004 |
 | OAuth callback interception/forgery | Google setup uses an IPv4 loopback listener on a random port, S256 PKCE, one-time state, exact `drive.file` scope, bounded callback parsing and fixed HTTPS token/metadata origins | A fully compromised browser or unlocked host remains outside the boundary |
+| Agent self-approval or approval laundering | Enrolled agents get a baseline without `approval:decide`; the service also refuses a decision by the requesting agent; approvals bind agent, session, purpose, resource, action and arguments; a trust names one action and one resource or item | An agent that can read the desktop owner token file (same UID) can act as the owner; enrolled agents must not be given that file |
+| Standing trust outliving intent | Trust durations are a fixed set capped by risk tier (R0–R1 7d, R2 1d, R3 1h, R4 once), expiry is absolute, each use is audited with `trust_id`, and revocation or the kill switch takes effect before the next use even from another process | A trusted window grants every use of that action on that resource until it ends |
 | Local IPC spoofing or lock denial-of-service | Mode-0600 Unix socket, peer-UID validation, registered client token on every operation except status, bounded messages and authentication/unlock rate limits | Same-UID malware remains outside this boundary |
 
 ## Security invariants
@@ -59,13 +61,20 @@ never fall back when the local Gateway is unavailable.
 2. Every item has an independently generated key and authenticated envelope.
 3. Unknown action, schema version, field or resource is denied.
 4. Approval is valid only for one canonical request digest and policy version;
-   its decision is audit-atomic and its consumption is atomic with lease issue.
+   its decision is audit-atomic and its consumption is atomic with lease issue
+   or, for a vault command, with the audit of that one use. The digest includes
+   the agent's stated purpose. An agent can never decide its own approval.
 5. Lease expiry, revocation, kill switch and use budget are checked atomically
    immediately before dispatch.
 6. Agent-visible output never contains master passwords or upstream connector
    credentials.
 7. Audits contain no item values or external content.
-8. Lock invalidates the session and all session-bound grants/leases.
+8. Lock invalidates the session, all session-bound grants/leases and pending
+   approvals. Agent baselines and time-boxed trusts (ADR 0005) are standing
+   rules: they survive a lock but authorize nothing while the vault is locked,
+   end at an absolute expiry, are rechecked against the store before every use,
+   and are deleted by client revocation or the kill switch. Secret disclosure
+   (`entry:read_secret`, risk R4) is never eligible for a trust.
 9. Vault provisioning is unauthenticated by construction and therefore never
    reachable from an authenticated request channel; it lives in a separate
    request type with its own dispatcher.

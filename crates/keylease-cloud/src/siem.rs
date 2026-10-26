@@ -211,6 +211,7 @@ mod tests {
             cell_count: None,
             byte_count: None,
             changed_fields: vec![],
+            trust_id: None,
         };
         let batch = AuditExportBatch {
             destination_id: destination.destination_id.clone(),

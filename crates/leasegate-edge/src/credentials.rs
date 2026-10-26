@@ -592,6 +592,7 @@ fn actor(identity: &AgentEndpointIdentity) -> ActorContext {
         human_principal: None,
         on_behalf_of: identity.on_behalf_of.clone(),
         client_session_id: identity.client_session_id.clone(),
+        purpose: None,
     }
 }
 
@@ -621,6 +622,7 @@ fn credential_audit(
         cell_count: None,
         byte_count: None,
         changed_fields: Vec::new(),
+        trust_id: None,
     }
 }
 

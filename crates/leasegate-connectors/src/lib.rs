@@ -2497,6 +2497,7 @@ mod tests {
                 human_principal: None,
                 on_behalf_of: None,
                 client_session_id: "s".into(),
+                purpose: None,
             },
             task_id: None,
             connection_id: ConnectionId::new(),

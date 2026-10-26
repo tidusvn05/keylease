@@ -8,6 +8,7 @@ mod error;
 mod identity;
 mod policy;
 mod template;
+mod trust;
 
 pub use action::*;
 pub use audit::*;
@@ -17,6 +18,7 @@ pub use error::*;
 pub use identity::*;
 pub use policy::*;
 pub use template::*;
+pub use trust::*;
 
 pub const CONTRACT_VERSION: u32 = 1;
 
@@ -33,6 +35,7 @@ mod tests {
             human_principal: None,
             on_behalf_of: None,
             client_session_id: "session".into(),
+            purpose: None,
         };
         let request = ActionRequest {
             schema_version: CONTRACT_VERSION,

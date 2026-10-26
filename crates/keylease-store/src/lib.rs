@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use keylease_core::{
     AccessLease, AccountId, AgentId, ApprovalRecord, ApprovalState, AuditEvent, ConnectionId,
     ConnectionRecord, DataBudget, DataUsage, GroupId, ItemId, KeyLeaseError, LocalOwnerRole,
-    PolicyRule, ProjectId, Result, VaultGroup, VaultId, VaultItem, VaultProject,
+    PolicyRule, ProjectId, Result, TrustRecord, VaultGroup, VaultId, VaultItem, VaultProject,
 };
 use keylease_crypto::{
     EncryptedItem, PasswordSlot, SecretKey, WrappedKey, create_password_slot, decrypt_item,
@@ -1438,6 +1438,24 @@ impl NativeStore {
         now: DateTime<Utc>,
         audit_event: Option<&AuditEvent>,
     ) -> Result<ApprovalRecord> {
+        self.decide_pending_approval_with_trust(id, decision, now, audit_event, None)
+    }
+
+    /// Decides a pending approval and, when the approver asked for one,
+    /// stores the materialized trust in the same transaction.
+    pub fn decide_pending_approval_with_trust(
+        &self,
+        id: &str,
+        decision: ApprovalState,
+        now: DateTime<Utc>,
+        audit_event: Option<&AuditEvent>,
+        trust: Option<(&TrustRecord, &PolicyRule)>,
+    ) -> Result<ApprovalRecord> {
+        if trust.is_some() && decision != ApprovalState::Approved {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "only an approval can grant trust".into(),
+            });
+        }
         if !matches!(
             decision,
             ApprovalState::Approved | ApprovalState::Denied | ApprovalState::Revoked
@@ -1472,12 +1490,40 @@ impl NativeStore {
                 reason: "approval is no longer pending".into(),
             });
         }
-        record.state = decision;
+        // An approval answered with a trust is spent by the trust itself, so it
+        // cannot buy one extra use after the trust is revoked.
+        record.state = if trust.is_some() {
+            ApprovalState::Consumed
+        } else {
+            decision
+        };
         tx.execute(
             "UPDATE approvals SET record_json=?1 WHERE approval_id=?2",
             params![json(&record)?, id],
         )
         .map_err(|_| KeyLeaseError::Storage)?;
+        if let Some((trust, rule)) = trust {
+            if trust.approval_id.0 != id
+                || record.agent_id.as_ref() != Some(&trust.agent_id)
+                || rule.id != trust.id
+                || rule.agent_id.as_ref() != Some(&trust.agent_id)
+            {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "trust is not bound to this approval".into(),
+                });
+            }
+            tx.execute(
+                "INSERT INTO trusts(trust_id,agent_id,record_json,rule_json,expires_at) VALUES(?1,?2,?3,?4,?5)",
+                params![
+                    trust.id,
+                    trust.agent_id.0,
+                    json(trust)?,
+                    json(rule)?,
+                    trust.expires_at.to_rfc3339()
+                ],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        }
         if let Some(event) = audit_event {
             tx.execute(
                 "INSERT INTO audit_events(timestamp,event_json) VALUES(?1,?2)",
@@ -1766,6 +1812,17 @@ impl NativeStore {
                 resource: agent_id.0.clone(),
             });
         }
+        // Standing authority outlives a vault lock, so it must not outlive the
+        // client it was granted to.
+        connection
+            .execute("DELETE FROM trusts WHERE agent_id=?1", [&agent_id.0])
+            .map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "DELETE FROM agent_baseline_rules WHERE agent_id=?1",
+                [&agent_id.0],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
         Ok(())
     }
     pub fn save_policy_rule(&self, rule: &PolicyRule) -> Result<()> {
@@ -1892,7 +1949,196 @@ impl NativeStore {
     pub fn set_kill_switch(&self, enabled: bool) -> Result<()> {
         let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
         connection.execute("INSERT INTO runtime_flags(name,value) VALUES('kill_switch',?1) ON CONFLICT(name) DO UPDATE SET value=excluded.value", [enabled as i64]).map_err(|_| KeyLeaseError::Storage)?;
+        if enabled {
+            // Turning the kill switch off must not silently restore trusts.
+            connection
+                .execute("DELETE FROM trusts", [])
+                .map_err(|_| KeyLeaseError::Storage)?;
+        }
         Ok(())
+    }
+
+    /// Replaces the baseline rules of one agent. Baseline rules survive a
+    /// vault lock; they are removed with the client.
+    pub fn replace_agent_baseline_rules(
+        &self,
+        agent_id: &AgentId,
+        rules: &[PolicyRule],
+    ) -> Result<()> {
+        if rules
+            .iter()
+            .any(|rule| rule.agent_id.as_ref() != Some(agent_id))
+        {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "baseline rules must be bound to their agent".into(),
+            });
+        }
+        let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        tx.execute(
+            "DELETE FROM agent_baseline_rules WHERE agent_id=?1",
+            [&agent_id.0],
+        )
+        .map_err(|_| KeyLeaseError::Storage)?;
+        for rule in rules {
+            tx.execute(
+                "INSERT INTO agent_baseline_rules(rule_id,agent_id,record_json) VALUES(?1,?2,?3)",
+                params![rule.id, agent_id.0, json(rule)?],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        }
+        tx.commit().map_err(|_| KeyLeaseError::Storage)
+    }
+
+    /// Rules that outlive a vault lock: agent baselines and unexpired trusts.
+    /// Expired trusts are purged as a side effect.
+    pub fn load_standing_rules(&self, now: DateTime<Utc>) -> Result<Vec<PolicyRule>> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "DELETE FROM trusts WHERE expires_at<=?1",
+                [now.to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let mut rules = Vec::new();
+        for sql in [
+            "SELECT record_json FROM agent_baseline_rules ORDER BY rule_id",
+            "SELECT rule_json FROM trusts ORDER BY trust_id",
+        ] {
+            let mut stmt = connection
+                .prepare(sql)
+                .map_err(|_| KeyLeaseError::Storage)?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(|_| KeyLeaseError::Storage)?;
+            for row in rows {
+                let rule: PolicyRule = from_json(&row.map_err(|_| KeyLeaseError::Storage)?)?;
+                if rule.expires_at.is_none_or(|end| end > now) {
+                    rules.push(rule);
+                }
+            }
+        }
+        Ok(rules)
+    }
+
+    pub fn list_trusts(&self, now: DateTime<Utc>) -> Result<Vec<TrustRecord>> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let mut stmt = connection
+            .prepare("SELECT record_json FROM trusts WHERE expires_at>?1 ORDER BY expires_at")
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let rows = stmt
+            .query_map([now.to_rfc3339()], |r| r.get::<_, String>(0))
+            .map_err(|_| KeyLeaseError::Storage)?;
+        rows.map(|row| from_json(&row.map_err(|_| KeyLeaseError::Storage)?))
+            .collect()
+    }
+
+    /// Revokes one trust and appends its audit event in the same transaction.
+    pub fn revoke_trust(&self, id: &str, event: &AuditEvent) -> Result<()> {
+        let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let changed = tx
+            .execute("DELETE FROM trusts WHERE trust_id=?1", [id])
+            .map_err(|_| KeyLeaseError::Storage)?;
+        if changed == 0 {
+            return Err(KeyLeaseError::NotFound {
+                resource: id.into(),
+            });
+        }
+        tx.execute(
+            "INSERT INTO audit_events(timestamp,event_json) VALUES(?1,?2)",
+            params![event.timestamp.to_rfc3339(), json(event)?],
+        )
+        .map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().map_err(|_| KeyLeaseError::Storage)
+    }
+
+    /// The pending or approved approval an agent already holds for a request
+    /// digest, so a retried request does not queue a duplicate.
+    pub fn find_open_approval(
+        &self,
+        agent_id: &AgentId,
+        request_digest_hex: &str,
+        policy_version: u64,
+        now: DateTime<Utc>,
+    ) -> Result<Option<ApprovalRecord>> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let mut stmt = connection
+            .prepare("SELECT record_json FROM approvals ORDER BY rowid DESC")
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|_| KeyLeaseError::Storage)?;
+        for row in rows {
+            let record: ApprovalRecord = from_json(&row.map_err(|_| KeyLeaseError::Storage)?)?;
+            if record.agent_id.as_ref() == Some(agent_id)
+                && record.request_digest_hex == request_digest_hex
+                && record.policy_version == policy_version
+                && record.expires_at > now
+                && matches!(
+                    record.state,
+                    ApprovalState::Pending | ApprovalState::Approved
+                )
+            {
+                return Ok(Some(record));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Atomically consumes an approved approval bound to exactly this digest
+    /// and policy version, appending the use's audit event. Used by vault
+    /// commands, which hold no lease.
+    pub fn consume_approval_with_audit(
+        &self,
+        approval_id: &str,
+        request_digest_hex: &str,
+        policy_version: u64,
+        now: DateTime<Utc>,
+        event: &AuditEvent,
+    ) -> Result<ApprovalRecord> {
+        let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let raw: String = tx
+            .query_row(
+                "SELECT record_json FROM approvals WHERE approval_id=?1",
+                [approval_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| KeyLeaseError::Storage)?
+            .ok_or_else(|| KeyLeaseError::NotFound {
+                resource: approval_id.into(),
+            })?;
+        let mut approval: ApprovalRecord = from_json(&raw)?;
+        if approval.state != ApprovalState::Approved
+            || approval.request_digest_hex != request_digest_hex
+            || approval.policy_version != policy_version
+            || approval.expires_at <= now
+        {
+            return Err(KeyLeaseError::Denied {
+                reason: "approval is invalid, expired, or bound to another request".into(),
+            });
+        }
+        approval.state = ApprovalState::Consumed;
+        tx.execute(
+            "UPDATE approvals SET record_json=?1 WHERE approval_id=?2",
+            params![json(&approval)?, approval_id],
+        )
+        .map_err(|_| KeyLeaseError::Storage)?;
+        tx.execute(
+            "INSERT INTO audit_events(timestamp,event_json) VALUES(?1,?2)",
+            params![event.timestamp.to_rfc3339(), json(event)?],
+        )
+        .map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().map_err(|_| KeyLeaseError::Storage)?;
+        Ok(approval)
     }
 
     pub fn kill_switch_enabled(&self) -> Result<bool> {
@@ -2333,6 +2579,8 @@ CREATE TABLE IF NOT EXISTS local_client_roles(agent_id TEXT PRIMARY KEY,role TEX
 CREATE TABLE IF NOT EXISTS policy_rules(rule_id TEXT PRIMARY KEY,record_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS connections(connection_id TEXT PRIMARY KEY,record_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS device_identity(device_id TEXT PRIMARY KEY,provenance TEXT NOT NULL,created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS agent_baseline_rules(rule_id TEXT PRIMARY KEY,agent_id TEXT NOT NULL,record_json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS trusts(trust_id TEXT PRIMARY KEY,agent_id TEXT NOT NULL,record_json TEXT NOT NULL,rule_json TEXT NOT NULL,expires_at TEXT NOT NULL);
 "#;
 
 #[cfg(test)]
@@ -2610,6 +2858,7 @@ mod tests {
             task_id: None,
             risk: None,
             semantic_summary: None,
+            purpose: None,
         };
         store.save_approval(&approval).unwrap();
         store

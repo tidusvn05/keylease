@@ -26,6 +26,8 @@ use tokio::{
 };
 use zeroize::Zeroizing;
 
+mod trust;
+
 #[derive(Parser)]
 #[command(
     name = "keylease",
@@ -37,12 +39,24 @@ struct Cli {
     db: PathBuf,
     #[arg(long, global = true)]
     socket: Option<PathBuf>,
-    #[arg(long, global = true)]
+    #[arg(long, global = true, env = "KEYLEASE_AGENT_ID")]
     agent_id: Option<String>,
-    #[arg(long, global = true)]
+    #[arg(long, global = true, env = "KEYLEASE_CLIENT_TOKEN_FILE")]
     client_token_file: Option<PathBuf>,
     #[arg(long, global = true, default_value = "default")]
     client_session: String,
+    /// Why the agent needs this; shown to the approver and bound to the approval.
+    #[arg(long, global = true, env = "KEYLEASE_PURPOSE")]
+    purpose: Option<String>,
+    /// When a request needs approval, wait up to this many seconds for it
+    /// instead of exiting with `approval_required`.
+    #[arg(
+        long,
+        global = true,
+        env = "KEYLEASE_WAIT_APPROVAL",
+        default_value_t = 0
+    )]
+    wait_approval: u64,
     #[command(subcommand)]
     command: Command,
 }
@@ -111,6 +125,11 @@ enum Command {
     Approval {
         #[command(subcommand)]
         command: ApprovalCommand,
+    },
+    /// Time-boxed trusts granted from approvals.
+    Trust {
+        #[command(subcommand)]
+        command: trust::TrustCommand,
     },
     Gate {
         #[command(subcommand)]
@@ -256,9 +275,17 @@ enum VaultCommand {
 }
 #[derive(Subcommand)]
 enum ClientCommand {
-    Register { name: String },
+    Register {
+        name: String,
+        /// Install the enrolled-agent baseline: redacted reads are allowed,
+        /// secret reads and writes queue an approval (ADR 0005).
+        #[arg(long)]
+        baseline: bool,
+    },
     List,
-    Revoke { id: String },
+    Revoke {
+        id: String,
+    },
 }
 #[derive(Subcommand)]
 enum GrantCommand {
@@ -368,6 +395,13 @@ enum AgentCommand {
         handoff_id: String,
         #[arg(long)]
         json: bool,
+    },
+    /// Register a least-privilege agent client for the unlocked vault.
+    Enroll {
+        name: String,
+        /// Where to write the agent's token (mode 0600, never overwritten).
+        #[arg(long)]
+        token_file: Option<PathBuf>,
     },
 }
 
@@ -583,7 +617,15 @@ enum LeaseCommand {
 }
 #[derive(Subcommand)]
 enum ApprovalCommand {
+    /// Approve directly against the database (admin, master password).
     Approve { id: String },
+    /// List pending approvals through the running daemon.
+    List {
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+    },
+    /// Decide a pending approval through the running daemon.
+    Decide(trust::DecideArgs),
 }
 #[derive(Subcommand)]
 enum GateCommand {
@@ -618,6 +660,7 @@ async fn main() {
 
 async fn run() -> Result<()> {
     let mut cli = Cli::parse();
+    let _ = APPROVAL_WAIT_SECONDS.set(cli.wait_approval.min(600));
     let socket = cli.socket.clone().unwrap_or_else(default_socket);
     let command = std::mem::replace(&mut cli.command, Command::Status);
     match command {
@@ -785,7 +828,21 @@ async fn run() -> Result<()> {
         Command::Entries { command } => entry_command(&cli, &socket, command).await,
         Command::Connection { command } => connection_command(&cli, &socket, command).await,
         Command::Lease { command } => lease_command(&cli, &socket, command).await,
-        Command::Approval { command } => approval_command(&cli.db, command),
+        Command::Approval { command } => match command {
+            ApprovalCommand::List { limit } => {
+                print_rpc(
+                    &socket,
+                    RpcRequest::ApprovalsList {
+                        auth: auth(&cli)?,
+                        limit,
+                    },
+                )
+                .await
+            }
+            ApprovalCommand::Decide(args) => trust::decide(&cli, &socket, args).await,
+            command => approval_command(&cli.db, command),
+        },
+        Command::Trust { command } => trust::trust_command(&cli, &socket, command).await,
         Command::Gate { command } => gate_command(&cli, &socket, command).await,
         Command::Audit { command } => {
             let service = admin_service(&cli.db)?;
@@ -1438,11 +1495,20 @@ fn vault_command(db: &Path, command: VaultCommand) -> Result<()> {
 fn client_command(db: &Path, command: ClientCommand) -> Result<()> {
     let service = admin_service(db)?;
     match command {
-        ClientCommand::Register { name } => {
+        ClientCommand::Register { name, baseline } => {
             let (agent_id, token) = service.register_client(&name)?;
-            print_json(
-                &json!({"agent_id":agent_id,"client_token":token,"warning":"store this once in a mode-0600 file"}),
-            )
+            let baseline_rule_ids = if baseline {
+                let vault_id = service.current_vault_id()?;
+                Some(service.install_agent_baseline(&agent_id, &vault_id)?)
+            } else {
+                None
+            };
+            print_json(&json!({
+                "agent_id":agent_id,
+                "client_token":token,
+                "baseline_rule_ids":baseline_rule_ids,
+                "warning":"store this once in a mode-0600 file"
+            }))
         }
         ClientCommand::List => print_json(&service.list_clients()?),
         ClientCommand::Revoke { id } => {
@@ -1532,6 +1598,9 @@ fn grant_command(db: &Path, command: GrantCommand) -> Result<()> {
 
 async fn agent_command(cli: &Cli, socket: &Path, command: AgentCommand) -> Result<()> {
     match command {
+        AgentCommand::Enroll { name, token_file } => {
+            trust::enroll_agent(cli, socket, &name, token_file).await
+        }
         AgentCommand::NewItem { handoff_id, json } => {
             let value = rpc(
                 socket,
@@ -2140,6 +2209,7 @@ fn approval_command(db: &Path, command: ApprovalCommand) -> Result<()> {
             service.approve(&id)?;
             print_json(&json!({"approved":id}))
         }
+        ApprovalCommand::List { .. } | ApprovalCommand::Decide(_) => unreachable!(),
     }
 }
 async fn gate_command(cli: &Cli, socket: &Path, command: GateCommand) -> Result<()> {
@@ -2273,6 +2343,7 @@ fn auth(cli: &Cli) -> Result<RpcAuth> {
         agent_id: AgentId(agent),
         token: SecretValue(token.trim().to_owned()),
         session_id: cli.client_session.clone(),
+        purpose: cli.purpose.clone(),
     })
 }
 fn read_onepux_source(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
@@ -2383,12 +2454,39 @@ async fn print_rpc(socket: &Path, request: RpcRequest) -> Result<()> {
 }
 
 async fn rpc(socket: &Path, request: RpcRequest) -> Result<Value> {
+    let encoded = Zeroizing::new(serde_json::to_vec(&request).map_err(|_| KeyLeaseError::Storage)?);
+    drop(request);
+    let wait = std::time::Duration::from_secs(*APPROVAL_WAIT_SECONDS.get().unwrap_or(&0));
+    let started = std::time::Instant::now();
+    let mut announced = false;
+    loop {
+        match rpc_once(socket, &encoded).await {
+            Err(KeyLeaseError::ApprovalRequired { approval_id }) if started.elapsed() < wait => {
+                if !announced {
+                    eprintln!(
+                        "KeyLease: approval {approval_id} is pending; approve it in KeyLease \
+                         (waiting up to {}s)",
+                        wait.as_secs()
+                    );
+                    announced = true;
+                }
+                tokio::time::sleep(APPROVAL_POLL_INTERVAL).await;
+            }
+            other => return other,
+        }
+    }
+}
+
+/// How long `--wait-approval` allows a request to wait; set once in `run`.
+static APPROVAL_WAIT_SECONDS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+const APPROVAL_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+async fn rpc_once(socket: &Path, encoded: &[u8]) -> Result<Value> {
     let mut stream = UnixStream::connect(socket)
         .await
         .map_err(|_| KeyLeaseError::ConnectorUnavailable { retryable: true })?;
-    let encoded = Zeroizing::new(serde_json::to_vec(&request).map_err(|_| KeyLeaseError::Storage)?);
     stream
-        .write_all(&encoded)
+        .write_all(encoded)
         .await
         .map_err(|_| KeyLeaseError::Storage)?;
     stream
@@ -2494,6 +2592,7 @@ mod tests {
             agent_id: AgentId("agent_test".into()),
             token: SecretValue("client-token-fixture".into()),
             session_id: "test-session".into(),
+            purpose: None,
         };
         let debug = format!("{auth:?}");
         assert!(!debug.contains("client-token-fixture"));
@@ -2641,12 +2740,14 @@ mod tests {
             task_id: None,
             risk: None,
             semantic_summary: None,
+            purpose: None,
         };
         store.save_approval(&approval).unwrap();
         let auth = RpcAuth {
             agent_id,
             token: SecretValue(token),
             session_id: "desktop-test".into(),
+            purpose: None,
         };
 
         let connections = handle_rpc(
@@ -2753,6 +2854,7 @@ mod tests {
                 auth: auth.clone(),
                 id: approval.id.0,
                 approve: true,
+                trust: None,
             },
         )
         .await

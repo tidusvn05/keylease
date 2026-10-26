@@ -76,4 +76,28 @@ pub struct ActorContext {
     pub human_principal: Option<String>,
     pub on_behalf_of: Option<String>,
     pub client_session_id: String,
+    /// Agent-supplied reason for this request, shown to an approver. It is
+    /// part of the canonical digest when present, so an approval cannot be
+    /// replayed under a different stated purpose. It is untrusted text and
+    /// is never written to the audit log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
+}
+
+/// Longest accepted `ActorContext::purpose`, in characters.
+pub const MAX_PURPOSE_CHARS: usize = 280;
+
+/// Validates an agent-supplied purpose before it is bound into a request.
+pub fn validate_purpose(purpose: &str) -> crate::Result<()> {
+    if purpose.trim().is_empty()
+        || purpose.chars().count() > MAX_PURPOSE_CHARS
+        || purpose.chars().any(char::is_control)
+    {
+        return Err(crate::KeyLeaseError::InvalidRequest {
+            reason: format!(
+                "purpose must be 1..={MAX_PURPOSE_CHARS} characters without control characters"
+            ),
+        });
+    }
+    Ok(())
 }

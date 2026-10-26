@@ -144,8 +144,10 @@ pending approval and shows agent, action, resource, target and purpose.
 An approver may answer an approval with a scope and a duration instead of a
 single use:
 
-- **Scope:** this exact request · this item for this agent · this target
-  (SSH host, database role, web origin) for this agent.
+- **Scope:** this resource (and anything beneath it) for this agent · every
+  field of this item for this agent. Exact-argument trust is not offered:
+  approvals keep only argument fingerprints, never values that may be secrets,
+  so a "this exact request" answer is simply a one-time approval.
 - **Duration:** once · 30 minutes · 1 hour · 6 hours · 1 day · 3 days · 7 days.
 
 The answer is materialized as an ordinary `PolicyRule` with `effect: allow`,
@@ -155,8 +157,10 @@ policy model is introduced, so simulation, effective-permission listing and
 audit already cover it. Each such rule carries a `trust_id` that every later
 use records in its audit event.
 
-Trust is granted to the pair **(agent identity, host device)**, never to a
-device alone, because one machine runs many agents.
+Trust is granted to an agent identity, never to a device alone, because one
+machine runs many agents. Until key-bound identity (section 6) lands, that
+identity is the registered client; binding a trust to a host key as well is
+part of section 6.
 
 Maximum duration is capped by risk tier and the UI defaults to the shortest
 option:
@@ -250,8 +254,10 @@ The node exposes pairing and approval endpoints on its existing HTTPS listener
 
 ## Rollout
 
-1. Vault approvals, `purpose`, macOS notifications, optional key-bound client
-   registration and time-boxed trust (granted only to key-bound clients).
+1. Vault approvals, `purpose`, agent enrollment with a least-privilege
+   baseline, and time-boxed trust. **Implemented** (see
+   `docs/agent-approvals.md`). macOS notifications and the trust picker need the
+   Swift app and are not done; key-bound identity moved to step 6.
 2. SSH agent.
 3. PostgreSQL proxy and `db query`.
 4. Standalone VPS mode A, with `approver_unavailable` and unlock options.

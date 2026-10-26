@@ -24,6 +24,9 @@ pub struct AuditEvent {
     pub cell_count: Option<u64>,
     pub byte_count: Option<u64>,
     pub changed_fields: Vec<String>,
+    /// The time-boxed trust that authorized this use, when one did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust_id: Option<String>,
 }
 
 impl AuditEvent {

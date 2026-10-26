@@ -32,6 +32,10 @@ use tokio::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
+mod trust;
+pub use trust::{ApprovalDecisionOutcome, EnrolledAgent};
+use trust::{VAULT_CONNECTION_ID, vault_action_risk};
+
 const AUTH_FAILURE_LIMIT: usize = 10;
 const AUTH_FAILURE_WINDOW: StdDuration = StdDuration::from_secs(60);
 const AGENT_HANDOFF_TTL: StdDuration = StdDuration::from_secs(2 * 60 * 60);
@@ -466,7 +470,8 @@ pub enum LeaseRequestOutcome {
 
 impl KeyLeaseService {
     pub fn new(store: Arc<NativeStore>) -> Result<Self> {
-        let rules = store.load_policy_rules()?;
+        let mut rules = store.load_policy_rules()?;
+        rules.extend(store.load_standing_rules(Utc::now())?);
         let mut connectors: HashMap<String, Arc<dyn Connector>> = HashMap::new();
         connectors.insert("fake".into(), Arc::new(FakeConnector::default()));
         connectors.insert(
@@ -716,6 +721,7 @@ impl KeyLeaseService {
             human_principal: None,
             on_behalf_of: None,
             client_session_id: session_id.into(),
+            purpose: None,
         })
     }
     pub fn add_grant(&self, rule: PolicyRule) -> Result<()> {
@@ -731,15 +737,13 @@ impl KeyLeaseService {
         }
         self.store.save_policy_rule(&rule)?;
         let rules = self.store.load_policy_rules()?;
-        *self.policy.write().map_err(|_| KeyLeaseError::Storage)? = RulePolicyEngine::new(rules);
-        Ok(())
+        self.install_policy(rules)
     }
     /// Atomically activates a complete signed-policy rule set at the local
     /// enforcement boundary and revokes leases issued under the old version.
     pub fn replace_policy_rules(&self, rules: Vec<PolicyRule>) -> Result<()> {
         self.store.replace_policy_rules(&rules)?;
-        *self.policy.write().map_err(|_| KeyLeaseError::Storage)? = RulePolicyEngine::new(rules);
-        Ok(())
+        self.install_policy(rules)
     }
     pub fn list_grants(&self) -> Result<Vec<PolicyRule>> {
         self.store.load_policy_rules()
@@ -747,8 +751,7 @@ impl KeyLeaseService {
     pub fn revoke_grant(&self, id: &str) -> Result<()> {
         self.store.delete_policy_rule(id)?;
         let rules = self.store.load_policy_rules()?;
-        *self.policy.write().map_err(|_| KeyLeaseError::Storage)? = RulePolicyEngine::new(rules);
-        Ok(())
+        self.install_policy(rules)
     }
 
     pub fn create_group(&self, name: &str, parent_id: Option<GroupId>) -> Result<VaultGroup> {
@@ -3871,18 +3874,33 @@ impl KeyLeaseService {
                 }
                 PolicyDecision::Allow {
                     policy_version,
+                    matched_rule,
                     max_ttl_seconds,
                     max_uses,
                     budget,
-                    ..
-                } => (
-                    policy_version,
-                    max_ttl_seconds,
-                    max_uses,
-                    budget,
-                    None,
-                    None,
-                ),
+                } => {
+                    self.confirm_standing_rule(&matched_rule)?;
+                    if matched_rule.starts_with(TRUST_RULE_PREFIX) {
+                        let mut event = self.action_audit_event(
+                            actor,
+                            &canonical,
+                            "allow",
+                            "trust_used",
+                            Some(policy_version),
+                            None,
+                        );
+                        event.trust_id = Some(matched_rule);
+                        self.store.append_audit(&event)?;
+                    }
+                    (
+                        policy_version,
+                        max_ttl_seconds,
+                        max_uses,
+                        budget,
+                        None,
+                        None,
+                    )
+                }
                 PolicyDecision::RequireApproval {
                     policy_version,
                     request_digest_hex,
@@ -3918,6 +3936,7 @@ impl KeyLeaseService {
                             task_id: canonical.request.task_id.clone(),
                             risk: Some(canonical.spec.risk.clone()),
                             semantic_summary: Some(approval_semantic_summary(&canonical)),
+                            purpose: actor.purpose.clone(),
                         };
                         let event = self.action_audit_event(
                             actor,
@@ -3981,6 +4000,7 @@ impl KeyLeaseService {
                 workload_id: None,
                 human_principal: Some("local-human".into()),
                 on_behalf_of: None,
+                purpose: None,
                 client_session_id: vault.session_id.clone(),
             };
             let resource = format!("kl://{}/approval/{id}", vault.vault_id.0);
@@ -4052,39 +4072,16 @@ impl KeyLeaseService {
         id: &str,
         approve: bool,
     ) -> Result<ApprovalRecord> {
-        self.with_vault(|vault| {
-            let resource = format!("kl://{}/approval/{id}", vault.vault_id.0);
-            self.authorize_vault(
-                actor,
-                "approval:decide",
-                &resource,
-                serde_json::json!({"approve":approve}),
-            )?;
-            let event = self.vault_audit_event(
-                actor,
-                "approval:decide",
-                &resource,
-                "allow",
-                if approve { "approved" } else { "denied" },
-                vec!["state".into()],
-            );
-            self.store.decide_pending_approval(
-                id,
-                if approve {
-                    ApprovalState::Approved
-                } else {
-                    ApprovalState::Denied
-                },
-                Utc::now(),
-                Some(&event),
-            )
-        })
+        self.decide_approval_with_trust_authorized(actor, id, approve, None)
+            .map(|outcome| outcome.approval)
     }
     pub fn revoke_lease(&self, id: &str) -> Result<()> {
         self.store.revoke_lease(id)
     }
     pub fn kill_switch(&self, enabled: bool) -> Result<()> {
-        self.store.set_kill_switch(enabled)
+        self.store.set_kill_switch(enabled)?;
+        // Enabling the switch deletes every trust; drop them from the engine too.
+        self.drop_inactive_trust_rules()
     }
 
     pub async fn execute(
@@ -4136,7 +4133,14 @@ impl KeyLeaseService {
             .evaluate(&canonical.request, canonical.spec.risk.clone(), Utc::now());
         let current_version = match current {
             PolicyDecision::Deny { reason, .. } => return Err(KeyLeaseError::Denied { reason }),
-            PolicyDecision::Allow { policy_version, .. } => policy_version,
+            PolicyDecision::Allow {
+                policy_version,
+                matched_rule,
+                ..
+            } => {
+                self.confirm_standing_rule(&matched_rule)?;
+                policy_version
+            }
             PolicyDecision::RequireApproval { policy_version, .. }
                 if lease.approval_id.is_some() =>
             {
@@ -4345,8 +4349,11 @@ impl KeyLeaseService {
     }
     fn revoke_session_authority(&self) -> Result<()> {
         self.store.revoke_session_authority()?;
+        // Session grants and owner authority end here. Standing rules (agent
+        // baselines and trusts) survive, but every use still needs an unlocked
+        // vault, so they authorize nothing until the next unlock.
         *self.policy.write().map_err(|_| KeyLeaseError::Storage)? =
-            RulePolicyEngine::new(Vec::new());
+            RulePolicyEngine::new(self.store.load_standing_rules(Utc::now())?);
         self.agent_handoffs
             .lock()
             .map_err(|_| KeyLeaseError::Storage)?
@@ -4359,6 +4366,7 @@ impl KeyLeaseService {
     }
     fn reload_policy_for_client(&self, agent_id: &AgentId, vault_id: &VaultId) -> Result<()> {
         let mut rules = self.store.load_policy_rules()?;
+        rules.extend(self.store.load_standing_rules(Utc::now())?);
         match self.store.local_owner_role(agent_id)? {
             Some(LocalOwnerRole::DesktopOwner) => {
                 rules.push(desktop_owner_rule(agent_id.clone(), vault_id))
@@ -4383,31 +4391,41 @@ impl KeyLeaseService {
             request_id: RequestId::new(),
             subject: actor.clone(),
             task_id: None,
-            connection_id: ConnectionId("conn_vault".into()),
+            connection_id: ConnectionId(VAULT_CONNECTION_ID.into()),
             resource: resource.into(),
             action: action.into(),
             arguments,
             idempotency_key: "authorization-only".into(),
         };
-        match self
+        let risk = vault_action_risk(action);
+        let decision = self
             .policy
             .read()
             .map_err(|_| KeyLeaseError::Storage)?
-            .evaluate(&request, RiskTier::R2, Utc::now())
-        {
-            PolicyDecision::Allow { .. } => Ok(()),
-            PolicyDecision::RequireApproval { .. } => {
-                self.audit_vault(
-                    actor,
-                    action,
-                    resource,
-                    "require_approval",
-                    "denied",
-                    vec![],
-                )?;
-                Err(KeyLeaseError::Denied {
-                    reason: "vault command requires explicit approval flow".into(),
-                })
+            .evaluate(&request, risk.clone(), Utc::now());
+        match decision {
+            PolicyDecision::Allow { matched_rule, .. } => {
+                self.confirm_standing_rule(&matched_rule)?;
+                if matched_rule.starts_with(TRUST_RULE_PREFIX) {
+                    let mut event = self.vault_audit_event(
+                        actor,
+                        action,
+                        resource,
+                        "allow",
+                        "trust_used",
+                        vec![],
+                    );
+                    event.trust_id = Some(matched_rule);
+                    self.store.append_audit(&event)?;
+                }
+                Ok(())
+            }
+            PolicyDecision::RequireApproval {
+                policy_version,
+                request_digest_hex,
+                ..
+            } => {
+                self.vault_approval_gate(actor, &request, policy_version, &request_digest_hex, risk)
             }
             PolicyDecision::Deny { reason, .. } => {
                 self.audit_vault(actor, action, resource, "deny", "denied", vec![])?;
@@ -4517,6 +4535,7 @@ impl KeyLeaseService {
             cell_count: None,
             byte_count: None,
             changed_fields,
+            trust_id: None,
         }
     }
     fn audit_action(
@@ -4565,6 +4584,7 @@ impl KeyLeaseService {
             byte_count: response
                 .and_then(|r| serde_json::to_vec(&r.body).ok().map(|v| v.len() as u64)),
             changed_fields: vec![],
+            trust_id: None,
         }
     }
 }
@@ -4602,6 +4622,9 @@ fn desktop_owner_rule(agent_id: AgentId, vault_id: &VaultId) -> PolicyRule {
             "connection:revoke",
             "approval:list",
             "approval:decide",
+            "trust:list",
+            "trust:revoke",
+            "client:enroll",
             "audit:query",
         ]
         .into_iter()
@@ -4666,6 +4689,8 @@ fn mobile_owner_rule(agent_id: AgentId, vault_id: &VaultId) -> PolicyRule {
             "connection:revoke",
             "approval:list",
             "approval:decide",
+            "trust:list",
+            "trust:revoke",
             "audit:query",
         ]
         .into_iter()
@@ -6050,54 +6075,12 @@ fn intersect_budget(policy: &DataBudget, connector: &DataBudget) -> DataBudget {
 }
 
 fn approval_semantic_summary(action: &CanonicalAction) -> ApprovalSemanticSummary {
-    let mut changed_fields = action
-        .request
-        .arguments
-        .as_object()
-        .map(|arguments| arguments.keys().cloned().collect::<Vec<_>>())
-        .unwrap_or_default();
-    changed_fields.sort();
-    let argument_fingerprints = changed_fields
-        .iter()
-        .filter_map(|field| {
-            let value = action.request.arguments.get(field)?;
-            let canonical = serde_json::to_vec(&keylease_core::canonical_json(value)).ok()?;
-            let value_type = match value {
-                Value::Null => "null",
-                Value::Bool(_) => "boolean",
-                Value::Number(_) => "number",
-                Value::String(_) => "string",
-                Value::Array(_) => "array",
-                Value::Object(_) => "object",
-            };
-            let length = match value {
-                Value::String(value) => Some(value.len() as u64),
-                Value::Array(value) => Some(value.len() as u64),
-                Value::Object(value) => Some(value.len() as u64),
-                _ => None,
-            };
-            Some(ArgumentFingerprint {
-                field: field.clone(),
-                value_type: value_type.into(),
-                length,
-                sha256: hex(&Sha256::digest(canonical)),
-            })
-        })
-        .collect();
-    let blast_radius = match action.spec.risk {
-        RiskTier::R0 => "metadata-only; no side effect",
-        RiskTier::R1 => "bounded read from one enrolled resource",
-        RiskTier::R2 => "reversible write to one enrolled resource",
-        RiskTier::R3 => "high-impact write to one exact enrolled resource",
-        RiskTier::R4 => "critical or destructive action",
-    };
-    ApprovalSemanticSummary {
-        operation: action.request.action.clone(),
-        target: action.request.resource.clone(),
-        changed_fields,
-        argument_fingerprints,
-        blast_radius: blast_radius.into(),
-    }
+    trust::semantic_summary(
+        &action.request.action,
+        &action.request.resource,
+        &action.request.arguments,
+        &action.spec.risk,
+    )
 }
 fn validate_action_budget(action: &CanonicalAction, budget: &DataBudget) -> Result<()> {
     if action.request.action == "google_sheets.rows.append"
@@ -7161,6 +7144,7 @@ mod tests {
             agent_id: AgentId("agent_unknown".into()),
             workload_id: None,
             human_principal: None,
+            purpose: None,
             on_behalf_of: None,
             client_session_id: "s".into(),
         };

@@ -80,6 +80,10 @@ pub struct RpcAuth {
     pub agent_id: AgentId,
     pub token: SecretValue,
     pub session_id: String,
+    /// The agent's stated reason for this request, shown to an approver and
+    /// bound into the approval digest. Untrusted text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
@@ -318,6 +322,20 @@ pub enum RpcRequest {
         auth: RpcAuth,
         id: String,
         approve: bool,
+        /// Answer with a time-boxed trust instead of a single use.
+        #[serde(default)]
+        trust: Option<TrustDecision>,
+    },
+    TrustsList {
+        auth: RpcAuth,
+    },
+    TrustRevoke {
+        auth: RpcAuth,
+        id: String,
+    },
+    AgentEnroll {
+        auth: RpcAuth,
+        name: String,
     },
     AuditQuery {
         auth: RpcAuth,
@@ -793,9 +811,31 @@ pub async fn handle_rpc(
             serde_json::to_value(service.list_pending_approvals_authorized(&actor, limit)?)
                 .map_err(|_| KeyLeaseError::Storage)
         }
-        RpcRequest::ApprovalDecide { auth, id, approve } => {
+        RpcRequest::ApprovalDecide {
+            auth,
+            id,
+            approve,
+            trust,
+        } => {
             let actor = actor(service, &auth)?;
-            serde_json::to_value(service.decide_approval_authorized(&actor, &id, approve)?)
+            serde_json::to_value(
+                service.decide_approval_with_trust_authorized(&actor, &id, approve, trust)?,
+            )
+            .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::TrustsList { auth } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.list_trusts_authorized(&actor)?)
+                .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::TrustRevoke { auth, id } => {
+            let actor = actor(service, &auth)?;
+            service.revoke_trust_authorized(&actor, &id)?;
+            Ok(json!({"revoked": id}))
+        }
+        RpcRequest::AgentEnroll { auth, name } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.enroll_agent_authorized(&actor, &name)?)
                 .map_err(|_| KeyLeaseError::Storage)
         }
         RpcRequest::AuditQuery { auth, limit } => {
@@ -844,7 +884,12 @@ pub async fn handle_rpc(
 }
 
 fn actor(service: &KeyLeaseService, auth: &RpcAuth) -> Result<ActorContext> {
-    service.authenticate(&auth.agent_id, &auth.token.0, &auth.session_id)
+    if let Some(purpose) = &auth.purpose {
+        validate_purpose(purpose)?;
+    }
+    let mut actor = service.authenticate(&auth.agent_id, &auth.token.0, &auth.session_id)?;
+    actor.purpose = auth.purpose.clone();
+    Ok(actor)
 }
 
 /// Wraps a dispatch outcome in the canonical response envelope.

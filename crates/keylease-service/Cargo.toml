@@ -23,6 +23,7 @@ sha2.workspace = true
 tokio.workspace = true
 totp-rs.workspace = true
 url.workspace = true
+uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]

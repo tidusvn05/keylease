@@ -80,6 +80,7 @@ impl AgentEndpointIdentity {
             human_principal: None,
             on_behalf_of: self.on_behalf_of.clone(),
             client_session_id: self.client_session_id.clone(),
+            purpose: None,
         }
     }
 }

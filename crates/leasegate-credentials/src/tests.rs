@@ -192,6 +192,7 @@ fn actor() -> ActorContext {
         human_principal: None,
         on_behalf_of: None,
         client_session_id: "credential-test".into(),
+        purpose: None,
     }
 }
 

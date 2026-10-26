@@ -1682,6 +1682,7 @@ dependencies = [
  "tokio",
  "totp-rs",
  "url",
+ "uuid",
  "zeroize",
 ]
 
