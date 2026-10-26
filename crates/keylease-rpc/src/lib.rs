@@ -340,6 +340,17 @@ pub enum RpcRequest {
     SshIdentities {
         auth: RpcAuth,
     },
+    DbTarget {
+        auth: RpcAuth,
+        id: ItemId,
+    },
+    DbScram {
+        auth: RpcAuth,
+        id: ItemId,
+        database: String,
+        client_first_bare: String,
+        server_first: String,
+    },
     SshSign {
         auth: RpcAuth,
         /// Base64 SSH wire-format public key blob.
@@ -843,6 +854,28 @@ pub async fn handle_rpc(
             let actor = actor(service, &auth)?;
             service.revoke_trust_authorized(&actor, &id)?;
             Ok(json!({"revoked": id}))
+        }
+        RpcRequest::DbTarget { auth, id } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.db_target_authorized(&actor, &id)?)
+                .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::DbScram {
+            auth,
+            id,
+            database,
+            client_first_bare,
+            server_first,
+        } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.db_scram_authorized(
+                &actor,
+                &id,
+                &database,
+                &client_first_bare,
+                &server_first,
+            )?)
+            .map_err(|_| KeyLeaseError::Storage)
         }
         RpcRequest::SshIdentities { auth } => {
             let actor = actor(service, &auth)?;

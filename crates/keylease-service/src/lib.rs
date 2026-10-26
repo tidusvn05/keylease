@@ -32,8 +32,10 @@ use tokio::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
+mod db;
 mod ssh;
 mod trust;
+pub use db::{DbTarget, ScramClientFinal};
 pub use ssh::{SSH_AGENT_RSA_SHA2_256, SSH_AGENT_RSA_SHA2_512, SshIdentity, SshSignature};
 pub use trust::{ApprovalDecisionOutcome, EnrolledAgent};
 use trust::{VAULT_CONNECTION_ID, vault_action_risk};
@@ -4388,6 +4390,24 @@ impl KeyLeaseService {
         resource: &str,
         arguments: Value,
     ) -> Result<()> {
+        self.authorize_vault_at_risk(
+            actor,
+            action,
+            resource,
+            arguments,
+            vault_action_risk(action),
+        )
+    }
+    /// Authorizes a vault command whose risk depends on the item (for
+    /// example a production database), not only on the action.
+    fn authorize_vault_at_risk(
+        &self,
+        actor: &ActorContext,
+        action: &str,
+        resource: &str,
+        arguments: Value,
+        risk: RiskTier,
+    ) -> Result<()> {
         let request = ActionRequest {
             schema_version: CONTRACT_VERSION,
             request_id: RequestId::new(),
@@ -4399,7 +4419,6 @@ impl KeyLeaseService {
             arguments,
             idempotency_key: "authorization-only".into(),
         };
-        let risk = vault_action_risk(action);
         let decision = self
             .policy
             .read()

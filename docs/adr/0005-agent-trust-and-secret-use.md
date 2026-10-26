@@ -261,7 +261,12 @@ The node exposes pairing and approval endpoints on its existing HTTPS listener
 2. SSH agent. **Implemented** (`keylease ssh`, `keylease ssh-agent`; see
    `docs/ssh-agent.md`). Session-bind host binding and CA-issued ephemeral
    certificates are not done.
-3. PostgreSQL proxy and `db query`.
+3. PostgreSQL proxy and `db query`. **Proxy implemented** (`keylease db
+   psql|exec|proxy`; see `docs/db-proxy.md`) with a different split than
+   section 3 describes: the proxy runs in the agent's process and the service
+   answers only the SCRAM challenge, so the password stays in the service
+   without the daemon holding network listeners. Production items are R3.
+   `db query` (T0) is not done.
 4. Standalone VPS mode A, with unlock options. **Implemented** as
    `serve --password-file` and automatic use of a systemd
    `keylease-master-password` credential. Instead of an

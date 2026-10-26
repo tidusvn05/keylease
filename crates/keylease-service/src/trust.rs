@@ -42,6 +42,7 @@ const BASELINE_APPROVAL_ACTIONS: &[&str] = &[
     "group:create",
     "group:update",
     "ssh:sign",
+    "db:connect",
 ];
 
 /// Risk of a vault command, which caps how long it may be trusted.
@@ -51,7 +52,11 @@ pub(crate) fn vault_action_risk(action: &str) -> RiskTier {
             RiskTier::R0
         }
         "entry:read_username" | "group:create" | "group:update" => RiskTier::R1,
-        "entry:create" | "entry:update_standard_fields" | "entry:move" | "ssh:sign" => RiskTier::R2,
+        "entry:create"
+        | "entry:update_standard_fields"
+        | "entry:move"
+        | "ssh:sign"
+        | "db:connect" => RiskTier::R2,
         "entry:update_protected_fields" | "entry:update_totp" | "entry:delete" | "group:delete" => {
             RiskTier::R3
         }

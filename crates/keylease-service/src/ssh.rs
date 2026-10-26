@@ -226,11 +226,16 @@ impl KeyLeaseService {
                 })?;
             let fingerprint = key.public_key().fingerprint(HashAlg::Sha256).to_string();
             let resource = format!("kl://{}/{}", vault.vault_id.0, item.id.0);
-            self.authorize_vault(
+            let risk = match item.environment.as_deref().map(str::to_ascii_lowercase) {
+                Some(environment) if environment.starts_with("prod") => RiskTier::R3,
+                _ => RiskTier::R2,
+            };
+            self.authorize_vault_at_risk(
                 actor,
                 "ssh:sign",
                 &resource,
                 serde_json::json!({"fingerprint": fingerprint}),
+                risk,
             )?;
             // Decrypt only after the use is authorized.
             let key = unlock_key(&item, key)?;

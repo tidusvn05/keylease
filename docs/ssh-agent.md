@@ -42,7 +42,8 @@ Both use the client given by `KEYLEASE_AGENT_ID` / `KEYLEASE_CLIENT_TOKEN_FILE`
 ## Approval
 
 Listing public keys (`ssh:list_keys`) is part of an enrolled agent's baseline.
-Each signature is `ssh:sign` on the key item, risk R2:
+Each signature is `ssh:sign` on the key item, risk R2 (R3, at most one hour of
+trust, when the item's environment is `production`):
 
 - the first connection queues an approval and `ssh` simply waits (120 s by
   default, `--wait-approval` to change it) while you approve in KeyLease;
@@ -54,8 +55,8 @@ Each signature is `ssh:sign` on the key item, risk R2:
 The approval's arguments contain only the key fingerprint, never the session
 data, so it reads the same for every connection with that key. The SSH agent
 protocol does not reveal the destination host to the agent, so policy is per
-key. Use separate keys for staging and production if they need different
-trust.
+key. Use separate keys for staging and production, and mark the production
+key's item environment as `production`.
 
 ## Limits
 

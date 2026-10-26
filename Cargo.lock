@@ -1752,12 +1752,16 @@ dependencies = [
  "keylease-store",
  "leasegate-connectors",
  "leasegate-policy",
+ "rand 0.9.5",
  "rpassword",
+ "rustls",
  "schemars",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-rustls",
+ "webpki-roots",
  "zeroize",
 ]
 
@@ -1885,12 +1889,14 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "hmac 0.12.1",
  "keylease-1pux",
  "keylease-core",
  "keylease-kdbx",
  "keylease-store",
  "leasegate-connectors",
  "leasegate-policy",
+ "pbkdf2",
  "rand 0.9.5",
  "reqwest",
  "rsa",
@@ -2398,6 +2404,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ed6a7761f76e3b9f92dfb0a60a6a6477c61024b775147ff0973a02653abaf2"
 dependencies = [
  "digest 0.10.7",
+ "hmac 0.12.1",
 ]
 
 [[package]]
@@ -2960,6 +2967,7 @@ version = "0.23.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
 dependencies = [
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",

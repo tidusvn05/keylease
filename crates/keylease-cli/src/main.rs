@@ -26,6 +26,7 @@ use tokio::{
 };
 use zeroize::Zeroizing;
 
+mod db_proxy;
 mod ssh_agent;
 mod trust;
 
@@ -142,6 +143,11 @@ enum Command {
         /// Socket path; a private temporary one by default.
         #[arg(long)]
         agent_socket: Option<PathBuf>,
+    },
+    /// Reach PostgreSQL through a local proxy that never holds the password.
+    Db {
+        #[command(subcommand)]
+        command: db_proxy::DbCommand,
     },
     /// Run OpenSSH with a private, single-use KeyLease agent.
     #[command(trailing_var_arg = true)]
@@ -683,6 +689,7 @@ async fn run() -> Result<()> {
         Command::Ssh { .. } | Command::SshAgent { .. } if cli.wait_approval == 0 => {
             ssh_agent::DEFAULT_SIGN_WAIT_SECONDS
         }
+        Command::Db { .. } if cli.wait_approval == 0 => db_proxy::DEFAULT_CONNECT_WAIT_SECONDS,
         _ => cli.wait_approval,
     };
     let _ = APPROVAL_WAIT_SECONDS.set(wait.min(600));
@@ -883,6 +890,7 @@ async fn run() -> Result<()> {
             ssh_agent::run_agent(&cli, &socket, agent_socket).await
         }
         Command::Ssh { args } => ssh_agent::run_ssh(&cli, &socket, args).await,
+        Command::Db { command } => db_proxy::db_command(&cli, &socket, command).await,
         Command::Gate { command } => gate_command(&cli, &socket, command).await,
         Command::Audit { command } => {
             let service = admin_service(&cli.db)?;
