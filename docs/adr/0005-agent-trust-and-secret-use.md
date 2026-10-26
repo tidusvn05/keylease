@@ -273,6 +273,10 @@ The node exposes pairing and approval endpoints on its existing HTTPS listener
    `approver_unavailable` denial, a headless host's approvals are decided with
    the admin CLI (`approval approve`, master password), which is an approver.
 5. Pairing, signed remote approvals and remote unlock (mode B); then mobile.
+   **Pairing and signed remote approvals implemented** with the CLI as the
+   approver (`keylease serve --approver-listen`, `keylease remote`; see
+   `docs/remote-approval.md`). The macOS/mobile approver UI, push delivery and
+   remote unlock are not done.
 6. Signed client identity becomes required for new registrations.
 7. `keylease run` with output scrubbing; then browser login fill.
 

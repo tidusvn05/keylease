@@ -361,14 +361,35 @@ impl KeyLeaseService {
                 reason: "only an approval can grant trust".into(),
             });
         }
-        let granted = self.with_vault(|vault| {
-            let resource = format!("kl://{}/approval/{id}", vault.vault_id.0);
+        self.with_vault(|vault| {
             self.authorize_vault(
                 actor,
                 "approval:decide",
-                &resource,
+                &format!("kl://{}/approval/{id}", vault.vault_id.0),
                 serde_json::json!({"approve":approve}),
-            )?;
+            )
+        })?;
+        self.decide_approval_as(actor, id, approve, trust)
+    }
+
+    /// Records a decision whose authority the caller has already established:
+    /// the policy engine for a local client, a verified device signature for a
+    /// paired remote approver.
+    pub(crate) fn decide_approval_as(
+        &self,
+        actor: &ActorContext,
+        id: &str,
+        approve: bool,
+        trust: Option<TrustDecision>,
+    ) -> Result<ApprovalDecisionOutcome> {
+        let trust = trust.filter(|decision| decision.duration != TrustDuration::Once);
+        if trust.is_some() && !approve {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "only an approval can grant trust".into(),
+            });
+        }
+        let granted = self.with_vault(|vault| {
+            let resource = format!("kl://{}/approval/{id}", vault.vault_id.0);
             let pending = self.store.get_approval(id)?;
             if pending.agent_id.as_ref() == Some(&actor.agent_id) {
                 return Err(KeyLeaseError::Denied {

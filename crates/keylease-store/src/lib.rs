@@ -1958,6 +1958,105 @@ impl NativeStore {
         Ok(())
     }
 
+    pub fn save_pairing_code(&self, code_hash: &str, expires_at: DateTime<Utc>) -> Result<()> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "DELETE FROM pairing_codes WHERE expires_at<=?1",
+                [Utc::now().to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "INSERT INTO pairing_codes(code_hash,expires_at) VALUES(?1,?2)",
+                params![code_hash, expires_at.to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        Ok(())
+    }
+
+    /// Consumes a pairing code and stores the device in one transaction.
+    pub fn pair_approver_device<T: Serialize>(
+        &self,
+        code_hash: &str,
+        device: &T,
+        device_id: &str,
+        now: DateTime<Utc>,
+        event: &AuditEvent,
+    ) -> Result<()> {
+        let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let removed = tx
+            .execute(
+                "DELETE FROM pairing_codes WHERE code_hash=?1 AND expires_at>?2",
+                params![code_hash, now.to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        if removed != 1 {
+            return Err(KeyLeaseError::Denied {
+                reason: "pairing code is invalid or expired".into(),
+            });
+        }
+        tx.execute(
+            "INSERT INTO approver_devices(device_id,record_json,revoked) VALUES(?1,?2,0)",
+            params![device_id, json(device)?],
+        )
+        .map_err(|_| KeyLeaseError::Storage)?;
+        tx.execute(
+            "INSERT INTO audit_events(timestamp,event_json) VALUES(?1,?2)",
+            params![event.timestamp.to_rfc3339(), json(event)?],
+        )
+        .map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().map_err(|_| KeyLeaseError::Storage)
+    }
+
+    pub fn get_approver_device<T: serde::de::DeserializeOwned>(
+        &self,
+        device_id: &str,
+    ) -> Result<Option<T>> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .query_row(
+                "SELECT record_json FROM approver_devices WHERE device_id=?1 AND revoked=0",
+                [device_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|_| KeyLeaseError::Storage)?
+            .map(|raw| from_json(&raw))
+            .transpose()
+    }
+
+    pub fn list_approver_devices<T: serde::de::DeserializeOwned>(&self) -> Result<Vec<T>> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let mut stmt = connection
+            .prepare("SELECT record_json FROM approver_devices WHERE revoked=0 ORDER BY device_id")
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|_| KeyLeaseError::Storage)?;
+        rows.map(|row| from_json(&row.map_err(|_| KeyLeaseError::Storage)?))
+            .collect()
+    }
+
+    pub fn revoke_approver_device(&self, device_id: &str) -> Result<()> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let changed = connection
+            .execute(
+                "UPDATE approver_devices SET revoked=1 WHERE device_id=?1 AND revoked=0",
+                [device_id],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        if changed == 0 {
+            return Err(KeyLeaseError::NotFound {
+                resource: device_id.into(),
+            });
+        }
+        Ok(())
+    }
+
     /// Replaces the baseline rules of one agent. Baseline rules survive a
     /// vault lock; they are removed with the client.
     pub fn replace_agent_baseline_rules(
@@ -2606,6 +2705,8 @@ CREATE TABLE IF NOT EXISTS policy_rules(rule_id TEXT PRIMARY KEY,record_json TEX
 CREATE TABLE IF NOT EXISTS connections(connection_id TEXT PRIMARY KEY,record_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS device_identity(device_id TEXT PRIMARY KEY,provenance TEXT NOT NULL,created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS agent_baseline_rules(rule_id TEXT PRIMARY KEY,agent_id TEXT NOT NULL,record_json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS pairing_codes(code_hash TEXT PRIMARY KEY,expires_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS approver_devices(device_id TEXT PRIMARY KEY,record_json TEXT NOT NULL,revoked INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS trusts(trust_id TEXT PRIMARY KEY,agent_id TEXT NOT NULL,record_json TEXT NOT NULL,rule_json TEXT NOT NULL,expires_at TEXT NOT NULL);
 "#;
 

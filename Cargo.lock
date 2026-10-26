@@ -1743,9 +1743,11 @@ dependencies = [
 name = "keylease-cli"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "base64 0.22.1",
  "chrono",
  "clap",
+ "ed25519-dalek 3.0.0",
  "keylease-core",
  "keylease-rpc",
  "keylease-service",
@@ -1753,6 +1755,7 @@ dependencies = [
  "leasegate-connectors",
  "leasegate-policy",
  "rand 0.9.5",
+ "reqwest",
  "rpassword",
  "rustls",
  "schemars",
@@ -1889,6 +1892,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "ed25519-dalek 3.0.0",
  "hmac 0.12.1",
  "keylease-1pux",
  "keylease-core",

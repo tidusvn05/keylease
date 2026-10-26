@@ -26,6 +26,7 @@ use tokio::{
 };
 use zeroize::Zeroizing;
 
+mod approver;
 mod db_proxy;
 mod ssh_agent;
 mod trust;
@@ -75,6 +76,13 @@ enum Command {
         /// (`LoadCredentialEncrypted=`) is used when present.
         #[arg(long, conflicts_with = "start_locked")]
         password_file: Option<PathBuf>,
+        /// Serve the paired-approver API on this address (loopback; put a TLS
+        /// reverse proxy in front). See docs/remote-approval.md.
+        #[arg(long)]
+        approver_listen: Option<std::net::SocketAddr>,
+        /// Allow --approver-listen on a non-loopback address.
+        #[arg(long, requires = "approver_listen")]
+        approver_listen_public: bool,
     },
     Status,
     Unlock {
@@ -143,6 +151,11 @@ enum Command {
         /// Socket path; a private temporary one by default.
         #[arg(long)]
         agent_socket: Option<PathBuf>,
+    },
+    /// Pair approver devices with a headless node, and approve from them.
+    Remote {
+        #[command(subcommand)]
+        command: approver::RemoteCommand,
     },
     /// Reach PostgreSQL through a local proxy that never holds the password.
     Db {
@@ -700,6 +713,8 @@ async fn run() -> Result<()> {
             session_ttl_seconds,
             start_locked,
             password_file,
+            approver_listen,
+            approver_listen_public,
         } => {
             let password_file = password_file.or_else(systemd_password_credential);
             serve(
@@ -708,6 +723,7 @@ async fn run() -> Result<()> {
                 session_ttl_seconds,
                 start_locked,
                 password_file.as_deref(),
+                approver_listen.map(|address| (address, approver_listen_public)),
             )
             .await
         }
@@ -891,6 +907,7 @@ async fn run() -> Result<()> {
         }
         Command::Ssh { args } => ssh_agent::run_ssh(&cli, &socket, args).await,
         Command::Db { command } => db_proxy::db_command(&cli, &socket, command).await,
+        Command::Remote { command } => approver::remote_command(&cli, command).await,
         Command::Gate { command } => gate_command(&cli, &socket, command).await,
         Command::Audit { command } => {
             let service = admin_service(&cli.db)?;
@@ -1190,7 +1207,7 @@ async fn desktop_command(command: DesktopCommand) -> Result<()> {
         DesktopCommand::Serve { home } => {
             let paths = desktop_paths(home)?;
             ensure_desktop_home(&paths)?;
-            serve(&paths.database, &paths.socket, 28_800, true, None).await
+            serve(&paths.database, &paths.socket, 28_800, true, None, None).await
         }
         DesktopCommand::VaultsList => {
             let root = managed_home().ok_or_else(|| KeyLeaseError::InvalidRequest {
@@ -2298,6 +2315,7 @@ async fn serve(
     ttl: i64,
     start_locked: bool,
     password_file: Option<&Path>,
+    approver: Option<(std::net::SocketAddr, bool)>,
 ) -> Result<()> {
     let owner_uid = fs::metadata(db)
         .map_err(|_| KeyLeaseError::NotFound {
@@ -2326,6 +2344,17 @@ async fn serve(
     } else if !start_locked {
         let password = prompt("Master password: ")?;
         service.unlock(password.as_bytes(), Duration::seconds(ttl))?;
+    }
+    if let Some((address, allow_public)) = approver {
+        let service = service.clone();
+        if !address.ip().is_loopback() && !allow_public {
+            return approver::serve_approver(service, address, false).await;
+        }
+        tokio::spawn(async move {
+            if let Err(error) = approver::serve_approver(service, address, allow_public).await {
+                eprintln!("KeyLease approver API stopped: {error:?}");
+            }
+        });
     }
     let listener = UnixListener::bind(socket).map_err(|_| KeyLeaseError::Storage)?;
     fs::set_permissions(socket, fs::Permissions::from_mode(0o600))

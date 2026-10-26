@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 base64.workspace = true
 chrono.workspace = true
+ed25519-dalek.workspace = true
 keylease-core = { path = "../keylease-core" }
 keylease-1pux = { path = "../keylease-1pux" }
 keylease-kdbx = { path = "../keylease-kdbx" }
