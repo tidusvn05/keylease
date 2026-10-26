@@ -424,10 +424,28 @@ final class AppController {
         let quoted = (try? JSONEncoder().encode(entry.title))
             .map { String(decoding: $0, as: UTF8.self) }
             ?? "\"\(entry.title)\""
+        // Prefer a broker that uses the secret without disclosing it
+        // (docs/adr/0005-agent-trust-and-secret-use.md).
+        let useWithoutReading: String
+        switch entry.kind {
+        case "core.ssh_key":
+            useWithoutReading = "Use it without reading the key: "
+                + "`keylease ssh <user@host> <command>`, or "
+                + "`GIT_SSH_COMMAND=\"keylease ssh\" git ...`.\n"
+        case "core.database":
+            useWithoutReading = "Connect without reading the password: "
+                + "`keylease db psql \(entry.id) -- -c '<sql>'` or "
+                + "`keylease db exec \(entry.id) -- <command>`.\n"
+        default:
+            useWithoutReading = "If a program needs a secret in its environment, run it "
+                + "with `keylease run --env NAME=\(entry.id)/<field> -- <command>` "
+                + "instead of revealing the value.\n"
+        }
         let readInstructions = entry.isAgentContent
             ? "Read its content: `keylease content get \(entry.id) --raw`\n"
                 + "If access is denied, ask me to grant this agent read access."
-            : "Inspect it: `keylease entries get \(entry.id)`\n"
+            : useWithoutReading
+                + "Inspect it: `keylease entries get \(entry.id)`\n"
                 + "List its fields: `keylease entries view \(entry.id)`\n"
                 + "Reveal only a needed field: `keylease entries reveal "
                 + "\(entry.id) --field <field-id>`\n"
@@ -439,7 +457,8 @@ final class AppController {
             \(readInstructions)
 
             Keep returned content and secrets private. If the vault is locked, \
-            ask me to unlock KeyLease.
+            ask me to unlock KeyLease. If a command reports approval_required, \
+            rerun it with --wait-approval 120 and I will approve it in KeyLease.
             """
     }
 

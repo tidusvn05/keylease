@@ -163,6 +163,25 @@ The first form prints agent-readable Markdown; `--json` exposes the same guide
 as a structured contract. The handoff ID is not a credential, and the command
 still requires the active managed client and an unlocked matching vault.
 
+## Agents: approvals and using secrets without disclosing them
+
+[ADR 0005](docs/adr/0005-agent-trust-and-secret-use.md) adds a least-privilege
+agent identity and brokers that let an agent use a credential without the value
+reaching its model:
+
+```sh
+keylease agent enroll codex                     # own client, approval baseline
+keylease ssh deploy@host 'systemctl status app' # SSH key stays in the vault
+keylease db psql ITEM_ID -- -c 'select 1'       # Postgres password stays in the vault
+keylease run --env API_KEY=ITEM_ID/password -- terraform plan
+keylease approval decide APPROVAL_ID --approve --trust 1h
+```
+
+See [agent approvals and trust](docs/agent-approvals.md),
+[SSH agent](docs/ssh-agent.md), [PostgreSQL proxy](docs/db-proxy.md),
+[`keylease run`](docs/run-with-secrets.md) and
+[remote approval for a VPS](docs/remote-approval.md).
+
 ## Local flow
 
 ```sh

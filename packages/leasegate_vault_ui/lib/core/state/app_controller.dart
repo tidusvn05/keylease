@@ -55,11 +55,25 @@ class AppController extends ChangeNotifier with BusyRegistry {
   static bool _isAgentContent(EntrySummary entry) =>
       const {'core.prompt', 'core.runbook', 'core.note'}.contains(entry.kind);
 
+  /// A broker that uses the secret without disclosing it, by item kind
+  /// (docs/adr/0005-agent-trust-and-secret-use.md).
+  static String _useWithoutReading(EntrySummary entry) => switch (entry.kind) {
+        'core.ssh_key' => 'Use it without reading the key: '
+            '`keylease ssh <user@host> <command>`, or '
+            '`GIT_SSH_COMMAND="keylease ssh" git ...`.\n',
+        'core.database' => 'Connect without reading the password: '
+            "`keylease db psql ${entry.id} -- -c '<sql>'` or "
+            '`keylease db exec ${entry.id} -- <command>`.\n',
+        _ => 'If a program needs a secret in its environment, run it with '
+            '`keylease run --env NAME=${entry.id}/<field> -- <command>` '
+            'instead of revealing the value.\n',
+      };
+
   static String agentPromptForEntry(EntrySummary entry) {
     final readInstructions = _isAgentContent(entry)
         ? '''Read its content: `keylease content get ${entry.id} --raw`
 If access is denied, ask me to grant this agent read access.'''
-        : '''Inspect it: `keylease entries get ${entry.id}`
+        : '''${_useWithoutReading(entry)}Inspect it: `keylease entries get ${entry.id}`
 List its fields: `keylease entries view ${entry.id}`
 Reveal only a needed field: `keylease entries reveal ${entry.id} --field <field-id>`
 Get its OTP if needed: `keylease entries totp ${entry.id}`''';
@@ -68,7 +82,7 @@ Get its OTP if needed: `keylease entries totp ${entry.id}`''';
 Connect to KeyLease directly; do not ask me to paste the item content.
 $readInstructions
 
-Keep returned content and secrets private. If the vault is locked, ask me to unlock KeyLease.''';
+Keep returned content and secrets private. If the vault is locked, ask me to unlock KeyLease. If a command reports approval_required, rerun it with --wait-approval 120 and I will approve it in KeyLease.''';
   }
 
   static String cliCommandForEntry(EntrySummary entry) => _isAgentContent(entry)
