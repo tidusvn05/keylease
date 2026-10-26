@@ -21,8 +21,12 @@ const BASELINE_RULE_PREFIX: &str = "baseline_";
 /// Vault actions an enrolled agent may use without asking. None of them
 /// returns a secret value: `entry:read_fields` returns the redacted view and
 /// `ssh:list_keys` only public keys.
-const BASELINE_ALLOW_ACTIONS: &[&str] =
-    &["entry:search", "entry:read_metadata", "entry:read_fields"];
+const BASELINE_ALLOW_ACTIONS: &[&str] = &[
+    "entry:search",
+    "entry:read_metadata",
+    "entry:read_fields",
+    "ssh:list_keys",
+];
 
 /// Vault actions an enrolled agent may request, each needing an approval or a
 /// trust.
@@ -264,6 +268,20 @@ impl KeyLeaseService {
             policy_version,
             now,
         )? {
+            if open.state == ApprovalState::Denied {
+                self.store.retire_denied_approval(&open.id.0)?;
+                self.audit_vault(
+                    actor,
+                    &request.action,
+                    &request.resource,
+                    "deny",
+                    "approval_denied",
+                    vec![],
+                )?;
+                return Err(KeyLeaseError::Denied {
+                    reason: "the approver denied this request".into(),
+                });
+            }
             if open.state != ApprovalState::Approved {
                 return Err(KeyLeaseError::ApprovalRequired {
                     approval_id: open.id.0,
@@ -738,6 +756,12 @@ mod tests {
         f.service
             .decide_approval_authorized(&f.owner, &id, false)
             .unwrap();
+        // The retry learns of the denial once, then may ask again.
+        assert!(matches!(
+            f.service
+                .reveal_field_authorized(&f.agent, &f.item, "password"),
+            Err(KeyLeaseError::Denied { .. })
+        ));
         let next = approval_id(
             f.service
                 .reveal_field_authorized(&f.agent, &f.item, "password"),

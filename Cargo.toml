@@ -72,3 +72,14 @@ zip = { version = "7.2", default-features = false, features = ["deflate"] }
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# OpenSSH key decryption (bcrypt-pbkdf) and RSA signing are unusably slow
+# unoptimized; keep them fast in debug builds and tests.
+[profile.dev.package.bcrypt-pbkdf]
+opt-level = 3
+
+[profile.dev.package.blowfish]
+opt-level = 3
+
+[profile.dev.package.num-bigint-dig]
+opt-level = 3

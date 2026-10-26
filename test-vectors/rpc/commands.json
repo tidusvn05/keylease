@@ -51,6 +51,8 @@
     "trusts_list",
     "trust_revoke",
     "agent_enroll",
+    "ssh_identities",
+    "ssh_sign",
     "audit_query",
     "lease_request",
     "gate_execute",

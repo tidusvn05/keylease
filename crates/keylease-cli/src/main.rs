@@ -26,6 +26,7 @@ use tokio::{
 };
 use zeroize::Zeroizing;
 
+mod ssh_agent;
 mod trust;
 
 #[derive(Parser)]
@@ -68,6 +69,11 @@ enum Command {
         session_ttl_seconds: i64,
         #[arg(long)]
         start_locked: bool,
+        /// Unlock at start from a mode-0600 file instead of a TTY prompt.
+        /// Without it, a systemd credential named `keylease-master-password`
+        /// (`LoadCredentialEncrypted=`) is used when present.
+        #[arg(long, conflicts_with = "start_locked")]
+        password_file: Option<PathBuf>,
     },
     Status,
     Unlock {
@@ -130,6 +136,18 @@ enum Command {
     Trust {
         #[command(subcommand)]
         command: trust::TrustCommand,
+    },
+    /// Run an SSH agent whose private keys stay in the KeyLease service.
+    SshAgent {
+        /// Socket path; a private temporary one by default.
+        #[arg(long)]
+        agent_socket: Option<PathBuf>,
+    },
+    /// Run OpenSSH with a private, single-use KeyLease agent.
+    #[command(trailing_var_arg = true)]
+    Ssh {
+        #[arg(allow_hyphen_values = true, required = true)]
+        args: Vec<String>,
     },
     Gate {
         #[command(subcommand)]
@@ -660,14 +678,32 @@ async fn main() {
 
 async fn run() -> Result<()> {
     let mut cli = Cli::parse();
-    let _ = APPROVAL_WAIT_SECONDS.set(cli.wait_approval.min(600));
+    let wait = match cli.command {
+        // `ssh` blocks on a sign request anyway; waiting is the approval UX.
+        Command::Ssh { .. } | Command::SshAgent { .. } if cli.wait_approval == 0 => {
+            ssh_agent::DEFAULT_SIGN_WAIT_SECONDS
+        }
+        _ => cli.wait_approval,
+    };
+    let _ = APPROVAL_WAIT_SECONDS.set(wait.min(600));
     let socket = cli.socket.clone().unwrap_or_else(default_socket);
     let command = std::mem::replace(&mut cli.command, Command::Status);
     match command {
         Command::Serve {
             session_ttl_seconds,
             start_locked,
-        } => serve(&cli.db, &socket, session_ttl_seconds, start_locked).await,
+            password_file,
+        } => {
+            let password_file = password_file.or_else(systemd_password_credential);
+            serve(
+                &cli.db,
+                &socket,
+                session_ttl_seconds,
+                start_locked,
+                password_file.as_deref(),
+            )
+            .await
+        }
         Command::Status => print_rpc(&socket, RpcRequest::Status).await,
         Command::Unlock {
             session_ttl_seconds,
@@ -843,6 +879,10 @@ async fn run() -> Result<()> {
             command => approval_command(&cli.db, command),
         },
         Command::Trust { command } => trust::trust_command(&cli, &socket, command).await,
+        Command::SshAgent { agent_socket } => {
+            ssh_agent::run_agent(&cli, &socket, agent_socket).await
+        }
+        Command::Ssh { args } => ssh_agent::run_ssh(&cli, &socket, args).await,
         Command::Gate { command } => gate_command(&cli, &socket, command).await,
         Command::Audit { command } => {
             let service = admin_service(&cli.db)?;
@@ -1142,7 +1182,7 @@ async fn desktop_command(command: DesktopCommand) -> Result<()> {
         DesktopCommand::Serve { home } => {
             let paths = desktop_paths(home)?;
             ensure_desktop_home(&paths)?;
-            serve(&paths.database, &paths.socket, 28_800, true).await
+            serve(&paths.database, &paths.socket, 28_800, true, None).await
         }
         DesktopCommand::VaultsList => {
             let root = managed_home().ok_or_else(|| KeyLeaseError::InvalidRequest {
@@ -2233,7 +2273,24 @@ async fn gate_command(cli: &Cli, socket: &Path, command: GateCommand) -> Result<
     }
 }
 
-async fn serve(db: &Path, socket: &Path, ttl: i64, start_locked: bool) -> Result<()> {
+/// The systemd credential `keylease-master-password`, if the unit loaded one.
+///
+/// systemd decrypts `LoadCredentialEncrypted=` credentials (TPM- or host-key
+/// sealed) into a private, per-service directory, so the password is never
+/// on disk in plaintext and never in the environment.
+fn systemd_password_credential() -> Option<PathBuf> {
+    let path =
+        PathBuf::from(std::env::var_os("CREDENTIALS_DIRECTORY")?).join("keylease-master-password");
+    path.is_file().then_some(path)
+}
+
+async fn serve(
+    db: &Path,
+    socket: &Path,
+    ttl: i64,
+    start_locked: bool,
+    password_file: Option<&Path>,
+) -> Result<()> {
     let owner_uid = fs::metadata(db)
         .map_err(|_| KeyLeaseError::NotFound {
             resource: db.display().to_string(),
@@ -2254,7 +2311,11 @@ async fn serve(db: &Path, socket: &Path, ttl: i64, start_locked: bool) -> Result
         fs::remove_file(socket).map_err(|_| KeyLeaseError::Storage)?;
     }
     let service = Arc::new(service(db)?);
-    if !start_locked {
+    if let Some(path) = password_file.filter(|_| !start_locked) {
+        let password = read_secret_file(path, "master password")?;
+        service.unlock(password.trim().as_bytes(), Duration::seconds(ttl))?;
+        eprintln!("KeyLease unlocked from a password file; this host trusts itself");
+    } else if !start_locked {
         let password = prompt("Master password: ")?;
         service.unlock(password.as_bytes(), Duration::seconds(ttl))?;
     }

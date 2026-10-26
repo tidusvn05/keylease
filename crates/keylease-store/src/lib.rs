@@ -2057,8 +2057,9 @@ impl NativeStore {
         tx.commit().map_err(|_| KeyLeaseError::Storage)
     }
 
-    /// The pending or approved approval an agent already holds for a request
-    /// digest, so a retried request does not queue a duplicate.
+    /// The pending, approved or denied approval an agent already holds for a
+    /// request digest, so a retried request neither queues a duplicate nor
+    /// misses a denial.
     pub fn find_open_approval(
         &self,
         agent_id: &AgentId,
@@ -2081,13 +2082,38 @@ impl NativeStore {
                 && record.expires_at > now
                 && matches!(
                     record.state,
-                    ApprovalState::Pending | ApprovalState::Approved
+                    ApprovalState::Pending | ApprovalState::Approved | ApprovalState::Denied
                 )
             {
                 return Ok(Some(record));
             }
         }
         Ok(None)
+    }
+
+    /// Retires a denied approval once its denial has been reported, so the
+    /// next identical request queues a fresh one instead of failing forever.
+    pub fn retire_denied_approval(&self, approval_id: &str) -> Result<()> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let raw: String = connection
+            .query_row(
+                "SELECT record_json FROM approvals WHERE approval_id=?1",
+                [approval_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let mut record: ApprovalRecord = from_json(&raw)?;
+        if record.state != ApprovalState::Denied {
+            return Ok(());
+        }
+        record.state = ApprovalState::Expired;
+        connection
+            .execute(
+                "UPDATE approvals SET record_json=?1 WHERE approval_id=?2",
+                params![json(&record)?, approval_id],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        Ok(())
     }
 
     /// Atomically consumes an approved approval bound to exactly this digest

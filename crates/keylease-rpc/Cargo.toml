@@ -17,6 +17,7 @@ agent-handoff = []
 provisioning = []
 
 [dependencies]
+base64.workspace = true
 chrono.workspace = true
 keylease-core = { path = "../keylease-core" }
 keylease-kdbx = { path = "../keylease-kdbx" }

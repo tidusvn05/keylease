@@ -337,6 +337,17 @@ pub enum RpcRequest {
         auth: RpcAuth,
         name: String,
     },
+    SshIdentities {
+        auth: RpcAuth,
+    },
+    SshSign {
+        auth: RpcAuth,
+        /// Base64 SSH wire-format public key blob.
+        public_key_blob: String,
+        /// Base64 of the bytes the agent protocol asked to sign.
+        data: String,
+        flags: u32,
+    },
     AuditQuery {
         auth: RpcAuth,
         limit: u32,
@@ -832,6 +843,34 @@ pub async fn handle_rpc(
             let actor = actor(service, &auth)?;
             service.revoke_trust_authorized(&actor, &id)?;
             Ok(json!({"revoked": id}))
+        }
+        RpcRequest::SshIdentities { auth } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.ssh_identities_authorized(&actor)?)
+                .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::SshSign {
+            auth,
+            public_key_blob,
+            data,
+            flags,
+        } => {
+            use base64::{Engine, engine::general_purpose::STANDARD};
+            let actor = actor(service, &auth)?;
+            let decode = |value: &str| {
+                STANDARD
+                    .decode(value)
+                    .map_err(|_| KeyLeaseError::InvalidRequest {
+                        reason: "invalid base64 in SSH sign request".into(),
+                    })
+            };
+            serde_json::to_value(service.ssh_sign_authorized(
+                &actor,
+                &decode(&public_key_blob)?,
+                &decode(&data)?,
+                flags,
+            )?)
+            .map_err(|_| KeyLeaseError::Storage)
         }
         RpcRequest::AgentEnroll { auth, name } => {
             let actor = actor(service, &auth)?;

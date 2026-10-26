@@ -93,17 +93,64 @@ A trust survives a vault lock (it authorizes nothing while locked) and ends at
 its expiry, on `trust revoke`, when the client is revoked, or when the kill
 switch is turned on. Every use under a trust is audited with its `trust_id`.
 
-## Headless VPS
+## Headless VPS (self-trust)
 
-With no desktop owner, register the agent with the baseline and decide
-approvals with the admin path:
+Step 4 of the ADR. On a host with no desktop app, `keylease serve` is the vault
+node and agents on the same host use it over the Unix socket, exactly as on a
+Mac.
+
+Register agents with the baseline, or with narrow `grant create --effect allow`
+rules for unattended automation:
 
 ```sh
-keylease --db vault.sqlite client register deployer --baseline
-keylease --db vault.sqlite approval approve APPROVAL_ID   # master password
+keylease --db /var/lib/keylease/vault.sqlite client register deployer --baseline
 ```
 
-The daemon loads standing rules when it starts or unlocks, so restart it (or
-lock and unlock) after an admin change, as with `grant create`. Time-boxed
-trust from a headless host, and remote approval from the macOS app, are steps 4
-and 5 of the ADR.
+Approvals queued by a baseline agent are decided with the admin path, which
+asks for the master password:
+
+```sh
+keylease --db /var/lib/keylease/vault.sqlite approval approve APPROVAL_ID
+```
+
+The daemon loads grants and standing rules when it starts or unlocks, so
+restart it after an admin change, as with `grant create`.
+
+### Unlocking after a reboot
+
+| Method | Command | Protects against |
+|---|---|---|
+| Interactive | `keylease serve` (TTY prompt), or `serve --start-locked` + `keylease unlock` over SSH | disk theft and a compromised host at rest |
+| systemd credential | `LoadCredentialEncrypted=keylease-master-password:…` | disk theft only; root on the running host wins |
+| Password file | `serve --password-file /path` (mode 0600, not a symlink) | little; prefer the systemd credential |
+
+With systemd, seal the password to the host (and TPM where present) once:
+
+```sh
+systemd-ask-password -n "Master password:" \
+  | sudo systemd-creds encrypt --name=keylease-master-password - \
+      /etc/credstore.encrypted/keylease-master-password
+```
+
+and reference it from the unit; `keylease serve` picks it up from
+`$CREDENTIALS_DIRECTORY` without any flag:
+
+```ini
+[Service]
+User=keylease
+LoadCredentialEncrypted=keylease-master-password
+ExecStart=/usr/local/bin/keylease --db /var/lib/keylease/vault.sqlite \
+  --socket /run/keylease/keylease.sock serve
+RuntimeDirectory=keylease
+RuntimeDirectoryMode=0700
+```
+
+The vault locks after `--session-ttl-seconds` of inactivity (8 hours by
+default). An idle auto-unlocked daemon does not unlock itself again; restart
+the unit (`Restart=on-failure` plus a timer, or a longer TTL) if it must stay
+available.
+
+An auto-unlocked host trusts itself: anything that becomes root while it runs
+can use the vault. Keep such a vault separate from your personal one and give
+it only the credentials that host needs. Remote approval and remote unlock
+from the macOS app (mode B) are step 5 of the ADR and not implemented yet.

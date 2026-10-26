@@ -25,6 +25,9 @@ totp-rs.workspace = true
 url.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
+ssh-key = { version = "0.6.7", default-features = false, features = ["std", "ed25519", "rsa", "p256", "p384", "encryption", "rand_core", "getrandom"] }
+rsa = { version = "0.9", features = ["sha2"] }
+signature = "2"
 
 [dev-dependencies]
 tempfile.workspace = true

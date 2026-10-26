@@ -32,7 +32,9 @@ use tokio::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
+mod ssh;
 mod trust;
+pub use ssh::{SSH_AGENT_RSA_SHA2_256, SSH_AGENT_RSA_SHA2_512, SshIdentity, SshSignature};
 pub use trust::{ApprovalDecisionOutcome, EnrolledAgent};
 use trust::{VAULT_CONNECTION_ID, vault_action_risk};
 

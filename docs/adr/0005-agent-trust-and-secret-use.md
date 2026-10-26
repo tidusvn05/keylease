@@ -258,9 +258,15 @@ The node exposes pairing and approval endpoints on its existing HTTPS listener
    baseline, and time-boxed trust. **Implemented** (see
    `docs/agent-approvals.md`). macOS notifications and the trust picker need the
    Swift app and are not done; key-bound identity moved to step 6.
-2. SSH agent.
+2. SSH agent. **Implemented** (`keylease ssh`, `keylease ssh-agent`; see
+   `docs/ssh-agent.md`). Session-bind host binding and CA-issued ephemeral
+   certificates are not done.
 3. PostgreSQL proxy and `db query`.
-4. Standalone VPS mode A, with `approver_unavailable` and unlock options.
+4. Standalone VPS mode A, with unlock options. **Implemented** as
+   `serve --password-file` and automatic use of a systemd
+   `keylease-master-password` credential. Instead of an
+   `approver_unavailable` denial, a headless host's approvals are decided with
+   the admin CLI (`approval approve`, master password), which is an approver.
 5. Pairing, signed remote approvals and remote unlock (mode B); then mobile.
 6. Signed client identity becomes required for new registrations.
 7. `keylease run` with output scrubbing; then browser login fill.
