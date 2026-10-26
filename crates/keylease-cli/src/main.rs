@@ -28,6 +28,7 @@ use zeroize::Zeroizing;
 
 mod approver;
 mod db_proxy;
+mod run;
 mod ssh_agent;
 mod trust;
 
@@ -151,6 +152,15 @@ enum Command {
         /// Socket path; a private temporary one by default.
         #[arg(long)]
         agent_socket: Option<PathBuf>,
+    },
+    /// Run a program with vault values in its environment, scrubbed from its output.
+    #[command(trailing_var_arg = true)]
+    Run {
+        /// NAME=kl://VAULT/ITEM/FIELD (repeatable).
+        #[arg(long = "env", required = true)]
+        bindings: Vec<String>,
+        #[arg(allow_hyphen_values = true, required = true)]
+        command: Vec<String>,
     },
     /// Pair approver devices with a headless node, and approve from them.
     Remote {
@@ -908,6 +918,7 @@ async fn run() -> Result<()> {
         Command::Ssh { args } => ssh_agent::run_ssh(&cli, &socket, args).await,
         Command::Db { command } => db_proxy::db_command(&cli, &socket, command).await,
         Command::Remote { command } => approver::remote_command(&cli, command).await,
+        Command::Run { bindings, command } => run::run(&cli, &socket, bindings, command).await,
         Command::Gate { command } => gate_command(&cli, &socket, command).await,
         Command::Audit { command } => {
             let service = admin_service(&cli.db)?;

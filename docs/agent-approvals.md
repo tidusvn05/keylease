@@ -15,7 +15,7 @@ An **enrolled agent** gets its own client and a baseline:
 
 | Without asking | Queues an approval |
 |---|---|
-| `entry:search`, `entry:read_metadata`, `entry:read_fields` (redacted view), `ssh:list_keys` (public keys only) | `entry:read_username`, `entry:read_secret` (reveal, TOTP), entry create/update/move/delete, group create/update, `ssh:sign` ([SSH](ssh-agent.md)), `db:connect` ([PostgreSQL](db-proxy.md)) |
+| `entry:search`, `entry:read_metadata`, `entry:read_fields` (redacted view), `ssh:list_keys` (public keys only) | `entry:read_username`, `entry:read_secret` (reveal, TOTP), `entry:inject_secret` ([`keylease run`](run-with-secrets.md)), entry create/update/move/delete, group create/update, `ssh:sign` ([SSH](ssh-agent.md)), `db:connect` ([PostgreSQL](db-proxy.md)) |
 
 Shared Prompt/Runbook/Note content keeps its own grant-free channel
 (`docs/agent-content.md`).

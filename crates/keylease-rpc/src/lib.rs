@@ -340,6 +340,12 @@ pub enum RpcRequest {
     SshIdentities {
         auth: RpcAuth,
     },
+    EntriesInject {
+        auth: RpcAuth,
+        /// The program that will receive the values; shown to the approver.
+        program: String,
+        fields: Vec<keylease_service::InjectRequest>,
+    },
     DbTarget {
         auth: RpcAuth,
         id: ItemId,
@@ -854,6 +860,15 @@ pub async fn handle_rpc(
             let actor = actor(service, &auth)?;
             service.revoke_trust_authorized(&actor, &id)?;
             Ok(json!({"revoked": id}))
+        }
+        RpcRequest::EntriesInject {
+            auth,
+            program,
+            fields,
+        } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.inject_fields_authorized(&actor, &program, &fields)?)
+                .map_err(|_| KeyLeaseError::Storage)
         }
         RpcRequest::DbTarget { auth, id } => {
             let actor = actor(service, &auth)?;

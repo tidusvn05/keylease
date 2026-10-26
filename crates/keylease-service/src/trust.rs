@@ -33,6 +33,7 @@ const BASELINE_ALLOW_ACTIONS: &[&str] = &[
 const BASELINE_APPROVAL_ACTIONS: &[&str] = &[
     "entry:read_username",
     "entry:read_secret",
+    "entry:inject_secret",
     "entry:create",
     "entry:update_standard_fields",
     "entry:update_protected_fields",

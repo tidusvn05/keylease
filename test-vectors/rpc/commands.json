@@ -52,6 +52,7 @@
     "trust_revoke",
     "agent_enroll",
     "ssh_identities",
+    "entries_inject",
     "db_target",
     "db_scram",
     "ssh_sign",

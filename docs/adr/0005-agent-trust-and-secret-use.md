@@ -278,6 +278,9 @@ The node exposes pairing and approval endpoints on its existing HTTPS listener
    `docs/remote-approval.md`). The macOS/mobile approver UI, push delivery and
    remote unlock are not done.
 6. Signed client identity becomes required for new registrations.
-7. `keylease run` with output scrubbing; then browser login fill.
+7. `keylease run` with output scrubbing; then browser login fill. **`keylease
+   run` implemented** (`docs/run-with-secrets.md`) as `entry:inject_secret`,
+   R4, one approval per run naming the program. Browser login fill is not
+   done.
 
 Each step updates `docs/security/threat-model.md` in the same change.

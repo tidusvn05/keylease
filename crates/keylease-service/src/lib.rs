@@ -33,10 +33,12 @@ use tokio::{
 use zeroize::{Zeroize, Zeroizing};
 
 mod db;
+mod inject;
 mod remote;
 mod ssh;
 mod trust;
 pub use db::{DbTarget, ScramClientFinal};
+pub use inject::InjectRequest;
 pub use remote::{APPROVER_SIGNATURE_CONTEXT, ApproverDevice, PairingCode, approver_signing_input};
 pub use ssh::{SSH_AGENT_RSA_SHA2_256, SSH_AGENT_RSA_SHA2_512, SshIdentity, SshSignature};
 pub use trust::{ApprovalDecisionOutcome, EnrolledAgent};
