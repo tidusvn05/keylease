@@ -19,7 +19,7 @@ use rmcp::{
     RoleServer, ServerHandler, ServiceExt,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-        ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+        ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
         ToolAnnotations,
     },
     service::RequestContext,
@@ -199,8 +199,8 @@ fn tool(name: &'static str, description: &'static str, schema: Value, read_only:
 }
 
 impl ServerHandler for VaultMcp {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("keylease", env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "KeyLease lets you use credentials from the user's vault without seeing \

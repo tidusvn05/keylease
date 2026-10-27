@@ -26,6 +26,7 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
+publish = false
 rust-version = "1.94"
 
 [workspace.dependencies]
@@ -45,7 +46,7 @@ jsonwebtoken = { version = "9.3", default-features = false, features = ["use_pem
 keepass = { version = "0.13.25", features = ["save_kdbx4", "totp"] }
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-quick-xml = { version = "0.38", features = ["serialize"] }
+quick-xml = { version = "0.41", features = ["serialize"] }
 rpassword = "7.4"
 rusqlite = { version = "0.37", features = ["bundled", "chrono", "backup"] }
 schemars = { version = "1.0", features = ["chrono04", "uuid1"] }
@@ -66,7 +67,7 @@ totp-rs = { version = "5.7", features = ["otpauth"] }
 url = { version = "2.5", features = ["serde"] }
 uuid = { version = "1.18", features = ["v4", "v7", "serde"] }
 zeroize = { version = "1.8", features = ["derive"] }
-zip = { version = "7.2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [profile.release]
 lto = "thin"

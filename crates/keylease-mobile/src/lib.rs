@@ -294,9 +294,11 @@ fn call_json(handle: u64, request: &str) -> Value {
             }),
         );
     }
-    session
-        .runtime
-        .block_on(dispatch_value(&session.service, RpcCapabilities::MOBILE, parsed))
+    session.runtime.block_on(dispatch_value(
+        &session.service,
+        RpcCapabilities::MOBILE,
+        parsed,
+    ))
 }
 
 /// Runs one vault lifecycle operation, keeping the minted owner credential on
@@ -564,10 +566,7 @@ mod jni_bridge {
         install_panic_hook();
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             let Some(path) = read_string(&mut env, &path) else {
-                return envelope_error(
-                    "invalid_request",
-                    "the database path is not valid UTF-8",
-                );
+                return envelope_error("invalid_request", "the database path is not valid UTF-8");
             };
             open_json(&path).1
         }));

@@ -1,0 +1,42 @@
+# cargo deny check — run in CI. Keep exceptions here with a reason.
+
+[graph]
+all-features = true
+
+[advisories]
+ignore = [
+    # rsa: Marvin timing side channel. No fixed release yet (0.10 is RC).
+    # KeyLease only signs with RSA keys inside the vault for `keylease ssh`;
+    # it never decrypts with RSA. Prefer Ed25519 keys; revisit with rsa 0.10.
+    { id = "RUSTSEC-2023-0071", reason = "no fixed rsa release; signing only, Ed25519 preferred" },
+    # crypto-bigint 0.5 through ssh-key 0.6 (p256/p384). Fixed in 0.7, which
+    # ssh-key only uses in its 0.7 release candidates.
+    { id = "RUSTSEC-2026-0387", reason = "fixed only in ssh-key 0.7 RCs; ECDSA host keys are rarely vault keys" },
+]
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "0BSD",
+    "BSL-1.0",
+    "CC0-1.0",
+    "Unlicense",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
