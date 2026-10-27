@@ -67,15 +67,15 @@ Step-by-step guides, with what is and is not implemented, are in
 
 ## Install
 
+With Rust 1.94+ ([rustup](https://rustup.rs)), on Linux or macOS:
+
 ```sh
-curl -fsSL https://raw.githubusercontent.com/tidusvn05/keylease/main/install.sh | sh
-# or, with Rust 1.94+:
 cargo install --locked keylease
 ```
 
-The installer downloads the release archive for Linux or macOS (x86_64 or
-aarch64), checks it against `SHA256SUMS` and puts `keylease` in
-`~/.local/bin`. Releases: [GitHub](https://github.com/tidusvn05/keylease/releases) ·
+This builds `keylease` from crates.io into `~/.cargo/bin`. Releases do not ship
+prebuilt binaries or apps; build the macOS app yourself (below).
+Releases: [GitHub](https://github.com/tidusvn05/keylease/releases) ·
 [how they are made](docs/releasing.md).
 
 ## Quick start: an agent on your Mac
@@ -112,17 +112,17 @@ vault, it has the approval sheet with the trust picker, the Agents section
 (enroll agents, list and revoke trusts), Remote Vaults (approve for a VPS) and
 notifications with Touch ID. 🟡 It has not yet been built and tested on a Mac.
 
-Each [GitHub release](https://github.com/tidusvn05/keylease/releases) has
-`KeyLease-vX.Y.Z-macos-universal.dmg`. It is signed ad-hoc (no Apple Developer
-ID), so macOS blocks the first launch: allow it in System Settings → Privacy &
-Security → **Open Anyway**, or run
-`xattr -dr com.apple.quarantine /Applications/KeyLease.app`.
-
-Or build and install it on a Mac (Xcode 16+):
+Build and install it on a Mac (Xcode 16+, Rust):
 
 ```sh
 ./scripts/package-macos-swift.sh --install   # replaces /Applications/KeyLease.app
+./scripts/package-macos-swift.sh --dmg       # or a DMG to copy to another Mac
 ```
+
+The build is signed ad-hoc unless you have an Apple certificate
+(`EXPANDED_CODE_SIGN_IDENTITY`). A copy downloaded on another Mac is blocked on
+first launch: allow it in System Settings → Privacy & Security → **Open
+Anyway**, or run `xattr -dr com.apple.quarantine /Applications/KeyLease.app`.
 
 On first launch, the macOS app asks only whether to create a vault or use an
 existing KeyLease, KDBX, or 1PUX file. The selected source is left unchanged;

@@ -1,11 +1,8 @@
 name: macOS app
 
-# Builds KeyLease.app (universal2, with the keylease helper inside) and packs it in a DMG. Runs on
-# pull requests that touch the app or its packaging, and is called by release.yml for every
-# release: the app embeds keylease, so a release rebuilds it even when the Swift code is unchanged.
-#
-# The app is signed ad-hoc (no Developer ID): macOS asks the user to allow it on first launch
-# (docs/releasing.md, "The macOS app").
+# Builds KeyLease.app (universal2, with the keylease helper inside), runs the Swift tests and packs
+# an ad-hoc signed DMG, kept as a workflow artifact. Runs on pull requests that touch the app or its
+# packaging, and on demand. Releases do not ship the app (docs/releasing.md, "The macOS app").
 
 on:
   pull_request:
@@ -17,16 +14,6 @@ on:
       - scripts/macos-signing-identity.sh
       - .github/workflows/macos.yml
   workflow_dispatch:
-  workflow_call:
-    inputs:
-      ref:
-        description: "Tag or commit to build"
-        required: true
-        type: string
-      dmg:
-        description: "File name of the DMG"
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -41,11 +28,10 @@ jobs:
     runs-on: macos-15
     env:
       EXPANDED_CODE_SIGN_IDENTITY: "-"
-      DMG: ${{ inputs.dmg || 'KeyLease-macos-universal.dmg' }}
+      DMG: KeyLease-macos-universal.dmg
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref || github.sha }}
           # The commit count is the app's CFBundleVersion.
           fetch-depth: 0
       - run: rustup show active-toolchain || rustup toolchain install
