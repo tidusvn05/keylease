@@ -181,6 +181,7 @@ jobs:
           NOTES
           if [ "${{ needs.check.outputs.prerelease }}" = false ]; then
             cat >> NOTES.md <<NOTES
+
           Container images for LeaseGate Cloud and Edge:
           \`ghcr.io/${{ github.repository_owner }}/keylease-cloud:${{ needs.check.outputs.version }}\`,
           \`ghcr.io/${{ github.repository_owner }}/leasegate-edge:${{ needs.check.outputs.version }}\`.
