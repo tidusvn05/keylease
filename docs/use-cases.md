@@ -94,13 +94,19 @@ vault lives there too. Mode A of ADR 0005.
 
    Or share items from your laptop through a cloud ([cloud-sharing.md](cloud-sharing.md)).
 
-3. Run the daemon under systemd and unlock it with a host-sealed credential
-   ([unit and options](agent-approvals.md#unlocking-after-a-reboot)).
-4. Register the agent with the approval baseline and store its token:
+3. Run the daemon under systemd, unlocked at boot with a host-sealed credential
+   ([details](agent-approvals.md#unlocking-after-a-reboot)):
 
    ```sh
-   keylease client register claude --baseline
-   # save "client_token" to ~/.keylease/claude.token, chmod 600
+   keylease service install        # master password, then sudo
+   keylease service status
+   ```
+
+4. Register the agent with the approval baseline; the token goes straight into
+   a mode-0600 file:
+
+   ```sh
+   keylease client register claude --baseline --token-file ~/.keylease/claude.token
    export KEYLEASE_AGENT_ID=agent_claude
    export KEYLEASE_CLIENT_TOKEN_FILE=~/.keylease/claude.token
    ```

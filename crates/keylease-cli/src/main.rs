@@ -16,7 +16,7 @@ use std::{
     fs,
     io::{self, Read, Write},
     os::unix::fs::MetadataExt,
-    os::unix::fs::{DirBuilderExt, FileTypeExt, PermissionsExt},
+    os::unix::fs::{DirBuilderExt, FileTypeExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -33,6 +33,7 @@ mod db_proxy;
 mod gateway;
 mod mcp;
 mod run;
+mod service;
 mod ssh_agent;
 mod trust;
 
@@ -114,6 +115,12 @@ enum Command {
     Cloud {
         #[command(subcommand)]
         command: cloud::CloudCommand,
+    },
+    /// Run the daemon as a systemd service that unlocks itself at boot (Linux; master password,
+    /// then sudo).
+    Service {
+        #[command(subcommand)]
+        command: service::ServiceCommand,
     },
     /// Connect web assistants to the MCP gateway (admin, master password).
     Gateway {
@@ -376,6 +383,9 @@ enum ClientCommand {
         /// secret reads and writes queue an approval (ADR 0005).
         #[arg(long)]
         baseline: bool,
+        /// Write the token to this file (mode 0600, never overwritten) instead of printing it
+        #[arg(long)]
+        token_file: Option<PathBuf>,
     },
     List,
     Revoke {
@@ -818,6 +828,7 @@ async fn run() -> Result<()> {
         }
         Command::Gateway { command } => gateway::gateway_command(&cli.db, command),
         Command::Cloud { command } => cloud::cloud_command(&cli, &socket, command).await,
+        Command::Service { command } => service::service_command(&cli.db, &socket, command).await,
         Command::Status => print_rpc(&socket, RpcRequest::Status).await,
         Command::Unlock {
             session_ttl_seconds,
@@ -1690,7 +1701,18 @@ fn vault_command(db: &Path, command: VaultCommand) -> Result<()> {
 fn client_command(db: &Path, command: ClientCommand) -> Result<()> {
     let service = admin_service(db)?;
     match command {
-        ClientCommand::Register { name, baseline } => {
+        ClientCommand::Register {
+            name,
+            baseline,
+            token_file,
+        } => {
+            if let Some(path) = &token_file
+                && fs::symlink_metadata(path).is_ok()
+            {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "token file already exists; choose another --token-file".into(),
+                });
+            }
             let (agent_id, token) = service.register_client(&name)?;
             let baseline_rule_ids = if baseline {
                 let vault_id = service.current_vault_id()?;
@@ -1698,6 +1720,19 @@ fn client_command(db: &Path, command: ClientCommand) -> Result<()> {
             } else {
                 None
             };
+            if let Some(path) = token_file {
+                write_new_private_file(&path, token.as_bytes())?;
+                let path = fs::canonicalize(&path).unwrap_or(path);
+                return print_json(&json!({
+                    "agent_id":agent_id,
+                    "token_file":path,
+                    "baseline_rule_ids":baseline_rule_ids,
+                    "env": {
+                        "KEYLEASE_AGENT_ID": agent_id,
+                        "KEYLEASE_CLIENT_TOKEN_FILE": path,
+                    },
+                }));
+            }
             print_json(&json!({
                 "agent_id":agent_id,
                 "client_token":token,
@@ -2802,6 +2837,20 @@ fn create_private_dir(path: &Path) -> Result<()> {
         .map_err(|_| KeyLeaseError::InvalidRequest {
             reason: format!("cannot create the directory {}", path.display()),
         })
+}
+/// Writes a new mode-0600 file; refuses to replace anything at `path`.
+fn write_new_private_file(path: &Path, contents: &[u8]) -> Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|_| KeyLeaseError::InvalidRequest {
+            reason: format!("cannot create {}", path.display()),
+        })?;
+    file.write_all(contents)
+        .and_then(|()| file.sync_all())
+        .map_err(|_| KeyLeaseError::Storage)
 }
 fn default_socket() -> PathBuf {
     managed_home()

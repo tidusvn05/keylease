@@ -96,6 +96,21 @@ For an MCP client instead of a CLI agent:
 keylease mcp setup claude-desktop --write       # or cursor, claude-code, codex
 ```
 
+## Quick start: agents on a VPS
+
+As the user the agents run as (not root), on Linux with systemd:
+
+```sh
+cargo install --locked keylease
+keylease vault init
+keylease service install          # unlocks at boot from a host-sealed credential (asks for sudo)
+keylease client register claude --baseline --token-file ~/.keylease/claude.token
+export KEYLEASE_AGENT_ID=agent_claude KEYLEASE_CLIENT_TOKEN_FILE=~/.keylease/claude.token
+```
+
+Approve over SSH with `keylease approval list` and `keylease approval approve ID [--trust 1h]`
+([use case 2](docs/use-cases.md#2-agents-on-a-vps-self-trust)).
+
 Guides: [agent approvals and trust](docs/agent-approvals.md) ·
 [MCP clients](docs/mcp.md) · [self-hosted MCP gateway](docs/mcp-gateway.md) ·
 [SSH agent](docs/ssh-agent.md) · [PostgreSQL proxy](docs/db-proxy.md) ·
