@@ -101,30 +101,17 @@ Guides: [agent approvals and trust](docs/agent-approvals.md) ·
 
 ## The macOS app
 
-There are two macOS clients over the same daemon:
+The macOS app is the native SwiftUI app in `apps/desktop-macos-app`
+([README](apps/desktop-macos-app/README.md)) over the same daemon. Besides the
+vault, it has the approval sheet with the trust picker, the Agents section
+(enroll agents, list and revoke trusts), Remote Vaults (approve for a VPS) and
+notifications with Touch ID. 🟡 It has not yet been built and tested on a Mac.
 
-- **`apps/desktop-flutter`** — the app installed today. It approves or denies
-  agent requests once; trusts are granted from the CLI.
-- **`apps/desktop-macos-app`** — the native SwiftUI port, in progress
-  ([README](apps/desktop-macos-app/README.md)). It adds the trust picker,
-  the Agents section (enroll agents, list and revoke trusts), Remote Vaults
-  (approve for a VPS) and notifications with Touch ID; this code has not yet
-  been built on a Mac.
-
-On an Intel Mac (`x86_64`), `scripts/macos-x86_64-check.sh` runs the
-automated Rust, Flutter, architecture and codesign checks.
-
-For subsequent local macOS app builds, use the faster incremental build and
-installer:
+Build and install it on a Mac (Xcode 16+):
 
 ```sh
-./scripts/build-install-macos.sh
+./scripts/package-macos-swift.sh --install   # replaces /Applications/KeyLease.app
 ```
-
-It verifies Flutter 3.47.2, builds the release app and safely replaces
-`/Applications/KeyLease.app`, then links its CLI into `~/.local/bin/keylease`.
-Pass `--full` to run the complete Rust and Flutter acceptance suite before
-installing.
 
 On first launch, the macOS app asks only whether to create a vault or use an
 existing KeyLease, KDBX, or 1PUX file. The selected source is left unchanged;
@@ -294,8 +281,7 @@ machine-readable acceptance report. See
 - `keylease-mobile`: the in-process C ABI the Android client calls; see
   `docs/adr/0004-mobile-in-process-boundary.md`.
 - `packages/leasegate_vault_ui`: the shared vault client — models, state, design
-  tokens and feature UI — used by both Flutter apps.
-- `apps/desktop-flutter`: macOS presentation shell (requires Flutter locally).
+  tokens and feature UI — used by the Flutter mobile app.
 - `apps/desktop-macos` / `apps/desktop-macos-app`: native Swift client core
   (builds and tests on Linux too) and the SwiftUI app (needs a Mac).
 - `apps/mobile-flutter`: the Android vault client.
@@ -309,11 +295,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p keylease -- --help
 ```
 
-The Flutter side lives in three packages that are checked independently:
+The Flutter side lives in two packages that are checked independently:
 
 ```sh
 cd packages/leasegate_vault_ui && flutter analyze && flutter test
-cd apps/desktop-flutter        && flutter analyze && flutter test
 cd apps/mobile-flutter         && flutter analyze && flutter test
 ```
 

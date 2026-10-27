@@ -3,10 +3,8 @@
 Everything above the transport: the typed views over the IPC payloads, the
 session and feature state, the design tokens and the whole feature UI.
 
-Consumed by `apps/desktop-flutter` and `apps/mobile-flutter`. Each app supplies
-its own composition root and the platform code that differs — the Unix socket
-client and preferences file on desktop, the in-process FFI client and
-app-private storage on Android.
+Consumed by `apps/mobile-flutter`, which supplies its own composition root and
+the platform code: the in-process FFI client and app-private storage.
 
 ## Rules
 

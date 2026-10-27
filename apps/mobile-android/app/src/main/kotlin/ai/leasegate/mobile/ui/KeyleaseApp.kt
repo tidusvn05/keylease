@@ -39,8 +39,7 @@ import kotlinx.coroutines.launch
  * The KeyLease client — single-activity Compose shell.
  *
  * Phone form factor only (compact navigation + list → detail routing): this
- * build targets handsets; the Flutter desktop shells have no counterpart
- * here. Section state, the RPC contract and the security semantics are
+ * build targets handsets. Section state, the RPC contract and the security semantics are
  * identical.
  */
 @OptIn(ExperimentalMaterial3Api::class)

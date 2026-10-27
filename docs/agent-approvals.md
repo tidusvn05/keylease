@@ -73,9 +73,8 @@ different purpose needs a new approval. It is never written to the audit log.
 
 ## Deciding
 
-In the native macOS app (`apps/desktop-macos-app`; the installed Flutter app
-only approves or denies once), a new request raises a notification (agent and action only,
-never the item) and a Dock badge. **Approvals → Approve…** opens a sheet with
+In the macOS app (`apps/desktop-macos-app`), a new request raises a
+notification (agent and action only, never the item) and a Dock badge. **Approvals → Approve…** opens a sheet with
 the agent's stated purpose and an **Allow** menu offering only the durations
 the request's risk tier admits, plus the scope when you pick a window.
 Approving a trust, or any R3/R4 request, asks for Touch ID or the login

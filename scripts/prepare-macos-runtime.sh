@@ -25,7 +25,7 @@ else
   cp "$REPO_DIR/target/$TARGET/debug/keylease" "$OUTPUT_DIR/Resources/keylease"
 fi
 
-cp "$REPO_DIR/apps/desktop-flutter/macos/Runner/app.keylease.service.plist" \
+cp "$REPO_DIR/apps/desktop-macos-app/LaunchAgents/app.keylease.service.plist" \
   "$OUTPUT_DIR/Library/LaunchAgents/app.keylease.service.plist"
 chmod 0700 "$OUTPUT_DIR/Resources/keylease"
 codesign --force --options runtime --sign "$EXPANDED_CODE_SIGN_IDENTITY" "$OUTPUT_DIR/Resources/keylease"

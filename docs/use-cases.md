@@ -64,13 +64,11 @@ Status and gaps:
 
 - ✅ Enrollment, approvals, trusts, SSH, PostgreSQL and `run` work through the
   daemon and CLI.
-- The installed app is the **Flutter** desktop app
-  (`scripts/build-install-macos.sh`). It approves or denies **once**; it has no
-  trust picker, Agents section, Remote Vaults or notifications. Use
-  `keylease approval decide ID --approve --trust 1h` for trusts there.
 - 🟡 The trust picker, Agents, Remote Vaults, notifications and Touch ID are in
-  the **native Swift app** (`apps/desktop-macos-app`), which is still a port in
-  progress and not yet built on a Mac.
+  the macOS app (`apps/desktop-macos-app`, built with
+  `scripts/package-macos-swift.sh`), which is not yet built and tested on a
+  Mac. Until then, `keylease approval decide ID --approve --trust 1h` grants
+  trusts from the CLI.
 - Same-user limit: an agent running as you can read files you can read. The
   separate identity is a policy boundary, not an OS sandbox; run agents in a
   sandbox that hides `~/.keylease/desktop.token` where you can.
@@ -264,7 +262,6 @@ so the job's logs never contain the secret.
 
 | Gap | Affects |
 |---|---|
-| Native Swift app not yet at parity; the Flutter app lacks trust/Agents/Remote Vaults/notifications | 1, 3 |
 | Mac Swift UI not compiled or tested on a Mac | 1, 3 |
 | No push, mobile approver or remote unlock | 3, 6 |
 | Gateway not yet tried against the live ChatGPT / claude.ai services | 6 |

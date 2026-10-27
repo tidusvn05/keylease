@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds the Leasegate Vault Android app.
 #
-# Mirrors scripts/build-install-macos.sh: it checks its toolchain, pins the
-# Flutter version, and asserts post-conditions rather than trusting the build.
+# It checks its toolchain, pins the Flutter version, and asserts
+# post-conditions rather than trusting the build.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -69,7 +69,7 @@ if [ "$FULL" = "true" ]; then
   (cd "$REPO_DIR" && cargo fmt --all -- --check)
   (cd "$REPO_DIR" && cargo clippy --workspace --all-targets -- -D warnings)
   (cd "$REPO_DIR" && cargo test --workspace)
-  for dir in packages/leasegate_vault_ui apps/desktop-flutter apps/mobile-flutter; do
+  for dir in packages/leasegate_vault_ui apps/mobile-flutter; do
     echo "== $dir =="
     (cd "$REPO_DIR/$dir" && flutter pub get && flutter analyze && flutter test)
   done

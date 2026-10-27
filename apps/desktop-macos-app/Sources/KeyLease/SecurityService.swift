@@ -1,17 +1,14 @@
 import AppKit
 import Foundation
 
-/// Clipboard, lock-signal and external-URL handling — a direct port of the
-/// `com.keylease/security` channel in the Flutter runner's
-/// `MainFlutterWindow.swift`.
+/// Clipboard, lock-signal and external-URL handling.
 @MainActor
 final class SecurityService {
     private var sensitivePasteboardChangeCount: Int?
     private var observerTokens: [NSObjectProtocol] = []
 
     /// Copies a secret and clears it after `seconds` only if the user has not
-    /// overwritten the clipboard in the meantime — the same semantics the
-    /// Flutter app exposes as `copySensitive`.
+    /// overwritten the clipboard in the meantime.
     func copySensitive(_ value: String, clearAfter seconds: Int = 30) {
         guard !value.isEmpty, value.utf8.count <= 1024 * 1024,
             (5...120).contains(seconds)

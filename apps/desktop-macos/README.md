@@ -1,6 +1,6 @@
 # KeyLease desktop (native macOS, in progress)
 
-Native Swift port of `apps/desktop-flutter`. Same role in the architecture: a
+Native Swift client core for the macOS app. Its role in the architecture: a
 thin presentation client over the versioned local IPC API served by
 `keylease serve` — no crypto, KDBX, policy or connector code lives here.
 
