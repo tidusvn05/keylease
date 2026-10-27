@@ -48,6 +48,9 @@ pub fn relay_request_signing_input(
 /// digest) what its sender signs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelayPayloadLabel<'a> {
+    /// The message id (empty for backups), so a relay cannot re-send an old
+    /// message under a new id.
+    pub message_id: &'a str,
     pub account_id: &'a str,
     pub from_member_id: &'a str,
     pub to_member_id: &'a str,
@@ -59,7 +62,8 @@ pub struct RelayPayloadLabel<'a> {
 impl RelayPayloadLabel<'_> {
     pub fn aad(&self) -> Vec<u8> {
         format!(
-            "{RELAY_PAYLOAD_CONTEXT}\n{}\n{}\n{}\n{}\n{}\n{}",
+            "{RELAY_PAYLOAD_CONTEXT}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+            self.message_id,
             self.account_id,
             self.from_member_id,
             self.to_member_id,
@@ -94,13 +98,22 @@ pub struct RelayMemberKeys {
 }
 
 impl RelayMemberKeys {
-    /// The bytes an invite tag covers: the account and both keys.
-    pub fn tag_material(&self, account_id: &str, role: RelayRole) -> Vec<u8> {
+    /// The bytes an invite tag covers: the account, the invite's node name
+    /// and both keys, so a relay cannot swap keys or names.
+    pub fn tag_material(&self, account_id: &str, invite_name: &str, role: RelayRole) -> Vec<u8> {
         format!(
-            "keylease-relay-invite-v1\n{account_id}\n{role:?}\n{}\n{}",
+            "keylease-relay-invite-v2\n{account_id}\n{invite_name}\n{role:?}\n{}\n{}",
             self.sign_public_b64, self.box_public_b64
         )
         .into_bytes()
+    }
+
+    /// A member's id is derived from its signing key, so a relay cannot
+    /// present one member's keys under another member's id.
+    pub fn member_id(&self) -> String {
+        let digest =
+            relay_digest(format!("keylease-relay-member-v1\n{}", self.sign_public_b64).as_bytes());
+        format!("member_{}", &digest[..32])
     }
 
     /// A short fingerprint for people to compare.
@@ -242,6 +255,7 @@ pub struct RelayEnvelope {
 impl RelayEnvelope {
     pub fn label(&self) -> RelayPayloadLabel<'_> {
         RelayPayloadLabel {
+            message_id: &self.message_id,
             account_id: &self.account_id,
             from_member_id: &self.from_member_id,
             to_member_id: &self.to_member_id,
@@ -285,6 +299,7 @@ impl RelayBackup {
         owner_member_id: &'a str,
     ) -> RelayPayloadLabel<'a> {
         RelayPayloadLabel {
+            message_id: "",
             account_id,
             from_member_id: &self.member_id,
             to_member_id: owner_member_id,
@@ -322,6 +337,7 @@ mod tests {
             "KEYLEASE-RELAY-REQUEST-V1\nPOST\n/v1/relay/messages\n7\n44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
         );
         let label = RelayPayloadLabel {
+            message_id: "msg_1",
             account_id: "acct_a",
             from_member_id: "m_owner",
             to_member_id: "m_node",
@@ -331,7 +347,7 @@ mod tests {
         };
         assert_eq!(
             String::from_utf8(label.aad()).unwrap(),
-            "KEYLEASE-RELAY-PAYLOAD-V1\nacct_a\nm_owner\nm_node\nshare\nitem_1\n3"
+            "KEYLEASE-RELAY-PAYLOAD-V1\nmsg_1\nacct_a\nm_owner\nm_node\nshare\nitem_1\n3"
         );
         assert!(
             String::from_utf8(label.signing_input("{}"))

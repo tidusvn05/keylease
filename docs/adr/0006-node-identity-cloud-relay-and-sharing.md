@@ -51,10 +51,25 @@ Members have two kinds:
 The Cloud gains a **relay** API (`/v1/relay/...`). It stores members' public
 keys, a mailbox per member and the latest backup object per member and item.
 Every payload is sealed (X25519 + HKDF-SHA256 + XChaCha20-Poly1305) to its
-recipient and signed (Ed25519) by its sender over the account, sender,
-recipient, kind, object, revision and ciphertext digest. Requests are signed by
-the member's Ed25519 key over method, path, timestamp and body digest (120 s
-window). The admin token is used only to create the account.
+recipient and signed (Ed25519) by its sender over the message id, account,
+sender, recipient, kind, object, revision and ciphertext digest. Requests are
+signed by the member's Ed25519 key over method, path, timestamp and body digest
+(120 s window). A member id is derived from the member's signing key, so the
+relay cannot present one member's keys under another's id. The admin token is
+used only to create the account.
+
+Against a relay that replays, reorders or withholds:
+
+- applied message ids are kept, and the id is signed, so a replay under the
+  same or a new id is refused;
+- share and unshare messages carry clock-based revisions that only grow (also
+  after the owner recovers on a new device); a node keeps a high-water mark per
+  shared item that outlives an unshare, so an older share cannot bring a
+  revoked item back and an older unshare cannot remove a newer share;
+- each member's backup ends with a signed **manifest** of every live object
+  and its revision; a restore uses only objects at the manifest's revision and
+  reports what is missing and the manifest's date. A relay can still serve an
+  older consistent snapshot; the date shows it.
 
 The Cloud learns which members exist, who sends what kind of message to whom,
 object ids, revisions and sizes. It never sees an item, a purpose, a key or a
@@ -83,24 +98,29 @@ key is detected too. Until verified, a node cannot receive a share.
   The owner approves it by choosing the item (`cloud approve REQ --item ID`),
   which creates an item share, or denies it.
 
-A shared item is imported on the node with a `keylease.cloud_share` extension
-and is not backed up by the node (the owner has it). Revocation deletes the
+A shared item is imported on the node into `group_cloud_shared` with a
+`keylease.cloud_share` extension; it is read-only there (edits and deletes are
+refused) and is not backed up by the node (the owner has it). Node names come
+from the owner's own invite records and are covered by the invite tags, so the
+relay cannot swap two nodes' names. Revocation deletes the
 node's copy on its next sync; it cannot unsee a value already delivered, so a
 revoked secret must be rotated when the node is not trusted any more.
 
 ### Backup and recovery
 
 When a member is linked to a cloud, its daemon backs up each of its own items
-(not shared-in copies), sealed to the **owner** key and signed by the member,
-and sends tombstones for deleted items. Groups and projects are not part of the
-backup: a restored item lands in the default group without a project.
+(not shared-in copies) and projects, sealed to the **owner** key and signed by
+the member, sends tombstones for deleted items, and then the manifest. The
+owner also backs up its verified nodes and shares. Groups are not backed up:
+restored items land in `group_cloud_restored`; an owner restoring its own
+backup keeps their projects, a node receiving a restore gets none.
 
 - **A dead VPS:** create a new node with a new invite, then the owner runs
   `cloud restore --from OLD --to NEW`. The owner's device verifies each backup
   object with OLD's key, decrypts it and re-seals it to NEW as a restore
   message; NEW imports the items as its own. OLD can then be removed.
 - **A lost personal device:** `cloud init` prints a **recovery kit** once (the
-  cloud URL, the account id and a 26-character recovery code). The owner keys
+  cloud URL, the account id and a 28-character recovery code). The owner keys
   are stored in the Cloud encrypted under a key derived from the code
   (Argon2id); the Cloud holds only a hash of a lookup value derived from it. On
   a new device, `cloud recover` fetches the kit, decrypts the owner keys and

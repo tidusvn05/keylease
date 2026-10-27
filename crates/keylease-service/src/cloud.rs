@@ -96,7 +96,6 @@ struct RelaySecrets {
 /// Owner keys inside the recovery kit.
 #[derive(Serialize, Deserialize)]
 struct RecoveryKitPlain {
-    owner_member_id: String,
     sign_secret_b64: String,
     box_secret_b64: String,
 }
@@ -161,10 +160,28 @@ pub struct CloudShareRequest {
     pub share_id: Option<String>,
 }
 
+/// Owner: what one item of a share was last published as. Message
+/// revisions follow the clock (and only grow), so they keep growing after the
+/// owner recovers on a new device and the node's high-water mark still works.
+#[derive(Serialize, Deserialize)]
+struct PublishedRecord {
+    item_revision: u64,
+    message_revision: u64,
+}
+
+fn next_message_revision(previous: u64) -> u64 {
+    (Utc::now().timestamp_millis().max(0) as u64).max(previous + 1)
+}
+
+/// Node: an item received through a share. It outlives an unshare
+/// (`closed`), so a replayed or reordered older share cannot bring the item
+/// back: only a message revision above `owner_revision` applies.
 #[derive(Serialize, Deserialize)]
 struct ReceivedRecord {
     local_item_id: ItemId,
     owner_revision: u64,
+    #[serde(default)]
+    closed: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -178,9 +195,40 @@ struct BackupState {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum BackupPayload {
-    Item { item: Box<VaultItem> },
-    Node { node: CloudNode },
-    Share { share: CloudShare },
+    Item {
+        item: Box<VaultItem>,
+    },
+    Project {
+        project: VaultProject,
+    },
+    Node {
+        node: CloudNode,
+    },
+    Share {
+        share: CloudShare,
+    },
+    /// Every live object and its revision, signed with the rest: a relay that
+    /// serves an older revision, drops an object or hides a deletion is
+    /// caught on restore.
+    Manifest {
+        entries: std::collections::BTreeMap<String, u64>,
+        as_of: DateTime<Utc>,
+    },
+}
+
+const MANIFEST_ID: &str = "manifest";
+
+/// What a restore did.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RestoreReport {
+    pub restored: usize,
+    /// When the backup's manifest was written (None: no manifest found).
+    pub as_of: Option<DateTime<Utc>>,
+    /// Objects the manifest lists that the cloud did not return at that
+    /// revision.
+    pub missing: Vec<String>,
+    /// Objects the cloud returned that the manifest does not list.
+    pub ignored: usize,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -329,6 +377,15 @@ fn valid_url(url: &str) -> Result<String> {
     }
     Ok(trimmed.to_owned())
 }
+/// An id from another member: letters, digits, `_` and `-`, at most 128.
+fn valid_wire_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
 fn new_id(prefix: &str) -> String {
     format!("{prefix}_{}", uuid::Uuid::now_v7().simple())
 }
@@ -477,7 +534,6 @@ impl KeyLeaseService {
             let recovery_code = random_base32(17); // 136 bits, 28 characters
             let recovery = derive_recovery_keys(&recovery_code, &account_id)?;
             let kit = RecoveryKitPlain {
-                owner_member_id: String::new(),
                 sign_secret_b64: keys.secrets().sign_secret_b64,
                 box_secret_b64: keys.secrets().box_secret_b64,
             };
@@ -520,8 +576,11 @@ impl KeyLeaseService {
         let mut link = self
             .cloud_link()?
             .ok_or_else(|| invalid("no pending owner link"))?;
-        if link.role != CloudRole::Owner || link.account_id != created.account_id {
-            return Err(invalid("the cloud answered for another account"));
+        if link.role != CloudRole::Owner
+            || link.account_id != created.account_id
+            || created.owner_member_id != link.keys().member_id()
+        {
+            return Err(invalid("the cloud answered for another account or key"));
         }
         link.member_id = created.owner_member_id.clone();
         link.owner_member_id = created.owner_member_id.clone();
@@ -542,7 +601,9 @@ impl KeyLeaseService {
             let expires_at = Utc::now() + Duration::minutes(INVITE_TTL_MINUTES);
             let owner_tag = invite_tag(
                 &secret,
-                &link.keys().tag_material(&link.account_id, RelayRole::Owner),
+                &link
+                    .keys()
+                    .tag_material(&link.account_id, name.trim(), RelayRole::Owner),
             );
             let record = InviteRecord {
                 name: name.trim().into(),
@@ -594,9 +655,11 @@ impl KeyLeaseService {
             secret,
             &invite
                 .owner
-                .tag_material(&invite.account_id, RelayRole::Owner),
+                .tag_material(&invite.account_id, &invite.name, RelayRole::Owner),
         );
-        if !tags_match(&expected, &invite.owner_tag_b64) {
+        if !tags_match(&expected, &invite.owner_tag_b64)
+            || invite.owner_member_id != invite.owner.member_id()
+        {
             return Err(KeyLeaseError::Denied {
                 reason: "the invite does not match the code: the cloud may have altered the owner's keys".into(),
             });
@@ -606,7 +669,7 @@ impl KeyLeaseService {
             let public = keys.public();
             let node_tag = invite_tag(
                 secret,
-                &public.tag_material(&invite.account_id, RelayRole::Node),
+                &public.tag_material(&invite.account_id, &invite.name, RelayRole::Node),
             );
             self.save_keys(vault, &keys)?;
             self.save_link(&CloudLink {
@@ -636,8 +699,11 @@ impl KeyLeaseService {
         let mut link = self
             .cloud_link()?
             .ok_or_else(|| invalid("no pending node link"))?;
-        if link.role != CloudRole::Node || link.account_id != joined.account_id {
-            return Err(invalid("the cloud answered for another account"));
+        if link.role != CloudRole::Node
+            || link.account_id != joined.account_id
+            || joined.member_id != link.keys().member_id()
+        {
+            return Err(invalid("the cloud answered for another account or key"));
         }
         link.member_id = joined.member_id.clone();
         self.save_link(&link)?;
@@ -650,7 +716,6 @@ impl KeyLeaseService {
         &self,
         url: &str,
         account_id: &str,
-        owner_member_id: &str,
         kit_json: &str,
         code: &str,
         name: &str,
@@ -677,6 +742,8 @@ impl KeyLeaseService {
         self.with_vault(|vault| {
             self.save_keys(vault, &keys)?;
             let public = keys.public();
+            let owner_member_id = public.member_id();
+            let owner_member_id = owner_member_id.as_str();
             let link = CloudLink {
                 url,
                 account_id: account_id.into(),
@@ -782,8 +849,18 @@ impl KeyLeaseService {
             nodes: count(record::NODE)?,
             active_shares: shares,
             pending_requests: pending,
-            received_items: count(record::RECEIVED)?,
-            backed_up_objects: count(record::BACKUP)?,
+            received_items: self
+                .store
+                .cloud_list(record::RECEIVED, "")?
+                .into_iter()
+                .filter(|(_, json)| from_json::<ReceivedRecord>(json).is_ok_and(|r| !r.closed))
+                .count(),
+            backed_up_objects: self
+                .store
+                .cloud_list(record::BACKUP, "")?
+                .iter()
+                .filter(|(id, _)| id != MANIFEST_ID)
+                .count(),
             outbox: count(record::OUTBOX)?,
         })
     }
@@ -800,7 +877,7 @@ impl KeyLeaseService {
             for member in members.iter().filter(|m| m.role == RelayRole::Node) {
                 let known = self.store.cloud_get(record::NODE, &member.member_id)?;
                 if let Some(json) = known {
-                    let mut node: CloudNode = from_json(&json)?;
+                    let node: CloudNode = from_json(&json)?;
                     if node.sign_public_b64 != member.keys.sign_public_b64
                         || node.box_public_b64 != member.keys.box_public_b64
                     {
@@ -810,11 +887,15 @@ impl KeyLeaseService {
                         ));
                         continue;
                     }
-                    if member.revoked_at.is_some() && node.removed_at.is_none() {
-                        node.removed_at = member.revoked_at;
-                        self.store
-                            .cloud_put(record::NODE, &node.member_id, &to_json(&node)?)?;
-                    }
+                    // Removal is decided here (cloud_remove_node), never by
+                    // what the cloud reports.
+                    continue;
+                }
+                if member.member_id != member.keys.member_id() {
+                    problems.push(format!(
+                        "{}: its member id does not match its key; it is not trusted",
+                        member.member_id
+                    ));
                     continue;
                 }
                 let (Some(lookup_hash), Some(tag)) =
@@ -834,26 +915,31 @@ impl KeyLeaseService {
                     &invite.secret_sealed,
                 )?;
                 let secret = String::from_utf8_lossy(&secret).into_owned();
+                // The name comes from this device's invite, not from the
+                // cloud, and the tag covers it.
                 let expected = invite_tag(
                     &secret,
-                    &member.keys.tag_material(&link.account_id, RelayRole::Node),
+                    &member
+                        .keys
+                        .tag_material(&link.account_id, &invite.name, RelayRole::Node),
                 );
-                self.store.cloud_delete(record::INVITE, lookup_hash)?;
                 if !tags_match(&expected, tag) {
+                    // Kept: a bogus entry must not burn the real node's invite.
                     problems.push(format!(
-                        "{} ({}) registered keys that do not match the invite; it is not trusted",
-                        member.name, member.member_id
+                        "{} registered keys that do not match the invite for {}; it is not trusted",
+                        member.member_id, invite.name
                     ));
                     continue;
                 }
+                self.store.cloud_delete(record::INVITE, lookup_hash)?;
                 let node = CloudNode {
                     member_id: member.member_id.clone(),
-                    name: member.name.clone(),
+                    name: invite.name.clone(),
                     sign_public_b64: member.keys.sign_public_b64.clone(),
                     box_public_b64: member.keys.box_public_b64.clone(),
                     fingerprint: member.keys.fingerprint(),
                     verified_at: Utc::now(),
-                    removed_at: member.revoked_at,
+                    removed_at: None,
                 };
                 self.store
                     .cloud_put(record::NODE, &node.member_id, &to_json(&node)?)?;
@@ -865,7 +951,7 @@ impl KeyLeaseService {
             }
             // Expired invites are useless.
             for (id, json) in self.store.cloud_list(record::INVITE, "")? {
-                if from_json::<InviteRecord>(&json)?.expires_at < Utc::now() - Duration::days(1) {
+                if from_json::<InviteRecord>(&json)?.expires_at < Utc::now() - Duration::days(7) {
                     self.store.cloud_delete(record::INVITE, &id)?;
                 }
             }
@@ -1210,7 +1296,9 @@ impl KeyLeaseService {
         revision: u64,
         payload: &MessagePayload,
     ) -> Result<()> {
+        let message_id = new_id("msg");
         let label = RelayPayloadLabel {
+            message_id: &message_id,
             account_id: &link.account_id,
             from_member_id: &link.member_id,
             to_member_id,
@@ -1223,7 +1311,7 @@ impl KeyLeaseService {
         let sealed = to_json(&seal(&unb64_32(to_box_public_b64)?, &plain, &label.aad())?)?;
         let signature = keys.sign.sign(&label.signing_input(&sealed));
         let envelope = RelayEnvelope {
-            message_id: new_id("msg"),
+            message_id: message_id.clone(),
             account_id: link.account_id.clone(),
             from_member_id: link.member_id.clone(),
             to_member_id: to_member_id.into(),
@@ -1290,13 +1378,14 @@ impl KeyLeaseService {
                 };
                 let prefix = format!("{}/", share.share_id);
                 let published = self.store.cloud_list(record::SHARE_ITEM, &prefix)?;
-                for (key, revision) in &published {
+                for (key, json) in &published {
                     let item_id = key.trim_start_matches(&prefix);
                     if wanted.iter().any(|item| item.id.0 == item_id) {
                         continue;
                     }
                     if node.removed_at.is_none() {
-                        let revision: u64 = revision.parse().unwrap_or(0);
+                        let previous: PublishedRecord = from_json(json)?;
+                        let revision = next_message_revision(previous.message_revision);
                         self.queue_message(
                             &link,
                             &keys,
@@ -1316,11 +1405,22 @@ impl KeyLeaseService {
                 }
                 for item in wanted {
                     let key = format!("{prefix}{}", item.id.0);
-                    if self.store.cloud_get(record::SHARE_ITEM, &key)?.as_deref()
-                        == Some(item.revision.to_string().as_str())
+                    let previous: Option<PublishedRecord> = self
+                        .store
+                        .cloud_get(record::SHARE_ITEM, &key)?
+                        .map(|json| from_json(&json))
+                        .transpose()?;
+                    if previous
+                        .as_ref()
+                        .is_some_and(|p| p.item_revision == item.revision)
                     {
                         continue;
                     }
+                    let revision =
+                        next_message_revision(previous.map_or(0, |p| p.message_revision));
+                    let mut copy = item.clone();
+                    // The node decides its own agents' access.
+                    copy.agent_access = AgentAccess::default();
                     self.queue_message(
                         &link,
                         &keys,
@@ -1328,15 +1428,21 @@ impl KeyLeaseService {
                         &node.box_public_b64,
                         kind::SHARE,
                         &item.id.0,
-                        item.revision,
+                        revision,
                         &MessagePayload::Share {
                             share_id: share.share_id.clone(),
-                            item: Box::new(item.clone()),
+                            item: Box::new(copy),
                             expires_at: share.expires_at,
                         },
                     )?;
-                    self.store
-                        .cloud_put(record::SHARE_ITEM, &key, &item.revision.to_string())?;
+                    self.store.cloud_put(
+                        record::SHARE_ITEM,
+                        &key,
+                        &to_json(&PublishedRecord {
+                            item_revision: item.revision,
+                            message_revision: revision,
+                        })?,
+                    )?;
                     queued += 1;
                 }
             }
@@ -1364,28 +1470,24 @@ impl KeyLeaseService {
                 }
                 match self.apply_message(vault, &link, &keys, message) {
                     Ok(()) => outcome.applied += 1,
-                    Err(KeyLeaseError::VaultLocked { .. }) | Err(KeyLeaseError::Storage) => {
-                        continue;
-                    }
+                    // Passing conditions (a locked vault, a node not verified
+                    // yet): leave the message in the mailbox for a later sync.
+                    Err(KeyLeaseError::VaultLocked { .. })
+                    | Err(KeyLeaseError::Storage)
+                    | Err(KeyLeaseError::NotFound { .. }) => continue,
                     Err(error) => outcome.rejected.push(format!(
                         "{} {}: {error:?}",
                         message.kind, message.message_id
                     )),
                 }
+                // Applied ids are kept: the message id is signed, so a replay
+                // under the same id is recognized however late it comes.
                 self.store.cloud_put(
                     record::APPLIED,
                     &message.message_id,
                     &to_json(&Utc::now())?,
                 )?;
                 outcome.acknowledged.push(message.message_id.clone());
-            }
-            // Applied ids older than the cloud's retention are not needed.
-            for (id, json) in self.store.cloud_list(record::APPLIED, "")? {
-                if from_json::<DateTime<Utc>>(&json)
-                    .is_ok_and(|at| at < Utc::now() - Duration::days(30))
-                {
-                    self.store.cloud_delete(record::APPLIED, &id)?;
-                }
             }
             self.expire_received(vault)?;
             Ok(outcome)
@@ -1414,7 +1516,9 @@ impl KeyLeaseService {
                     &self
                         .store
                         .cloud_get(record::NODE, &message.from_member_id)?
-                        .ok_or_else(|| invalid("message from an unverified node"))?,
+                        .ok_or_else(|| KeyLeaseError::NotFound {
+                            resource: format!("verified node {}", message.from_member_id),
+                        })?,
                 )?;
                 if node.removed_at.is_some() {
                     return Err(invalid("message from a removed node"));
@@ -1442,18 +1546,23 @@ impl KeyLeaseService {
                     item,
                     expires_at,
                 },
-            ) if item.id.0 == message.object_id && item.revision == message.revision => {
-                self.receive_shared_item(vault, link, &share_id, *item, expires_at)
-            }
+            ) if item.id.0 == message.object_id => self.receive_shared_item(
+                vault,
+                link,
+                &share_id,
+                *item,
+                message.revision,
+                expires_at,
+            ),
             (CloudRole::Node, kind::UNSHARE, MessagePayload::Unshare { share_id, item_id })
                 if item_id.0 == message.object_id =>
             {
-                self.drop_shared_item(vault, &share_id, &item_id)
+                self.drop_shared_item(vault, &share_id, &item_id, message.revision)
             }
             (CloudRole::Node, kind::RESTORE, MessagePayload::Restore { item })
                 if item.id.0 == message.object_id =>
             {
-                self.import_restored_item(vault, *item)
+                self.import_restored_item(vault, *item, false)
             }
             (
                 CloudRole::Node,
@@ -1487,7 +1596,14 @@ impl KeyLeaseService {
                     hint,
                 },
             ) if request_id == message.object_id => {
+                // Everything here was written by the node: bound and plain.
                 validate_purpose(&purpose)?;
+                if let Some(hint) = &hint {
+                    validate_purpose(hint)?;
+                }
+                if !valid_wire_id(&agent_id) || !valid_wire_id(&request_id) {
+                    return Err(invalid("malformed share request"));
+                }
                 let node: CloudNode = from_json(
                     &self
                         .store
@@ -1522,6 +1638,7 @@ impl KeyLeaseService {
         link: &CloudLink,
         share_id: &str,
         owner_item: VaultItem,
+        message_revision: u64,
         expires_at: Option<DateTime<Utc>>,
     ) -> Result<()> {
         let key = format!("{share_id}/{}", owner_item.id.0);
@@ -1530,18 +1647,23 @@ impl KeyLeaseService {
             .cloud_get(record::RECEIVED, &key)?
             .map(|json| from_json(&json))
             .transpose()?;
-        if let Some(existing) = &existing
-            && existing.owner_revision >= owner_item.revision
+        // Only a newer message applies: an old or reordered share (also one
+        // from before an unshare) is ignored.
+        if existing
+            .as_ref()
+            .is_some_and(|e| e.owner_revision >= message_revision)
         {
             return Ok(());
         }
         let current = match &existing {
-            Some(record) => self.store.get_item(vault, &record.local_item_id).ok(),
-            None => None,
+            Some(record) if !record.closed => {
+                self.store.get_item(vault, &record.local_item_id).ok()
+            }
+            _ => None,
         };
-        let local_id = existing
+        let local_id = current
             .as_ref()
-            .map(|r| r.local_item_id.clone())
+            .map(|item| item.id.clone())
             .unwrap_or_default();
         let base_revision = current.as_ref().map_or(0, |item| item.revision);
         let mut item = owner_item.clone();
@@ -1549,6 +1671,7 @@ impl KeyLeaseService {
         item.vault_id = vault.vault_id.clone();
         item.group_id = GroupId(SHARED_GROUP.into());
         item.project_id = None;
+        item.agent_access = AgentAccess::default();
         item.revision = base_revision + 1;
         item.updated_at = Utc::now();
         if current.is_none() {
@@ -1560,7 +1683,7 @@ impl KeyLeaseService {
                 "share_id": share_id,
                 "owner_member_id": link.owner_member_id,
                 "owner_item_id": owner_item.id.0,
-                "owner_revision": owner_item.revision,
+                "owner_revision": message_revision,
                 "expires_at": expires_at,
                 "read_only": true,
             }),
@@ -1571,8 +1694,8 @@ impl KeyLeaseService {
             Some(base_revision),
             MutationContext {
                 actor: "cloud",
-                idempotency_key: &format!("cloud-share-{key}-{}", owner_item.revision),
-                request_material: format!("cloud-share:{key}:{}", owner_item.revision).as_bytes(),
+                idempotency_key: &format!("cloud-share-{key}-{message_revision}"),
+                request_material: format!("cloud-share:{key}:{message_revision}").as_bytes(),
                 audit_event: Some(&self.vault_audit_event(
                     &self.cloud_actor(),
                     "cloud:receive",
@@ -1588,7 +1711,8 @@ impl KeyLeaseService {
             &key,
             &to_json(&ReceivedRecord {
                 local_item_id: local_id,
-                owner_revision: owner_item.revision,
+                owner_revision: message_revision,
+                closed: false,
             })?,
         )
     }
@@ -1598,13 +1722,47 @@ impl KeyLeaseService {
         vault: &keylease_store::UnlockedVault,
         share_id: &str,
         owner_item_id: &ItemId,
+        message_revision: u64,
     ) -> Result<()> {
         let key = format!("{share_id}/{}", owner_item_id.0);
-        let Some(json) = self.store.cloud_get(record::RECEIVED, &key)? else {
+        let existing: Option<ReceivedRecord> = self
+            .store
+            .cloud_get(record::RECEIVED, &key)?
+            .map(|json| from_json(&json))
+            .transpose()?;
+        // An unshare older than the copy we hold (reordered by the relay) is
+        // stale: the owner shared the item again after it.
+        if existing
+            .as_ref()
+            .is_some_and(|e| e.owner_revision > message_revision)
+        {
             return Ok(());
-        };
-        let record: ReceivedRecord = from_json(&json)?;
-        if let Ok(item) = self.store.get_item(vault, &record.local_item_id) {
+        }
+        if let Some(record) = existing.as_ref().filter(|r| !r.closed) {
+            self.delete_received_copy(vault, share_id, &key, &record.local_item_id)?;
+        }
+        // The closed record is the high-water mark against replays.
+        self.store.cloud_put(
+            record::RECEIVED,
+            &key,
+            &to_json(&ReceivedRecord {
+                local_item_id: existing
+                    .map(|r| r.local_item_id)
+                    .unwrap_or_else(|| ItemId(String::new())),
+                owner_revision: message_revision,
+                closed: true,
+            })?,
+        )
+    }
+
+    fn delete_received_copy(
+        &self,
+        vault: &keylease_store::UnlockedVault,
+        share_id: &str,
+        key: &str,
+        local_item_id: &ItemId,
+    ) -> Result<()> {
+        if let Ok(item) = self.store.get_item(vault, local_item_id) {
             self.store.delete_item(
                 vault,
                 &item.id,
@@ -1624,36 +1782,45 @@ impl KeyLeaseService {
                 },
             )?;
         }
-        self.store.cloud_delete(record::RECEIVED, &key)
+        Ok(())
     }
 
     /// Node: drops shared items whose share expired, even if the owner's
     /// revocation has not arrived.
     fn expire_received(&self, vault: &keylease_store::UnlockedVault) -> Result<()> {
         for (key, json) in self.store.cloud_list(record::RECEIVED, "")? {
-            let record: ReceivedRecord = from_json(&json)?;
-            let Ok(item) = self.store.get_item(vault, &record.local_item_id) else {
-                self.store.cloud_delete(record::RECEIVED, &key)?;
+            let mut record: ReceivedRecord = from_json(&json)?;
+            if record.closed {
                 continue;
+            }
+            let expired = match self.store.get_item(vault, &record.local_item_id) {
+                Ok(item) => item
+                    .extensions
+                    .get(SHARE_EXTENSION)
+                    .and_then(|share| share.get("expires_at"))
+                    .and_then(|at| serde_json::from_value::<Option<DateTime<Utc>>>(at.clone()).ok())
+                    .flatten()
+                    .is_some_and(|at| at <= Utc::now()),
+                Err(_) => true,
             };
-            let expired = item
-                .extensions
-                .get(SHARE_EXTENSION)
-                .and_then(|share| share.get("expires_at"))
-                .and_then(|at| serde_json::from_value::<Option<DateTime<Utc>>>(at.clone()).ok())
-                .flatten()
-                .is_some_and(|at| at <= Utc::now());
-            if expired && let Some((share_id, owner_item)) = key.split_once('/') {
-                self.drop_shared_item(vault, share_id, &ItemId(owner_item.into()))?;
+            if expired && let Some((share_id, _)) = key.split_once('/') {
+                self.delete_received_copy(vault, share_id, &key, &record.local_item_id)?;
+                record.closed = true;
+                self.store
+                    .cloud_put(record::RECEIVED, &key, &to_json(&record)?)?;
             }
         }
         Ok(())
     }
 
+    /// Imports a backed-up item as this vault's own. `keep_project` (an
+    /// owner restoring its own backup, projects included) keeps the item's
+    /// project when that project exists here.
     fn import_restored_item(
         &self,
         vault: &keylease_store::UnlockedVault,
         backup_item: VaultItem,
+        keep_project: bool,
     ) -> Result<()> {
         let mut item = backup_item;
         let source = item.id.clone();
@@ -1663,7 +1830,14 @@ impl KeyLeaseService {
         }
         item.vault_id = vault.vault_id.clone();
         item.group_id = GroupId(RESTORED_GROUP.into());
-        item.project_id = None;
+        if !(keep_project
+            && item
+                .project_id
+                .as_ref()
+                .is_some_and(|id| self.store.get_project(vault, id).is_ok()))
+        {
+            item.project_id = None;
+        }
         item.revision = 1;
         item.extensions.remove(SHARE_EXTENSION);
         item.updated_at = Utc::now();
@@ -1691,8 +1865,9 @@ impl KeyLeaseService {
     // ---- backups -----------------------------------------------------------
 
     /// This member's backup objects that changed since the last backup, sealed
-    /// to the owner: items (not shared-in copies), deletions, and on the owner
-    /// its verified nodes and shares.
+    /// to the owner: items (not shared-in copies), projects, deletions, on the
+    /// owner its verified nodes and shares, and, once those are stored, the
+    /// manifest. Call it until it returns nothing.
     pub fn cloud_backup_batch(&self, limit: usize) -> Result<Vec<PendingBackup>> {
         let link = self.require_link()?;
         self.with_vault_passive(|vault| {
@@ -1709,6 +1884,13 @@ impl KeyLeaseService {
                         item: Box::new(item),
                     },
                     Some(revision),
+                ));
+            }
+            for project in self.store.list_projects(vault)? {
+                objects.push((
+                    format!("project-{}", project.id.0),
+                    BackupPayload::Project { project },
+                    None,
                 ));
             }
             if link.role == CloudRole::Owner {
@@ -1734,31 +1916,17 @@ impl KeyLeaseService {
                 if out.len() >= limit {
                     break;
                 }
-                let plain = Zeroizing::new(
-                    serde_json::to_vec(&payload).map_err(|_| KeyLeaseError::Storage)?,
-                );
-                let digest = relay_digest(&plain);
-                let previous: Option<BackupState> = self
-                    .store
-                    .cloud_get(record::BACKUP, &object_id)?
-                    .map(|json| from_json(&json))
-                    .transpose()?;
-                if previous.as_ref().is_some_and(|p| p.digest == digest) {
-                    continue;
+                if let Some(pending) =
+                    self.backup_if_changed(&link, &keys, &object_id, &payload, item_revision)?
+                {
+                    out.push(pending);
                 }
-                let revision = item_revision
-                    .unwrap_or(0)
-                    .max(previous.as_ref().map_or(0, |p| p.revision) + 1);
-                out.push(PendingBackup {
-                    backup: self.seal_backup(&link, &keys, &object_id, revision, Some(&plain))?,
-                    digest,
-                });
             }
             for (object_id, json) in self.store.cloud_list(record::BACKUP, "")? {
                 if out.len() >= limit {
                     break;
                 }
-                if present.contains(&object_id) {
+                if present.contains(&object_id) || object_id == MANIFEST_ID {
                     continue;
                 }
                 let previous: BackupState = from_json(&json)?;
@@ -1773,8 +1941,74 @@ impl KeyLeaseService {
                     digest: String::new(),
                 });
             }
+            if out.is_empty() {
+                // Everything is stored: the manifest lists what the cloud has.
+                let entries = self
+                    .store
+                    .cloud_list(record::BACKUP, "")?
+                    .into_iter()
+                    .filter(|(id, _)| id != MANIFEST_ID)
+                    .map(|(id, json)| Ok((id, from_json::<BackupState>(&json)?.revision)))
+                    .collect::<Result<std::collections::BTreeMap<_, _>>>()?;
+                let manifest = BackupPayload::Manifest {
+                    entries: entries.clone(),
+                    as_of: Utc::now(),
+                };
+                let entries_digest = relay_digest(
+                    &serde_json::to_vec(&entries).map_err(|_| KeyLeaseError::Storage)?,
+                );
+                let previous: Option<BackupState> = self
+                    .store
+                    .cloud_get(record::BACKUP, MANIFEST_ID)?
+                    .map(|json| from_json(&json))
+                    .transpose()?;
+                if previous.as_ref().is_none_or(|p| p.digest != entries_digest) {
+                    let plain = Zeroizing::new(
+                        serde_json::to_vec(&manifest).map_err(|_| KeyLeaseError::Storage)?,
+                    );
+                    let revision = previous.map_or(0, |p| p.revision) + 1;
+                    out.push(PendingBackup {
+                        backup: self.seal_backup(
+                            &link,
+                            &keys,
+                            MANIFEST_ID,
+                            revision,
+                            Some(&plain),
+                        )?,
+                        digest: entries_digest,
+                    });
+                }
+            }
             Ok(out)
         })
+    }
+
+    fn backup_if_changed(
+        &self,
+        link: &CloudLink,
+        keys: &Keys,
+        object_id: &str,
+        payload: &BackupPayload,
+        item_revision: Option<u64>,
+    ) -> Result<Option<PendingBackup>> {
+        let plain =
+            Zeroizing::new(serde_json::to_vec(payload).map_err(|_| KeyLeaseError::Storage)?);
+        let digest = relay_digest(&plain);
+        let previous: Option<BackupState> = self
+            .store
+            .cloud_get(record::BACKUP, object_id)?
+            .map(|json| from_json(&json))
+            .transpose()?;
+        if previous.as_ref().is_some_and(|p| p.digest == digest) {
+            return Ok(None);
+        }
+        let revision = item_revision
+            .unwrap_or(0)
+            .max(previous.as_ref().map_or(0, |p| p.revision) + 1);
+        Ok(Some(PendingBackup {
+            backup: self.seal_backup(link, keys, object_id, revision, Some(&plain))?,
+            digest,
+        }))
     }
 
     fn seal_backup(
@@ -1826,15 +2060,29 @@ impl KeyLeaseService {
         )
     }
 
-    /// Owner: opens the backups of `from` (a node, or this owner) after
-    /// checking each one's signature. Deleted objects are skipped.
+    /// The cloud already holds `revision` (or newer) of an object, for
+    /// example after a recovery: the next batch continues above it.
+    pub fn cloud_backup_rebase(&self, object_id: &str, revision: u64) -> Result<()> {
+        self.store.cloud_put(
+            record::BACKUP,
+            object_id,
+            &to_json(&BackupState {
+                revision,
+                digest: String::new(),
+            })?,
+        )
+    }
+
+    /// Owner: opens the backups of `from` (a node, or this owner), checking
+    /// each signature, that each payload is the object it claims to be, and
+    /// the set against the signed manifest.
     fn open_backups(
         &self,
         link: &CloudLink,
         keys: &Keys,
         from_member_id: &str,
         backups: &[RelayBackup],
-    ) -> Result<Vec<BackupPayload>> {
+    ) -> Result<(Vec<BackupPayload>, RestoreReport)> {
         let sender_sign = if from_member_id == link.member_id {
             link.sign_public_b64.clone()
         } else {
@@ -1848,7 +2096,7 @@ impl KeyLeaseService {
             )?
             .sign_public_b64
         };
-        let mut out = Vec::new();
+        let mut opened = Vec::new();
         for backup in backups.iter().filter(|b| !b.deleted) {
             if backup.member_id != from_member_id {
                 return Err(invalid("a backup of another member was returned"));
@@ -1861,20 +2109,68 @@ impl KeyLeaseService {
             )?;
             let sealed: SealedBox = from_json(&backup.sealed_json)?;
             let plain = open(&keys.boxed, &sealed, &label.aad())?;
-            out.push(serde_json::from_slice(&plain).map_err(|_| KeyLeaseError::Crypto)?);
+            let payload: BackupPayload =
+                serde_json::from_slice(&plain).map_err(|_| KeyLeaseError::Crypto)?;
+            let claimed = match &payload {
+                BackupPayload::Item { item } => item.id.0.clone(),
+                BackupPayload::Project { project } => format!("project-{}", project.id.0),
+                BackupPayload::Node { node } => format!("node-{}", node.member_id),
+                BackupPayload::Share { share } => format!("share-{}", share.share_id),
+                BackupPayload::Manifest { .. } => MANIFEST_ID.into(),
+            };
+            if claimed != backup.object_id {
+                return Err(invalid("a backup holds another object than it is labelled"));
+            }
+            opened.push((backup.object_id.clone(), backup.revision, payload));
         }
-        Ok(out)
+        let mut report = RestoreReport::default();
+        let manifest = opened.iter().find_map(|(_, _, payload)| match payload {
+            BackupPayload::Manifest { entries, as_of } => Some((entries.clone(), *as_of)),
+            _ => None,
+        });
+        let mut out = Vec::new();
+        match manifest {
+            Some((entries, as_of)) => {
+                report.as_of = Some(as_of);
+                for (object_id, revision) in &entries {
+                    if !opened
+                        .iter()
+                        .any(|(id, rev, _)| id == object_id && rev == revision)
+                    {
+                        report.missing.push(object_id.clone());
+                    }
+                }
+                for (object_id, revision, payload) in opened {
+                    if matches!(payload, BackupPayload::Manifest { .. }) {
+                        continue;
+                    }
+                    if entries.get(&object_id) == Some(&revision) {
+                        out.push(payload);
+                    } else {
+                        report.ignored += 1;
+                    }
+                }
+            }
+            None => out.extend(
+                opened
+                    .into_iter()
+                    .map(|(_, _, payload)| payload)
+                    .filter(|payload| !matches!(payload, BackupPayload::Manifest { .. })),
+            ),
+        }
+        Ok((out, report))
     }
 
     /// Owner: restores the backups of `from` to the node `to` (as restore
     /// messages) or, when `to` is `None`, into this vault. On a recovered
-    /// owner, restoring its own backups also brings back its nodes and shares.
+    /// owner, restoring its own backups also brings back its projects, nodes
+    /// and shares, and later backups continue above the cloud's revisions.
     pub fn cloud_restore(
         &self,
         from_member_id: &str,
         to_node: Option<&str>,
         backups: &[RelayBackup],
-    ) -> Result<usize> {
+    ) -> Result<RestoreReport> {
         let link = self.require_owner()?;
         let target = to_node.map(|node| self.find_node(node)).transpose()?;
         if let Some(target) = &target
@@ -1882,14 +2178,19 @@ impl KeyLeaseService {
         {
             return Err(invalid("cannot restore to a removed node"));
         }
+        let own = from_member_id == link.member_id;
         self.with_vault(|vault| {
             let keys = self.load_keys(vault)?;
-            let payloads = self.open_backups(&link, &keys, from_member_id, backups)?;
-            let mut restored = 0;
+            let (mut payloads, mut report) =
+                self.open_backups(&link, &keys, from_member_id, backups)?;
+            // Projects first, so restored items can keep theirs.
+            payloads.sort_by_key(|payload| !matches!(payload, BackupPayload::Project { .. }));
             for payload in payloads {
                 match (payload, &target) {
                     (BackupPayload::Item { item }, Some(node)) => {
                         let object = item.id.0.clone();
+                        let mut item = item;
+                        item.project_id = None;
                         self.queue_message(
                             &link,
                             &keys,
@@ -1900,17 +2201,34 @@ impl KeyLeaseService {
                             1,
                             &MessagePayload::Restore { item },
                         )?;
-                        restored += 1;
+                        report.restored += 1;
                     }
                     (BackupPayload::Item { item }, None) => {
-                        self.import_restored_item(vault, *item)?;
-                        restored += 1;
+                        self.import_restored_item(vault, *item, own)?;
+                        report.restored += 1;
                     }
-                    (BackupPayload::Node { node }, None) if from_member_id == link.member_id => {
+                    (BackupPayload::Project { mut project }, None) if own => {
+                        if self.store.get_project(vault, &project.id).is_err() {
+                            project.vault_id = vault.vault_id.clone();
+                            project.revision = 1;
+                            self.store.put_project(
+                                vault,
+                                &project,
+                                Some(0),
+                                MutationContext {
+                                    actor: "cloud",
+                                    idempotency_key: &format!("cloud-restore-{}", project.id.0),
+                                    request_material: project.id.0.as_bytes(),
+                                    audit_event: None,
+                                },
+                            )?;
+                        }
+                    }
+                    (BackupPayload::Node { node }, None) if own => {
                         self.store
                             .cloud_insert(record::NODE, &node.member_id, &to_json(&node)?)?;
                     }
-                    (BackupPayload::Share { share }, None) if from_member_id == link.member_id => {
+                    (BackupPayload::Share { share }, None) if own => {
                         self.store.cloud_insert(
                             record::SHARE,
                             &share.share_id,
@@ -1920,18 +2238,36 @@ impl KeyLeaseService {
                     _ => {}
                 }
             }
+            if own {
+                for backup in backups {
+                    self.cloud_backup_rebase(&backup.object_id, backup.revision)?;
+                }
+            }
             self.cloud_audit(
                 "cloud:restore",
                 &format!("kl://cloud/members/{from_member_id}"),
                 &format!(
-                    "{restored} items to {}",
+                    "{} items to {}; {} missing",
+                    report.restored,
                     target
                         .as_ref()
-                        .map_or("this vault", |t| t.member_id.as_str())
+                        .map_or("this vault", |t| t.member_id.as_str()),
+                    report.missing.len()
                 ),
             )?;
-            Ok(restored)
+            Ok(report)
         })
+    }
+
+    /// Whether `member_id` is a node this owner removed (its messages can be
+    /// dropped when the cloud no longer knows it).
+    pub fn cloud_recipient_removed(&self, member_id: &str) -> Result<bool> {
+        Ok(self
+            .store
+            .cloud_get(record::NODE, member_id)?
+            .map(|json| from_json::<CloudNode>(&json))
+            .transpose()?
+            .is_some_and(|node| node.removed_at.is_some()))
     }
 }
 
@@ -1979,7 +2315,7 @@ mod tests {
                     attachments: vec![],
                     notes: None,
                     template_version: 1,
-                    project_id: None,
+                    project_id: current.as_ref().and_then(|c| c.project_id.clone()),
                     agent_access: AgentAccess::None,
                     content_metadata: None,
                     schema_version: 1,
@@ -2017,6 +2353,12 @@ mod tests {
             .unwrap()
     }
 
+    fn titles(service: &KeyLeaseService) -> Vec<String> {
+        let mut titles: Vec<String> = items(service).into_iter().map(|i| i.title).collect();
+        titles.sort();
+        titles
+    }
+
     fn owner_linked(owner: &KeyLeaseService) -> OwnerSetup {
         let setup = owner
             .cloud_owner_prepare("https://cloud.example", "laptop")
@@ -2024,15 +2366,28 @@ mod tests {
         owner
             .cloud_owner_commit(&RelayAccountCreated {
                 account_id: setup.request.account_id.clone(),
-                owner_member_id: "member_owner".into(),
+                owner_member_id: setup.request.owner.member_id(),
             })
             .unwrap();
         setup
     }
 
     /// Plays the cloud's part of pairing: hands the invite to the node and the
-    /// node's registration back to the owner.
-    fn join(owner: &KeyLeaseService, node: &KeyLeaseService, name: &str, member_id: &str) {
+    /// node's registration back to the owner. Returns the node's member id.
+    fn join(owner: &KeyLeaseService, node: &KeyLeaseService, name: &str) -> String {
+        let (member, _) = join_member(owner, node, name);
+        let problems = owner
+            .cloud_verify_members(std::slice::from_ref(&member))
+            .unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        member.member_id
+    }
+
+    fn join_member(
+        owner: &KeyLeaseService,
+        node: &KeyLeaseService,
+        name: &str,
+    ) -> (RelayMember, InviteSetup) {
         let link = owner.cloud_link().unwrap().unwrap();
         let invite = owner.cloud_create_invite(name).unwrap();
         let join = node
@@ -2049,32 +2404,37 @@ mod tests {
                 },
             )
             .unwrap();
+        let member_id = join.keys.member_id();
         node.cloud_node_commit(&RelayJoined {
             account_id: link.account_id.clone(),
-            member_id: member_id.into(),
+            member_id: member_id.clone(),
         })
         .unwrap();
-        let problems = owner
-            .cloud_verify_members(&[RelayMember {
-                member_id: member_id.into(),
+        (
+            RelayMember {
+                member_id,
                 role: RelayRole::Node,
                 name: name.into(),
                 keys: join.keys,
                 node_tag_b64: Some(join.node_tag_b64),
-                invite_lookup_hash: Some(invite.request.lookup_hash),
+                invite_lookup_hash: Some(invite.request.lookup_hash.clone()),
                 created_at: Utc::now(),
                 revoked_at: None,
-            }])
-            .unwrap();
-        assert!(problems.is_empty(), "{problems:?}");
+            },
+            invite,
+        )
     }
 
-    fn deliver(from: &KeyLeaseService, to: &KeyLeaseService) -> InboxOutcome {
+    fn take_outbox(from: &KeyLeaseService) -> Vec<RelayEnvelope> {
         let outbox = from.cloud_outbox().unwrap();
         for message in &outbox {
             from.cloud_outbox_sent(&message.message_id).unwrap();
         }
-        to.cloud_apply_inbox(&outbox).unwrap()
+        outbox
+    }
+
+    fn deliver(from: &KeyLeaseService, to: &KeyLeaseService) -> InboxOutcome {
+        to.cloud_apply_inbox(&take_outbox(from)).unwrap()
     }
 
     fn agent() -> ActorContext {
@@ -2088,16 +2448,32 @@ mod tests {
         }
     }
 
+    fn backups(service: &KeyLeaseService) -> Vec<RelayBackup> {
+        let mut all = Vec::new();
+        loop {
+            let batch = service.cloud_backup_batch(100).unwrap();
+            if batch.is_empty() {
+                return all;
+            }
+            for pending in batch {
+                service.cloud_backup_stored(&pending).unwrap();
+                all.retain(|b: &RelayBackup| b.object_id != pending.backup.object_id);
+                all.push(pending.backup);
+            }
+        }
+    }
+
     #[test]
-    fn an_altered_owner_key_or_node_key_is_detected_at_pairing() {
+    fn an_altered_owner_key_node_key_or_member_id_is_detected_at_pairing() {
         let (_a, owner) = service();
         let (_b, node) = service();
         let setup = owner_linked(&owner);
         let invite = owner.cloud_create_invite("vps").unwrap();
+        let attacker = Keys::generate().public();
         let forged = RelayInvite {
             account_id: setup.request.account_id.clone(),
-            owner_member_id: "member_owner".into(),
-            owner: Keys::generate().public(),
+            owner_member_id: attacker.member_id(),
+            owner: attacker,
             name: "vps".into(),
             owner_tag_b64: invite.request.owner_tag_b64.clone(),
             expires_at: invite.request.expires_at,
@@ -2106,12 +2482,13 @@ mod tests {
             node.cloud_node_prepare("https://cloud.example", &invite.code, &forged),
             Err(KeyLeaseError::Denied { .. })
         ));
+        let bogus_keys = Keys::generate().public();
         let problems = owner
             .cloud_verify_members(&[RelayMember {
-                member_id: "member_evil".into(),
+                member_id: bogus_keys.member_id(),
                 role: RelayRole::Node,
                 name: "vps".into(),
-                keys: Keys::generate().public(),
+                keys: bogus_keys,
                 node_tag_b64: Some(b64(&[7_u8; 32])),
                 invite_lookup_hash: Some(invite.request.lookup_hash.clone()),
                 created_at: Utc::now(),
@@ -2120,18 +2497,69 @@ mod tests {
             .unwrap();
         assert_eq!(problems.len(), 1);
         assert!(owner.cloud_nodes().unwrap().is_empty());
+        // The bogus entry did not burn the real node's invite.
+        let link = owner.cloud_link().unwrap().unwrap();
+        let join = node
+            .cloud_node_prepare(
+                "https://cloud.example",
+                &invite.code,
+                &RelayInvite {
+                    account_id: link.account_id.clone(),
+                    owner_member_id: link.member_id.clone(),
+                    owner: link.keys(),
+                    name: "vps".into(),
+                    owner_tag_b64: invite.request.owner_tag_b64.clone(),
+                    expires_at: invite.request.expires_at,
+                },
+            )
+            .unwrap();
+        let mut member = RelayMember {
+            member_id: "member_chosen_by_the_cloud".into(),
+            role: RelayRole::Node,
+            name: "vps".into(),
+            keys: join.keys.clone(),
+            node_tag_b64: Some(join.node_tag_b64.clone()),
+            invite_lookup_hash: Some(invite.request.lookup_hash.clone()),
+            created_at: Utc::now(),
+            revoked_at: None,
+        };
+        assert_eq!(
+            owner.cloud_verify_members(&[member.clone()]).unwrap().len(),
+            1
+        );
+        member.member_id = join.keys.member_id();
+        assert!(owner.cloud_verify_members(&[member]).unwrap().is_empty());
+        assert_eq!(owner.cloud_nodes().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_cloud_that_swaps_node_names_cannot_redirect_a_share() {
+        let (_a, owner) = service();
+        let (_b, prod) = service();
+        let (_c, scratch) = service();
+        owner_linked(&owner);
+        let (mut prod_member, _) = join_member(&owner, &prod, "prod-db");
+        let (mut scratch_member, _) = join_member(&owner, &scratch, "scratch");
+        prod_member.name = "scratch".into();
+        scratch_member.name = "prod-db".into();
         assert!(
             owner
-                .cloud_share(
-                    ShareScope::Item {
-                        item_id: ItemId::new()
-                    },
-                    "member_evil",
-                    None,
-                    None
-                )
-                .is_err()
+                .cloud_verify_members(&[prod_member.clone(), scratch_member.clone()])
+                .unwrap()
+                .is_empty()
         );
+        // Names come from this device's invites, not from the cloud.
+        let nodes = owner.cloud_nodes().unwrap();
+        let named = |name: &str| {
+            nodes
+                .iter()
+                .find(|n| n.name == name)
+                .unwrap()
+                .member_id
+                .clone()
+        };
+        assert_eq!(named("prod-db"), prod_member.member_id);
+        assert_eq!(named("scratch"), scratch_member.member_id);
     }
 
     #[test]
@@ -2139,7 +2567,7 @@ mod tests {
         let (_a, owner) = service();
         let (_b, node) = service();
         owner_linked(&owner);
-        join(&owner, &node, "vps-prod", "member_node");
+        join(&owner, &node, "vps-prod");
         let id = ItemId::new();
         put_item(&owner, &id, "prod db");
         let share = owner
@@ -2157,19 +2585,22 @@ mod tests {
         assert_eq!(deliver(&owner, &node).applied, 1);
         let received = items(&node);
         assert_eq!(received.len(), 1);
-        assert_eq!(received[0].title, "prod db");
         assert_eq!(received[0].group_id.0, SHARED_GROUP);
         assert!(received[0].extensions.contains_key(SHARE_EXTENSION));
         assert!(
-            node.cloud_backup_batch(100).unwrap().is_empty(),
+            backups(&node).iter().all(|b| b.object_id == MANIFEST_ID),
             "shared copies are not backed up by the node"
         );
+        // Shared copies are read-only on the node.
+        assert!(matches!(
+            refuse_shared_copy(&received[0]),
+            Err(KeyLeaseError::Denied { .. })
+        ));
 
         put_item(&owner, &id, "prod db (rotated)");
         assert_eq!(owner.cloud_publish_shares().unwrap(), 1);
         deliver(&owner, &node);
-        assert_eq!(items(&node)[0].title, "prod db (rotated)");
-        assert_eq!(items(&node).len(), 1);
+        assert_eq!(titles(&node), vec!["prod db (rotated)"]);
 
         owner.cloud_revoke_share(&share.share_id).unwrap();
         assert_eq!(owner.cloud_publish_shares().unwrap(), 1);
@@ -2178,11 +2609,70 @@ mod tests {
     }
 
     #[test]
+    fn replayed_or_reordered_messages_cannot_undo_a_revocation() {
+        let (_a, owner) = service();
+        let (_b, node) = service();
+        owner_linked(&owner);
+        join(&owner, &node, "vps-prod");
+        let id = ItemId::new();
+        put_item(&owner, &id, "prod db");
+        let share = owner
+            .cloud_share(
+                ShareScope::Item {
+                    item_id: id.clone(),
+                },
+                "vps-prod",
+                None,
+                None,
+            )
+            .unwrap();
+        owner.cloud_publish_shares().unwrap();
+        let share_message = take_outbox(&owner);
+        node.cloud_apply_inbox(&share_message).unwrap();
+        owner.cloud_revoke_share(&share.share_id).unwrap();
+        owner.cloud_publish_shares().unwrap();
+        let unshare = take_outbox(&owner);
+        node.cloud_apply_inbox(&unshare).unwrap();
+        assert!(items(&node).is_empty());
+
+        // The cloud re-sends the old share under a new id: the signature
+        // covers the id.
+        let mut renamed = share_message.clone();
+        renamed[0].message_id = "msg_replayed".into();
+        let outcome = node.cloud_apply_inbox(&renamed).unwrap();
+        assert_eq!(outcome.applied, 0);
+        assert_eq!(outcome.rejected.len(), 1);
+        // The same id again is recognized.
+        assert_eq!(node.cloud_apply_inbox(&share_message).unwrap().applied, 0);
+        assert!(items(&node).is_empty());
+
+        // Reordered: the unshare arrives before the share it ends.
+        let (_c, other) = service();
+        join(&owner, &other, "vps-two");
+        let id2 = ItemId::new();
+        put_item(&owner, &id2, "api key");
+        let share2 = owner
+            .cloud_share(ShareScope::Item { item_id: id2 }, "vps-two", None, None)
+            .unwrap();
+        owner.cloud_publish_shares().unwrap();
+        let first = take_outbox(&owner);
+        owner.cloud_revoke_share(&share2.share_id).unwrap();
+        owner.cloud_publish_shares().unwrap();
+        let second = take_outbox(&owner);
+        other.cloud_apply_inbox(&second).unwrap();
+        other.cloud_apply_inbox(&first).unwrap();
+        assert!(
+            items(&other).is_empty(),
+            "a share older than its unshare is ignored"
+        );
+    }
+
+    #[test]
     fn a_project_share_follows_items_into_and_out_of_the_project() {
         let (_a, owner) = service();
         let (_b, node) = service();
         owner_linked(&owner);
-        join(&owner, &node, "vps-prod", "member_node");
+        join(&owner, &node, "vps-prod");
         let project = owner
             .with_vault(|vault| {
                 let now = Utc::now();
@@ -2213,8 +2703,6 @@ mod tests {
             })
             .unwrap();
         assert_eq!(owner.cloud_project_id("glow").unwrap(), project.id);
-        let first = ItemId::new();
-        put_item(&owner, &first, "api key");
         let set_project = |id: &ItemId, project: Option<ProjectId>| {
             owner
                 .with_vault(|vault| {
@@ -2236,6 +2724,8 @@ mod tests {
                 })
                 .unwrap()
         };
+        let first = ItemId::new();
+        put_item(&owner, &first, "api key");
         set_project(&first, Some(project.id.clone()));
         owner
             .cloud_share(
@@ -2263,9 +2753,19 @@ mod tests {
         set_project(&first, None);
         owner.cloud_publish_shares().unwrap();
         deliver(&owner, &node);
-        let left = items(&node);
-        assert_eq!(left.len(), 1, "an item that left the project is withdrawn");
-        assert_eq!(left[0].title, "db password");
+        assert_eq!(
+            titles(&node),
+            vec!["db password"],
+            "an item that left is withdrawn"
+        );
+        set_project(&first, Some(project.id.clone()));
+        owner.cloud_publish_shares().unwrap();
+        deliver(&owner, &node);
+        assert_eq!(
+            titles(&node),
+            vec!["api key", "db password"],
+            "and it can come back"
+        );
     }
 
     #[test]
@@ -2273,7 +2773,7 @@ mod tests {
         let (_a, owner) = service();
         let (_b, node) = service();
         owner_linked(&owner);
-        join(&owner, &node, "vps-prod", "member_node");
+        join(&owner, &node, "vps-prod");
         let id = ItemId::new();
         put_item(&owner, &id, "deploy key");
         let request = node
@@ -2285,7 +2785,6 @@ mod tests {
         assert_eq!(replay.applied, 0);
         assert_eq!(replay.acknowledged.len(), 1);
         let pending = owner.cloud_requests().unwrap();
-        assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].purpose, "migrate the prod database");
         assert_eq!(pending[0].node_name.as_deref(), Some("vps-prod"));
         assert!(
@@ -2307,9 +2806,27 @@ mod tests {
             2,
             "the decision and the share"
         );
-        assert_eq!(items(&node)[0].title, "deploy key");
-        let node_view = node.cloud_requests().unwrap();
-        assert_eq!(node_view[0].status, RequestStatus::Approved);
+        assert_eq!(titles(&node), vec!["deploy key"]);
+        assert_eq!(
+            node.cloud_requests().unwrap()[0].status,
+            RequestStatus::Approved
+        );
+    }
+
+    #[test]
+    fn a_request_from_a_node_not_verified_yet_waits_in_the_mailbox() {
+        let (_a, owner) = service();
+        let (_b, node) = service();
+        owner_linked(&owner);
+        let (member, _) = join_member(&owner, &node, "vps-prod");
+        node.cloud_request_share_authorized(&agent(), "deploy", None)
+            .unwrap();
+        let outbox = node.cloud_outbox().unwrap();
+        let early = owner.cloud_apply_inbox(&outbox).unwrap();
+        assert_eq!(early.applied, 0);
+        assert!(early.acknowledged.is_empty(), "kept for a later sync");
+        owner.cloud_verify_members(&[member]).unwrap();
+        assert_eq!(owner.cloud_apply_inbox(&outbox).unwrap().applied, 1);
     }
 
     #[test]
@@ -2317,38 +2834,32 @@ mod tests {
         let (_a, owner) = service();
         let (_b, node) = service();
         owner_linked(&owner);
-        join(&owner, &node, "vps-prod", "member_node");
+        let node_id = join(&owner, &node, "vps-prod");
         let id = ItemId::new();
         put_item(&node, &id, "node-made db password");
-        let pending = node.cloud_backup_batch(100).unwrap();
-        assert_eq!(pending.len(), 1);
-        for backup in &pending {
-            node.cloud_backup_stored(backup).unwrap();
-        }
+        let stored = backups(&node);
+        assert_eq!(stored.len(), 2, "the item and the manifest");
         assert!(
             node.cloud_backup_batch(100).unwrap().is_empty(),
             "unchanged"
         );
-        let backups: Vec<RelayBackup> = pending.into_iter().map(|p| p.backup).collect();
 
         let (_c, replacement) = service();
-        join(&owner, &replacement, "vps-new", "member_new");
-        assert_eq!(
-            owner
-                .cloud_restore("member_node", Some("vps-new"), &backups)
-                .unwrap(),
-            1
-        );
+        join(&owner, &replacement, "vps-new");
+        let report = owner
+            .cloud_restore(&node_id, Some("vps-new"), &stored)
+            .unwrap();
+        assert_eq!(report.restored, 1);
+        assert!(report.as_of.is_some() && report.missing.is_empty());
         deliver(&owner, &replacement);
         let restored = items(&replacement);
         assert_eq!(restored.len(), 1);
         assert_eq!(restored[0].title, "node-made db password");
         assert_eq!(restored[0].group_id.0, RESTORED_GROUP);
         assert!(!restored[0].extensions.contains_key(SHARE_EXTENSION));
-        // The restored item is the new node's own: it backs it up.
-        assert_eq!(replacement.cloud_backup_batch(100).unwrap().len(), 1);
+        assert_eq!(backups(&replacement).len(), 2, "it is the new node's own");
 
-        // A deletion becomes a tombstone.
+        // A deletion becomes a tombstone and a new manifest.
         node.with_vault(|vault| {
             node.store.delete_item(
                 vault,
@@ -2363,26 +2874,69 @@ mod tests {
             )
         })
         .unwrap();
-        let tombstones = node.cloud_backup_batch(100).unwrap();
-        assert_eq!(tombstones.len(), 1);
-        assert!(tombstones[0].backup.deleted);
-        assert_eq!(tombstones[0].backup.revision, 2);
+        let tombstone = node.cloud_backup_batch(100).unwrap();
+        assert_eq!(tombstone.len(), 1);
+        assert!(tombstone[0].backup.deleted);
+        assert_eq!(tombstone[0].backup.revision, 2);
     }
 
     #[test]
-    fn a_recovery_kit_restores_the_owner_keys_items_and_nodes() {
+    fn the_manifest_catches_a_rolled_back_or_hidden_backup() {
+        let (_a, owner) = service();
+        let (_b, node) = service();
+        owner_linked(&owner);
+        let node_id = join(&owner, &node, "vps-prod");
+        let first = ItemId::new();
+        let second = ItemId::new();
+        put_item(&node, &first, "one");
+        put_item(&node, &second, "two");
+        let old = backups(&node);
+        let old_first = old.iter().find(|b| b.object_id == first.0).unwrap().clone();
+        put_item(&node, &first, "one (rotated)");
+        let mut current: Vec<RelayBackup> = old.clone();
+        for backup in backups(&node) {
+            current.retain(|b| b.object_id != backup.object_id);
+            current.push(backup);
+        }
+        let complete = owner.cloud_restore(&node_id, None, &current).unwrap();
+        assert_eq!(complete.restored, 2);
+        assert!(complete.missing.is_empty());
+
+        // The cloud serves the pre-rotation copy and hides the other item.
+        let (_c, owner2) = service();
+        let _ = owner2;
+        let tampered: Vec<RelayBackup> = current
+            .iter()
+            .filter(|b| b.object_id != second.0)
+            .map(|b| {
+                if b.object_id == first.0 {
+                    old_first.clone()
+                } else {
+                    b.clone()
+                }
+            })
+            .collect();
+        let report = owner
+            .cloud_restore(&node_id, Some("vps-prod"), &tampered)
+            .unwrap();
+        assert_eq!(report.restored, 0);
+        assert_eq!(report.ignored, 1, "the old revision is not the manifest's");
+        assert_eq!(report.missing.len(), 2);
+    }
+
+    #[test]
+    fn a_recovery_kit_restores_the_owner_keys_items_projects_and_nodes() {
         let (_a, owner) = service();
         let (_n, node) = service();
         let setup = owner_linked(&owner);
-        join(&owner, &node, "vps-prod", "member_node");
+        let node_id = join(&owner, &node, "vps-prod");
         put_item(&owner, &ItemId::new(), "personal email");
-        let backups: Vec<RelayBackup> = owner
-            .cloud_backup_batch(100)
-            .unwrap()
-            .into_iter()
-            .map(|p| p.backup)
-            .collect();
-        assert!(backups.iter().any(|b| b.object_id == "node-member_node"));
+        let stored = backups(&owner);
+        assert!(
+            stored
+                .iter()
+                .any(|b| b.object_id == format!("node-{node_id}"))
+        );
 
         let (_b, recovered) = service();
         let account = setup.request.account_id.clone();
@@ -2391,7 +2945,6 @@ mod tests {
                 .cloud_recover(
                     "https://cloud.example",
                     &account,
-                    "member_owner",
                     &setup.request.recovery_kit,
                     "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG",
                     "new laptop",
@@ -2402,16 +2955,12 @@ mod tests {
             .cloud_recover(
                 "https://cloud.example",
                 &account,
-                "member_owner",
                 &setup.request.recovery_kit,
                 &setup.recovery_code.to_lowercase(),
                 "new laptop",
             )
             .unwrap();
-        assert_eq!(
-            link.fingerprint(),
-            owner.cloud_link().unwrap().unwrap().fingerprint()
-        );
+        assert_eq!(link.member_id, setup.request.owner.member_id());
         assert_eq!(
             relay_digest(
                 &derive_recovery_keys(&setup.recovery_code, &account)
@@ -2420,18 +2969,26 @@ mod tests {
             ),
             setup.request.recovery_lookup_hash
         );
-        assert_eq!(
-            recovered
-                .cloud_restore("member_owner", None, &backups)
-                .unwrap(),
-            1
-        );
-        assert_eq!(items(&recovered)[0].title, "personal email");
+        let report = recovered
+            .cloud_restore(&link.member_id, None, &stored)
+            .unwrap();
+        assert_eq!(report.restored, 1);
+        assert_eq!(titles(&recovered), vec!["personal email"]);
         assert_eq!(
             recovered.cloud_nodes().unwrap().len(),
             1,
             "the verified node is back"
         );
+        // Later backups continue above what the cloud holds.
+        let next = recovered.cloud_backup_batch(100).unwrap();
+        for pending in &next {
+            let previous = stored
+                .iter()
+                .find(|b| b.object_id == pending.backup.object_id);
+            if let Some(previous) = previous {
+                assert!(pending.backup.revision > previous.revision);
+            }
+        }
     }
 
     #[test]
@@ -2439,16 +2996,11 @@ mod tests {
         let (_a, owner) = service();
         let (_b, node) = service();
         owner_linked(&owner);
-        join(&owner, &node, "vps-prod", "member_node");
+        let node_id = join(&owner, &node, "vps-prod");
         put_item(&node, &ItemId::new(), "x");
-        let mut backups: Vec<RelayBackup> = node
-            .cloud_backup_batch(100)
-            .unwrap()
-            .into_iter()
-            .map(|p| p.backup)
-            .collect();
-        backups[0].revision += 1;
-        assert!(owner.cloud_restore("member_node", None, &backups).is_err());
+        let mut stored = backups(&node);
+        stored[0].revision += 1;
+        assert!(owner.cloud_restore(&node_id, None, &stored).is_err());
 
         let id = ItemId::new();
         put_item(&owner, &id, "z");
@@ -2462,6 +3014,6 @@ mod tests {
         assert_eq!(outcome.applied, 0);
         assert_eq!(outcome.rejected.len(), 1);
         assert_eq!(outcome.acknowledged.len(), 1);
-        assert_eq!(items(&node).len(), 1, "only the node's own item");
+        assert_eq!(titles(&node), vec!["x"], "only the node's own item");
     }
 }

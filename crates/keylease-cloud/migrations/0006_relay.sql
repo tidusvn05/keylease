@@ -36,6 +36,7 @@ CREATE TABLE relay_invites (
 CREATE TABLE relay_messages (
     message_id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES relay_accounts(account_id),
+    from_member_id TEXT NOT NULL REFERENCES relay_members(member_id),
     to_member_id TEXT NOT NULL REFERENCES relay_members(member_id),
     envelope_json TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL

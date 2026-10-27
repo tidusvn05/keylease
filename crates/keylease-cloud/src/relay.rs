@@ -33,8 +33,12 @@ use subtle::ConstantTimeEq;
 
 /// Undelivered messages a mailbox may hold.
 const MAX_MAILBOX: i64 = 10_000;
+/// Undelivered messages one node may leave in the owner's mailbox.
+const MAX_FROM_NODE: i64 = 500;
+/// Largest sealed share request.
+const MAX_REQUEST_BYTES: usize = 16 * 1024;
 /// Backup objects one member may keep.
-const MAX_BACKUPS: i64 = 50_000;
+const MAX_BACKUPS: i64 = 20_000;
 
 pub(crate) fn router() -> Router<CloudApiState> {
     Router::new()
@@ -164,10 +168,6 @@ async fn verify(
     })
 }
 
-fn new_member_id() -> String {
-    format!("member_{}", uuid::Uuid::now_v7().simple())
-}
-
 async fn create_account(
     State(state): State<CloudApiState>,
     headers: HeaderMap,
@@ -183,7 +183,7 @@ async fn create_account(
     {
         return Err(invalid("invalid relay account"));
     }
-    let member_id = new_member_id();
+    let member_id = body.owner.member_id();
     let mut tx = state.repository.pool().begin().await.map_err(storage)?;
     let inserted = sqlx::query(
         "INSERT INTO relay_accounts(account_id,owner_member_id,recovery_lookup_hash,recovery_kit,created_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",
@@ -340,7 +340,7 @@ async fn join(
         return Err(invalid("invalid node keys"));
     }
     let (hash, invite) = open_invite(&state, &body.lookup).await?;
-    let member_id = new_member_id();
+    let member_id = body.keys.member_id();
     let mut tx = state.repository.pool().begin().await.map_err(storage)?;
     let used =
         sqlx::query("UPDATE relay_invites SET used_at=$2 WHERE lookup_hash=$1 AND used_at IS NULL")
@@ -493,22 +493,29 @@ async fn send_message(
     if !allowed {
         return Err(denied("this message kind is not allowed in this direction"));
     }
-    let pending: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM relay_messages WHERE to_member_id=$1")
-            .bind(&envelope.to_member_id)
-            .fetch_one(state.repository.pool())
-            .await
-            .map_err(storage)?;
-    if pending >= MAX_MAILBOX {
+    if envelope.kind == kind::SHARE_REQUEST && envelope.sealed_json.len() > MAX_REQUEST_BYTES {
+        return Err(invalid("a share request is at most 16 KiB"));
+    }
+    let (pending, from_sender): (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*), COUNT(*) FILTER (WHERE from_member_id=$2) FROM relay_messages WHERE to_member_id=$1",
+    )
+    .bind(&envelope.to_member_id)
+    .bind(&caller.member_id)
+    .fetch_one(state.repository.pool())
+    .await
+    .map_err(storage)?;
+    // One node cannot fill the owner's mailbox for the others.
+    if pending >= MAX_MAILBOX || (caller.role == RelayRole::Node && from_sender >= MAX_FROM_NODE) {
         return Err(denied("the recipient's mailbox is full"));
     }
     let json = serde_json::to_string(&envelope).map_err(|_| ApiError(KeyLeaseError::Storage))?;
     // Re-sending a message id is a no-op, so a retried sync never duplicates.
     sqlx::query(
-        "INSERT INTO relay_messages(message_id,account_id,to_member_id,envelope_json,created_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",
+        "INSERT INTO relay_messages(message_id,account_id,from_member_id,to_member_id,envelope_json,created_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
     )
     .bind(&envelope.message_id)
     .bind(&caller.account_id)
+    .bind(&caller.member_id)
     .bind(&envelope.to_member_id)
     .bind(json)
     .bind(Utc::now())
@@ -602,7 +609,7 @@ async fn put_backup(
         .fetch_one(state.repository.pool())
         .await
         .map_err(storage)?;
-    if count >= MAX_BACKUPS {
+    if count >= MAX_BACKUPS && !exists(&state, &caller.member_id, &backup.object_id).await? {
         return Err(denied("backup quota reached"));
     }
     // Only a newer revision replaces a stored one, so a stale retry is a no-op.
@@ -624,7 +631,30 @@ async fn put_backup(
     .execute(state.repository.pool())
     .await
     .map_err(storage)?;
-    Ok(Json(json!({"stored": stored.rows_affected() == 1})))
+    let current: i64 = sqlx::query_scalar(
+        "SELECT revision FROM relay_backups WHERE member_id=$1 AND object_id=$2",
+    )
+    .bind(&caller.member_id)
+    .bind(&backup.object_id)
+    .fetch_one(state.repository.pool())
+    .await
+    .map_err(storage)?;
+    // A refused (older or equal) revision tells the member where to resume.
+    Ok(Json(
+        json!({"stored": stored.rows_affected() == 1, "revision": current}),
+    ))
+}
+
+async fn exists(state: &CloudApiState, member: &str, object: &str) -> ApiResult<bool> {
+    let found: Option<i64> = sqlx::query_scalar(
+        "SELECT revision FROM relay_backups WHERE member_id=$1 AND object_id=$2",
+    )
+    .bind(member)
+    .bind(object)
+    .fetch_optional(state.repository.pool())
+    .await
+    .map_err(storage)?;
+    Ok(found.is_some())
 }
 
 #[derive(Debug, Deserialize)]

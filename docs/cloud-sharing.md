@@ -84,8 +84,8 @@ keylease cloud unshare SHARE_ID
 On the VPS the item appears in the group `group_cloud_shared`, marked with the
 `keylease.cloud_share` extension. Changes you make on the laptop reach it on
 the next sync; an item you remove from the project, delete or unshare is
-deleted from the VPS. Treat shared copies as read-only: an edit on the VPS is
-overwritten by your next change.
+deleted from the VPS. Shared copies are read-only on the VPS: editing or
+deleting one is refused; change or unshare it on your device.
 
 Unsharing stops future copies; it cannot make the VPS forget a value it
 already had. When you stop trusting a VPS, remove it and rotate what it had.
@@ -112,11 +112,13 @@ the item with `keylease entries search` and uses it through `keylease ssh`,
 
 ## 6. Backups and a dead VPS
 
-Once linked, every member backs up its own items, sealed to the owner key: the
-VPS backs up the secrets it created (not the copies you shared), and the
-laptop backs up its items, verified nodes and shares. Deleting an item
-deletes its backup. Groups and projects are not backed up; restored items land
-in `group_cloud_restored`.
+Once linked, every member backs up its own items and projects, sealed to the
+owner key: the VPS backs up the secrets it created (not the copies you
+shared), and the laptop also backs up its verified nodes and shares. Deleting
+an item deletes its backup. Each member's backup ends with a signed manifest;
+`restore` uses only what the manifest lists and prints `backup_as_of` and any
+`missing` objects, so a cloud that serves an old or partial backup shows. Groups
+are not backed up; restored items land in `group_cloud_restored`.
 
 When a VPS dies:
 

@@ -41,7 +41,8 @@ mod ssh;
 mod trust;
 pub use cloud::{
     CloudLink, CloudNode, CloudRole, CloudShare, CloudShareRequest, CloudStatus, InboxOutcome,
-    InviteSetup, OwnerSetup, PendingBackup, RelaySignature, RequestStatus, ShareScope,
+    InviteSetup, OwnerSetup, PendingBackup, RelaySignature, RequestStatus, RestoreReport,
+    ShareScope,
 };
 pub use db::{DbTarget, ScramClientFinal};
 pub use gateway::{
@@ -1458,6 +1459,7 @@ impl KeyLeaseService {
             normalize_totp(&mut patch.totp, &mut patch.totp_uri)?;
             validate_idempotency_key(idempotency_key)?;
             let current_item = self.store.get_item(vault, id)?;
+            refuse_shared_copy(&current_item)?;
             if let Some(fields) = &mut patch.custom_fields {
                 canonicalize_template_fields(&current_item.kind, fields);
                 validate_custom_fields(fields)?;
@@ -2934,6 +2936,7 @@ impl KeyLeaseService {
                 };
             }
             let item = self.store.get_item(vault, id)?;
+            refuse_shared_copy(&item)?;
             if item.revision != expected_revision {
                 return Err(KeyLeaseError::RevisionConflict {
                     expected: expected_revision,
@@ -6127,6 +6130,19 @@ fn random_token(prefix: &str) -> String {
     rand::rng().fill_bytes(&mut bytes);
     format!("{prefix}{}", URL_SAFE_NO_PAD.encode(bytes))
 }
+/// A copy shared by the cloud owner (ADR 0006) changes only through the
+/// owner: a local edit would be overwritten, a local delete undone.
+fn refuse_shared_copy(item: &VaultItem) -> Result<()> {
+    if item.extensions.contains_key(cloud::SHARE_EXTENSION) {
+        return Err(KeyLeaseError::Denied {
+            reason:
+                "this item is shared by the vault owner; change or unshare it on the owner's device"
+                    .into(),
+        });
+    }
+    Ok(())
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

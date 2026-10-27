@@ -33,7 +33,8 @@ pub(crate) enum CloudCommand {
     Join {
         #[arg(long)]
         url: String,
-        /// The invite code (asked for when omitted).
+        /// The invite code. Prefer leaving it out to be asked: an argument is
+        /// visible to other users in `ps` and stays in shell history.
         #[arg(long)]
         code: Option<String>,
     },
@@ -250,26 +251,37 @@ async fn sync_round(
             .await
         {
             Ok(_) => {}
-            // The recipient was removed: the message can never be delivered.
-            Err(KeyLeaseError::NotFound { .. }) => {}
+            // A node this owner removed: the message can never be delivered.
+            Err(KeyLeaseError::NotFound { .. })
+                if service.cloud_recipient_removed(&message.to_member_id)? => {}
             Err(error) => return Err(error),
         }
         service.cloud_outbox_sent(&message.message_id)?;
         sent += 1;
     }
     let mut backed_up = 0;
-    loop {
+    // Bounded: each round makes progress or rebases onto the cloud's revision.
+    for _ in 0..1000 {
         let batch = service.cloud_backup_batch(50)?;
         if batch.is_empty() {
             break;
         }
         for pending in &batch {
             let bytes = serde_json::to_vec(&pending.backup).map_err(|_| KeyLeaseError::Storage)?;
-            relay
-                .send::<Value>(Method::PUT, "/v1/relay/backups", Some(bytes), true, None)
+            let reply: Value = relay
+                .send(Method::PUT, "/v1/relay/backups", Some(bytes), true, None)
                 .await?;
-            service.cloud_backup_stored(pending)?;
-            backed_up += 1;
+            if reply["stored"].as_bool() == Some(true) {
+                service.cloud_backup_stored(pending)?;
+                backed_up += 1;
+            } else {
+                // The cloud holds this revision or newer (after a recovery):
+                // continue above it.
+                let revision = reply["revision"]
+                    .as_u64()
+                    .ok_or(KeyLeaseError::ConnectorUnavailable { retryable: true })?;
+                service.cloud_backup_rebase(&pending.backup.object_id, revision)?;
+            }
         }
     }
     let inbox: RelayInbox = relay
@@ -448,14 +460,7 @@ pub(crate) async fn cloud_command(cli: &Cli, socket: &Path, command: CloudComman
                     false,
                 )
                 .await?;
-            let link = service.cloud_recover(
-                &url,
-                &account,
-                &kit.owner_member_id,
-                &kit.recovery_kit,
-                &code,
-                &name,
-            )?;
+            let link = service.cloud_recover(&url, &account, &kit.recovery_kit, &code, &name)?;
             let relay = Relay::new(&service, &link.url)?;
             let backups: RelayBackupList = relay
                 .send(
@@ -466,11 +471,13 @@ pub(crate) async fn cloud_command(cli: &Cli, socket: &Path, command: CloudComman
                     None,
                 )
                 .await?;
-            let restored = service.cloud_restore(&link.member_id, None, &backups.backups)?;
+            let report = service.cloud_restore(&link.member_id, None, &backups.backups)?;
             print_json(&json!({
                 "recovered": link.account_id,
                 "fingerprint": link.fingerprint(),
-                "restored_items": restored,
+                "restored_items": report.restored,
+                "backup_as_of": report.as_of,
+                "missing": report.missing,
                 "nodes": service.cloud_nodes()?.len(),
             }))
         }
@@ -566,9 +573,17 @@ pub(crate) async fn cloud_command(cli: &Cli, socket: &Path, command: CloudComman
                     None,
                 )
                 .await?;
-            let restored = service.cloud_restore(&from_id, to.as_deref(), &backups.backups)?;
+            let report = service.cloud_restore(&from_id, to.as_deref(), &backups.backups)?;
             let synced = sync_once(&service).await.ok();
-            print_json(&json!({"restored": restored, "from": from_id, "to": to, "sync": synced}))
+            print_json(&json!({
+                "restored": report.restored,
+                "backup_as_of": report.as_of,
+                "missing": report.missing,
+                "ignored": report.ignored,
+                "from": from_id,
+                "to": to,
+                "sync": synced,
+            }))
         }
         CloudCommand::Unlink => {
             service.cloud_unlink()?;
