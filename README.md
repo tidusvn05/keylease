@@ -1,111 +1,91 @@
 # KeyLease
 
-KeyLease is a local-first encrypted vault and LeaseGate policy gateway for agents.
-This repository contains the Phase 0 contracts through the locally testable
-Phase 9 single-VPS onboarding and operations baseline from
-[`agent-friendly-keepass-app-proposal.md`](agent-friendly-keepass-app-proposal.md).
-Platform and live-provider release evidence is tracked separately and is not
-claimed complete from this Linux workspace.
+KeyLease is a local-first encrypted vault with a policy gateway, built so that
+AI agents can **use** credentials — sign in over SSH, connect to a database,
+run a CLI that needs an API key — without the secret reaching the model, and
+with a human approving what matters.
 
-The security-sensitive implementation is Rust. The CLI and desktop clients are
-transport/presentation adapters and cannot access persistence or connectors
-without going through `KeyLeaseService`.
+- **Separate identity per agent.** An enrolled agent can search and read
+  metadata; using a secret or changing the vault waits for approval.
+- **Approve once, or trust for a window.** 30 minutes to 7 days, capped by the
+  action's risk tier; revocable at any time; every use audited.
+- **Brokers instead of reveals.** `keylease ssh` signs inside the vault,
+  `keylease db` answers the PostgreSQL SCRAM challenge inside the vault,
+  `keylease run` injects into a child process and scrubs its output.
+- **Your Mac or a VPS.** The same daemon runs under the macOS app or under
+  systemd; a headless VPS can be approved from your Mac.
 
-## Workspace
+The security-sensitive implementation is Rust. The CLI, desktop and mobile
+clients are transport/presentation adapters and cannot reach storage, policy
+or connectors except through `KeyLeaseService`.
 
-- `keylease-core`: versioned domain, request, identity and audit contracts.
-- `keylease-crypto`: key hierarchy, password slots and item envelopes.
-- `keylease-store`: atomic SQLite ciphertext store, authenticated native backup,
-  audit, keyed mutation journal and lease/execution journal.
-- `keylease-1pux`: bounded plaintext 1PUX ZIP importer and migration reports.
-- `keylease-kdbx`: KDBX 4 import/export adapter and migration reports.
-- `leasegate-policy`: deterministic deny-by-default policy and approvals.
-- `leasegate-connectors`: connector trait, fake conformance connector and typed
-  Google, GitHub, Linear, Notion, Slack and Jira providers.
-- `leasegate-connector-sdk`: manifest validation, JSON Schema generation,
-  conformance checks and signed immutable connector packaging CLI/library.
-- `keylease-service`: the only mutation/policy/connector orchestration layer.
-- `keylease-cli`: headless CLI and local Unix-socket daemon.
-- `keylease-cloud`: PostgreSQL-backed control API, connector registry, policy
-  proposals, dynamic-credential metadata, posture, rotation and worker.
-- `leasegate-control` / `leasegate-policy-bundle`: versioned Cloud/Edge wire
-  contracts and Ed25519/JCS signatures.
-- `leasegate-credentials`: self-hosted AWS STS, SSH certificate, PostgreSQL role
-  and OAuth token-exchange credential broker/backends.
-- `leasegate-edge`: Linux local Gateway, signed control cache, credential API,
-  offline enforcement and encrypted audit/credential state.
-- `leasegate-mcp`: authenticated Streamable HTTP MCP adapter over the canonical
-  service boundary.
-- `keylease-rpc`: the single implementation of the local RPC contract, shared by
-  the CLI daemon and the mobile FFI so the wire format cannot drift.
-- `keylease-mobile`: the in-process C ABI the Android client calls; see
-  `docs/adr/0004-mobile-in-process-boundary.md`.
-- `packages/leasegate_vault_ui`: the shared vault client — models, state, design
-  tokens and feature UI — used by both Flutter apps.
-- `apps/desktop-flutter`: macOS presentation shell (requires Flutter locally).
-- `apps/mobile-flutter`: the Android vault client.
-- `apps/approval-flutter`: responsive remote approval and Edge-health web app.
+## Architecture
 
-## Development
-
-```sh
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-cargo run -p keylease-cli -- --help
+```text
+ agent CLI (Claude Code, Codex, bots)
+   └─ keylease ssh | db | run ──────────────────────► servers, databases
+        │ (brokers in the agent's process)               (SSH, PostgreSQL wire)
+        │ Unix socket, the agent's own token
+        ▼
+ ┌──────────────────────────────────────┐
+ │ keylease serve — KeyLeaseService      │ ◄── macOS app (local approver)
+ │ vault · policy · trust · audit        │
+ │ signs SSH, answers SCRAM, injects     │ ◄── remote approver over HTTPS
+ └──────────────────────────────────────┘     (Mac app / keylease remote;
+                                                signed, approvals only)
 ```
 
-The Flutter side lives in three packages that are checked independently:
+Roles, secret-handling tiers, the approval sequence and the component map are
+in **[docs/architecture.md](docs/architecture.md)**. Design decisions are in
+[ADR 0005](docs/adr/0005-agent-trust-and-secret-use.md); the security analysis
+is the [threat model](docs/security/threat-model.md).
+
+## Choose your setup
+
+Step-by-step guides, with what is and is not implemented, are in
+**[docs/use-cases.md](docs/use-cases.md)**:
+
+| Setup | Status |
+|---|---|
+| Agent CLI (Claude Code, Codex…) on your Mac, approve in the Mac app | ✅ CLI/daemon · 🟡 trust UI in the native app |
+| Agents on a VPS, approve on the VPS (self-trust) | ✅ |
+| Agents on a VPS, approve from your Mac (paired approver) | ✅ CLI · 🟡 native Mac UI |
+| Unattended automation with narrow grants | ✅ |
+| Claude Desktop / ChatGPT Desktop | ❌ no local MCP server for the vault yet |
+| Gateway for ChatGPT Web / claude.ai | ❌ Edge MCP exists, but no OAuth, public profile or vault tools |
+
+✅ implemented and tested on Linux · 🟡 written, not yet verified on a Mac ·
+❌ not implemented.
+
+## Quick start: an agent on your Mac
 
 ```sh
-cd packages/leasegate_vault_ui && flutter analyze && flutter test
-cd apps/desktop-flutter        && flutter analyze && flutter test
-cd apps/mobile-flutter         && flutter analyze && flutter test
+keylease agent enroll claude                    # own client + approval baseline
+# put KEYLEASE_AGENT_ID / KEYLEASE_CLIENT_TOKEN_FILE in the agent's env, then:
+keylease --purpose "check the deploy" ssh deploy@host 'systemctl status app'
+keylease db psql ITEM_ID -- -c 'select 1'       # Postgres password stays in the vault
+keylease run --env API_KEY=ITEM_ID/password -- terraform plan
+keylease approval decide APPROVAL_ID --approve --trust 1h
+keylease trust list
 ```
 
-Building the Android client needs the toolchain described in
-`apps/mobile-flutter/README.md`; `scripts/build-android.sh` drives it.
+Guides: [agent approvals and trust](docs/agent-approvals.md) ·
+[SSH agent](docs/ssh-agent.md) · [PostgreSQL proxy](docs/db-proxy.md) ·
+[`keylease run`](docs/run-with-secrets.md) ·
+[remote approval for a VPS](docs/remote-approval.md) ·
+[multiple vaults](docs/multi-vault.md).
 
-See `docs/security/threat-model.md` and `docs/adr/` before changing crypto,
-identity, trust-mode or connector boundaries.
+## The macOS app
 
-The proposed Phase 3 Cloud/Edge/MCP architecture, including the single-VPS
-self-hosted profile and technical stack, is documented in
-[`docs/phase-3/architecture-and-tech-stack.md`](docs/phase-3/architecture-and-tech-stack.md).
-Implemented Phase 2/3 scope and explicit beta limitations are tracked in
-[`docs/phase-2-3-implementation.md`](docs/phase-2-3-implementation.md). To run
-the complete beta profile on one VPS, follow
-[`docs/self-hosted-vps.md`](docs/self-hosted-vps.md).
+There are two macOS clients over the same daemon:
 
-The Phase 4 Connector Platform and Policy UX design is in
-[`docs/phase-4/architecture-and-tech-stack.md`](docs/phase-4/architecture-and-tech-stack.md),
-with implemented scope and verification evidence in
-[`docs/phase-4/implementation-status.md`](docs/phase-4/implementation-status.md).
-
-Phase 5 deliberately targets only the all-in-one `self_hosted/local_gateway`
-profile. Its architecture and implementation evidence are in
-[`docs/phase-5/architecture-and-tech-stack.md`](docs/phase-5/architecture-and-tech-stack.md)
-and
-[`docs/phase-5/implementation-status.md`](docs/phase-5/implementation-status.md).
-
-Phase 6 keeps that ownership model and adds enterprise identity, device-bound
-mobile approval, policy-as-code, SIEM/compliance and HA coordination. See
-[`docs/phase-6/architecture-and-tech-stack.md`](docs/phase-6/architecture-and-tech-stack.md)
-and [`docs/phase-6/implementation-status.md`](docs/phase-6/implementation-status.md).
-
-Phase 7 deliberately narrows the release target to production readiness on one
-self-hosted VPS. Enterprise and HA capabilities are excluded from its exit
-criteria. Track implementation and operator evidence in
-[`docs/phase-7/single-vps-checklist.md`](docs/phase-7/single-vps-checklist.md).
-
-Phase 8 automates that single-VPS release gate: pinned runtime images,
-content-addressed releases, SPDX SBOM/provenance, migration dry-runs, guarded
-upgrade/rollback, systemd backup/monitor timers and redacted diagnostics. See
-[`docs/phase-8/single-vps-operations-and-release.md`](docs/phase-8/single-vps-operations-and-release.md).
-
-Phase 9 provides the stable single-VPS lifecycle CLI, guarded first-run
-bootstrap, initial encrypted backup, redacted host-status dashboard and a
-machine-readable acceptance report. See
-[`docs/phase-9/single-vps-ga-and-onboarding.md`](docs/phase-9/single-vps-ga-and-onboarding.md).
+- **`apps/desktop-flutter`** — the app installed today. It approves or denies
+  agent requests once; trusts are granted from the CLI.
+- **`apps/desktop-macos-app`** — the native SwiftUI port, in progress
+  ([status](docs/desktop-native-swift-port.md)). It adds the trust picker,
+  the Agents section (enroll agents, list and revoke trusts), Remote Vaults
+  (approve for a VPS) and notifications with Touch ID; this code has not yet
+  been built on a Mac.
 
 For an Intel Mac (`x86_64`) build and release-acceptance walkthrough, see
 [`docs/macos-x86_64-build-test.md`](docs/macos-x86_64-build-test.md). The
@@ -163,26 +143,10 @@ The first form prints agent-readable Markdown; `--json` exposes the same guide
 as a structured contract. The handoff ID is not a credential, and the command
 still requires the active managed client and an unlocked matching vault.
 
-## Agents: approvals and using secrets without disclosing them
+## Headless CLI flow
 
-[ADR 0005](docs/adr/0005-agent-trust-and-secret-use.md) adds a least-privilege
-agent identity and brokers that let an agent use a credential without the value
-reaching its model:
-
-```sh
-keylease agent enroll codex                     # own client, approval baseline
-keylease ssh deploy@host 'systemctl status app' # SSH key stays in the vault
-keylease db psql ITEM_ID -- -c 'select 1'       # Postgres password stays in the vault
-keylease run --env API_KEY=ITEM_ID/password -- terraform plan
-keylease approval decide APPROVAL_ID --approve --trust 1h
-```
-
-See [agent approvals and trust](docs/agent-approvals.md),
-[SSH agent](docs/ssh-agent.md), [PostgreSQL proxy](docs/db-proxy.md),
-[`keylease run`](docs/run-with-secrets.md) and
-[remote approval for a VPS](docs/remote-approval.md).
-
-## Local flow
+Without the desktop app (a server, a script), the CLI manages the vault
+directly:
 
 ```sh
 # All password prompts read from a TTY without echo.
@@ -225,3 +189,121 @@ keylease --db work.sqlite vault import-onepux account.1pux \
 `keylease contracts` emits the versioned request schemas and built-in connector
 catalogs. `docs/phase-0-1-implementation-matrix.md` tracks acceptance evidence
 and the macOS/provider checks that must happen in their real environments.
+
+## LeaseGate Cloud and Edge
+
+The repository also contains a self-hosted control plane and gateway for
+running agents against SaaS connectors with signed policy bundles: Cloud API
+and worker, the Edge gateway with an MCP endpoint and dynamic credentials,
+and the `approval-flutter` operator app. To run it on one VPS, follow
+[`docs/self-hosted-vps.md`](docs/self-hosted-vps.md).
+
+This work was built in phases from
+[`agent-friendly-keepass-app-proposal.md`](agent-friendly-keepass-app-proposal.md);
+platform and live-provider release evidence is tracked separately and is not
+claimed complete from a Linux workspace.
+
+The proposed Phase 3 Cloud/Edge/MCP architecture, including the single-VPS
+self-hosted profile and technical stack, is documented in
+[`docs/phase-3/architecture-and-tech-stack.md`](docs/phase-3/architecture-and-tech-stack.md).
+Implemented Phase 2/3 scope and explicit beta limitations are tracked in
+[`docs/phase-2-3-implementation.md`](docs/phase-2-3-implementation.md). To run
+the complete beta profile on one VPS, follow
+[`docs/self-hosted-vps.md`](docs/self-hosted-vps.md).
+
+The Phase 4 Connector Platform and Policy UX design is in
+[`docs/phase-4/architecture-and-tech-stack.md`](docs/phase-4/architecture-and-tech-stack.md),
+with implemented scope and verification evidence in
+[`docs/phase-4/implementation-status.md`](docs/phase-4/implementation-status.md).
+
+Phase 5 deliberately targets only the all-in-one `self_hosted/local_gateway`
+profile. Its architecture and implementation evidence are in
+[`docs/phase-5/architecture-and-tech-stack.md`](docs/phase-5/architecture-and-tech-stack.md)
+and
+[`docs/phase-5/implementation-status.md`](docs/phase-5/implementation-status.md).
+
+Phase 6 keeps that ownership model and adds enterprise identity, device-bound
+mobile approval, policy-as-code, SIEM/compliance and HA coordination. See
+[`docs/phase-6/architecture-and-tech-stack.md`](docs/phase-6/architecture-and-tech-stack.md)
+and [`docs/phase-6/implementation-status.md`](docs/phase-6/implementation-status.md).
+
+Phase 7 deliberately narrows the release target to production readiness on one
+self-hosted VPS. Enterprise and HA capabilities are excluded from its exit
+criteria. Track implementation and operator evidence in
+[`docs/phase-7/single-vps-checklist.md`](docs/phase-7/single-vps-checklist.md).
+
+Phase 8 automates that single-VPS release gate: pinned runtime images,
+content-addressed releases, SPDX SBOM/provenance, migration dry-runs, guarded
+upgrade/rollback, systemd backup/monitor timers and redacted diagnostics. See
+[`docs/phase-8/single-vps-operations-and-release.md`](docs/phase-8/single-vps-operations-and-release.md).
+
+Phase 9 provides the stable single-VPS lifecycle CLI, guarded first-run
+bootstrap, initial encrypted backup, redacted host-status dashboard and a
+machine-readable acceptance report. See
+[`docs/phase-9/single-vps-ga-and-onboarding.md`](docs/phase-9/single-vps-ga-and-onboarding.md).
+
+## Workspace
+
+- `keylease-core`: versioned domain, request, identity and audit contracts.
+- `keylease-crypto`: key hierarchy, password slots and item envelopes.
+- `keylease-store`: atomic SQLite ciphertext store, authenticated native backup,
+  audit, keyed mutation journal and lease/execution journal.
+- `keylease-1pux`: bounded plaintext 1PUX ZIP importer and migration reports.
+- `keylease-kdbx`: KDBX 4 import/export adapter and migration reports.
+- `leasegate-policy`: deterministic deny-by-default policy and approvals.
+- `leasegate-connectors`: connector trait, fake conformance connector and typed
+  Google, GitHub, Linear, Notion, Slack and Jira providers.
+- `leasegate-connector-sdk`: manifest validation, JSON Schema generation,
+  conformance checks and signed immutable connector packaging CLI/library.
+- `keylease-service`: the only mutation/policy/connector orchestration layer.
+- `keylease-cli`: headless CLI and local Unix-socket daemon.
+- `keylease-cloud`: PostgreSQL-backed control API, connector registry, policy
+  proposals, dynamic-credential metadata, posture, rotation and worker.
+- `leasegate-control` / `leasegate-policy-bundle`: versioned Cloud/Edge wire
+  contracts and Ed25519/JCS signatures.
+- `leasegate-credentials`: self-hosted AWS STS, SSH certificate, PostgreSQL role
+  and OAuth token-exchange credential broker/backends.
+- `leasegate-edge`: Linux local Gateway, signed control cache, credential API,
+  offline enforcement and encrypted audit/credential state.
+- `leasegate-mcp`: authenticated Streamable HTTP MCP adapter over the canonical
+  service boundary.
+- `keylease-rpc`: the single implementation of the local RPC contract, shared by
+  the CLI daemon and the mobile FFI so the wire format cannot drift.
+- `keylease-mobile`: the in-process C ABI the Android client calls; see
+  `docs/adr/0004-mobile-in-process-boundary.md`.
+- `packages/leasegate_vault_ui`: the shared vault client — models, state, design
+  tokens and feature UI — used by both Flutter apps.
+- `apps/desktop-flutter`: macOS presentation shell (requires Flutter locally).
+- `apps/desktop-macos` / `apps/desktop-macos-app`: native Swift client core
+  (builds and tests on Linux too) and the SwiftUI app (needs a Mac).
+- `apps/mobile-flutter`: the Android vault client.
+- `apps/approval-flutter`: responsive remote approval and Edge-health web app.
+
+## Development
+
+```sh
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo run -p keylease-cli -- --help
+```
+
+The Flutter side lives in three packages that are checked independently:
+
+```sh
+cd packages/leasegate_vault_ui && flutter analyze && flutter test
+cd apps/desktop-flutter        && flutter analyze && flutter test
+cd apps/mobile-flutter         && flutter analyze && flutter test
+```
+
+Building the Android client needs the toolchain described in
+`apps/mobile-flutter/README.md`; `scripts/build-android.sh` drives it.
+
+See `docs/security/threat-model.md` and `docs/adr/` before changing crypto,
+identity, trust-mode or connector boundaries.
+
+The native Swift client is checked on a Mac:
+
+```sh
+cd apps/desktop-macos     && swift test     # also runs on Linux
+cd apps/desktop-macos-app && swift build && swift test
+```

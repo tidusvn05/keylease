@@ -35,6 +35,7 @@ keylease --db /var/lib/keylease/vault.sqlite remote pairing-code
 
 ## In the macOS app
 
+Native app only (`apps/desktop-macos-app`), not the Flutter desktop app.
 **Remote Vaults → Pair a remote vault**: a name, the approver URL (`https://`,
 or `http://localhost` through an SSH tunnel), the pairing code and how this
 Mac should appear on the node. The app generates the Ed25519 key in the login

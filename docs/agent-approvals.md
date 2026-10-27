@@ -5,6 +5,9 @@ This is the user guide for step 1 of
 deployment (agent CLI + `keylease` CLI + the macOS app's daemon) and the
 headless VPS deployment.
 
+For complete setups (Mac, VPS, paired approver, automation) see
+[use cases](use-cases.md).
+
 ## Why enroll an agent
 
 Without enrollment, `keylease` defaults to the desktop owner's client
@@ -70,7 +73,8 @@ different purpose needs a new approval. It is never written to the audit log.
 
 ## Deciding
 
-In the macOS app, a new request raises a notification (agent and action only,
+In the native macOS app (`apps/desktop-macos-app`; the installed Flutter app
+only approves or denies once), a new request raises a notification (agent and action only,
 never the item) and a Dock badge. **Approvals → Approve…** opens a sheet with
 the agent's stated purpose and an **Allow** menu offering only the durations
 the request's risk tier admits, plus the scope when you pick a window.

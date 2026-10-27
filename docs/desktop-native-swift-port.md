@@ -28,7 +28,7 @@ embed + chạy như hiện tại.
 |---|---|---|
 | Generated models | `Sources/KeyLeaseCore/Generated/ContractModels.swift` | 50 type `Codable` từ `keylease contracts` (schemars) — không sửa tay |
 | Codegen | `scripts/generate-swift-contracts.py` | JSON Schema → Swift; fail-fast với construct mới |
-| Wire request | `Sources/KeyLeaseCore/RpcRequest.swift` | 51 command, tagged `"command"`; auth được splice lúc gọi |
+| Wire request | `Sources/KeyLeaseCore/RpcRequest.swift` | 59 command, tagged `"command"`; auth được splice lúc gọi |
 | Transport | `Sources/KeyLeaseCore/KeyLeaseRpc.swift` | POSIX AF_UNIX, 1 connection/call, 4 MiB bound, timeout 10s/30s |
 | Token file | `Sources/KeyLeaseCore/ClientTokenFile.swift` | regular file (lstat), ≤4 KiB, mode 0600 |
 | Errors | `Sources/KeyLeaseCore/KeyLeaseError.swift` | mirror `KeyLeaseErrorCode` phía Dart |
@@ -86,6 +86,21 @@ scripts/generate-swift-contracts.py /tmp/contracts.json \
 Toolchain trên VPS: Swift 6.2.4 debian12 tarball tại
 `~/.local/share/swift-toolchain/6.2.4/` (mise chưa có build debian13).
 Trên Mac: Xcode ≥16 là đủ.
+
+## Vượt bản Flutter: agent trust (ADR 0005) — đã viết, chưa build trên Mac
+
+Phần này chỉ có ở app Swift (bản Flutter chỉ duyệt/từ chối một lần):
+
+| Tính năng | File |
+|---|---|
+| Sheet duyệt: chọn thời hạn trust theo risk tier, scope, purpose, Touch ID | `Views/AgentTrustViews.swift` (`ApprovalDecisionSheet`) |
+| Section **Agents**: enroll agent (token ghi file 0600), danh sách/thu hồi trust | `AgentTrustController.swift`, `Views/AgentTrustViews.swift` |
+| Section **Remote Vaults**: pair VPS, khoá Ed25519 trong Keychain, duyệt từ xa | `RemoteApprover.swift`, `RemoteVaultsController.swift` |
+| Notification + Dock badge, poll `status.pending_approvals` (không gia hạn idle) | `ApprovalNotifier.swift`, `AppController.swift` |
+| Model trust/enroll viết tay | `KeyLeaseCore/AgentTrust.swift` |
+
+Notification chỉ hoạt động khi chạy từ bundle `.app` (`package-macos-swift.sh`),
+không chạy qua `swift run`.
 
 ## Parity checklist với bản Flutter
 
