@@ -2,7 +2,7 @@
 """Generate Swift Codable models from `keylease contracts` output.
 
 Usage:
-    cargo run -p keylease-cli -- contracts > contracts.json
+    cargo run -p keylease -- contracts > contracts.json
     scripts/generate-swift-contracts.py contracts.json \
         apps/desktop-macos/Sources/KeyLeaseCore/Generated/ContractModels.swift
 

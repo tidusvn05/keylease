@@ -3,12 +3,14 @@ name = "leasegate-policy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
 rust-version.workspace = true
+description = "Deny-by-default policy rules and approvals used by KeyLease"
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 chrono.workspace = true
-keylease-core = { path = "../keylease-core" }
+keylease-core = { path = "../keylease-core", version = "0.1.0" }
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true

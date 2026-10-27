@@ -3,13 +3,15 @@ name = "keylease-1pux"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
 rust-version.workspace = true
+description = "Bounded 1Password Unencrypted Export (1PUX) import for KeyLease"
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 base64.workspace = true
 chrono.workspace = true
-keylease-core = { path = "../keylease-core" }
+keylease-core = { path = "../keylease-core", version = "0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

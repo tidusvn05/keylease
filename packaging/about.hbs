@@ -1,0 +1,18 @@
+# Third-party licenses
+
+This keylease binary contains the Rust crates listed below. Each license text is
+given once, followed by the crates it covers.
+
+{{#each licenses}}
+## {{name}}
+
+Used by:
+{{#each used_by}}
+- {{crate.name}} {{crate.version}}{{#if crate.repository}} ({{crate.repository}}){{/if}}
+{{/each}}
+
+```
+{{text}}
+```
+
+{{/each}}

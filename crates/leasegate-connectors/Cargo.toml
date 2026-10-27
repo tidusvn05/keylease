@@ -3,13 +3,15 @@ name = "leasegate-connectors"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
 rust-version.workspace = true
+description = "Typed SaaS connector actions executed by KeyLease without revealing credentials"
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
-keylease-core = { path = "../keylease-core" }
+keylease-core = { path = "../keylease-core", version = "0.1.0" }
 reqwest.workspace = true
 schemars.workspace = true
 serde.workspace = true

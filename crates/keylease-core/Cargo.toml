@@ -3,8 +3,10 @@ name = "keylease-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
 rust-version.workspace = true
+description = "Domain, request, identity, trust and audit types for KeyLease"
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 chrono.workspace = true

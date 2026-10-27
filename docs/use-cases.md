@@ -80,7 +80,7 @@ Status and gaps:
 Agents (a Claude Code session over SSH, a deploy bot) run on the server; the
 vault lives there too. Mode A of ADR 0005.
 
-1. Build and install the CLI: `cargo build --release -p keylease-cli`, copy
+1. Build and install the CLI: `cargo build --release -p keylease`, copy
    `target/release/keylease` to `/usr/local/bin/`.
 2. Create the vault and fill it. Typing secrets on the server is optional:
    export from your Mac vault (`keylease vault export-kdbx`) and import, after

@@ -61,6 +61,19 @@ Step-by-step guides, with what is and is not implemented, are in
 ✅ implemented and tested on Linux · 🟡 written, not yet verified on a Mac ·
 ❌ not implemented.
 
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/tidusvn05/keylease/main/install.sh | sh
+# or, with Rust 1.94+:
+cargo install --locked keylease
+```
+
+The installer downloads the release archive for Linux or macOS (x86_64 or
+aarch64), checks it against `SHA256SUMS` and puts `keylease` in
+`~/.local/bin`. Releases: [GitHub](https://github.com/tidusvn05/keylease/releases) ·
+[how they are made](docs/releasing.md).
+
 ## Quick start: an agent on your Mac
 
 ```sh
@@ -265,7 +278,7 @@ machine-readable acceptance report. See
 - `leasegate-connector-sdk`: manifest validation, JSON Schema generation,
   conformance checks and signed immutable connector packaging CLI/library.
 - `keylease-service`: the only mutation/policy/connector orchestration layer.
-- `keylease-cli`: headless CLI and local Unix-socket daemon.
+- `keylease` (`crates/keylease-cli`): headless CLI and local Unix-socket daemon.
 - `keylease-cloud`: PostgreSQL-backed control API, connector registry, policy
   proposals, dynamic-credential metadata, posture, rotation and worker.
 - `leasegate-control` / `leasegate-policy-bundle`: versioned Cloud/Edge wire
@@ -293,7 +306,7 @@ machine-readable acceptance report. See
 ```sh
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo run -p keylease-cli -- --help
+cargo run -p keylease -- --help
 ```
 
 The Flutter side lives in three packages that are checked independently:
