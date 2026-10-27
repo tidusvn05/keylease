@@ -27,7 +27,7 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 publish = false
-repository = "https://github.com/tidusvn05/leasegate"
+repository = "https://github.com/tidusvn05/keylease"
 rust-version = "1.94"
 
 [workspace.dependencies]
