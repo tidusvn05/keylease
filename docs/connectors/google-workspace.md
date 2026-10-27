@@ -70,7 +70,7 @@ keylease connection google-oauth-begin --input-json -
 keylease connection google-oauth-complete google_oauth_FLOW_ID
 ```
 
-The Flutter client exposes the same flow and only asks macOS to open an HTTPS
+The macOS app exposes the same flow and only asks macOS to open an HTTPS
 URL whose host is exactly `accounts.google.com`; OAuth codes, PKCE material,
 tokens, and selected-ID validation remain in Rust. Real credentials and live
 proof that unselected files remain inaccessible are release acceptance checks.

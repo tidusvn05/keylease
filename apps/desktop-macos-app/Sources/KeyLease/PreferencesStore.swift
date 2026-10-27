@@ -2,9 +2,8 @@ import Foundation
 
 import KeyLeaseCore
 
-/// Non-secret UI preferences in `~/.keylease/ui.json` — the same file the
-/// Flutter desktop app writes via `FilePreferencesStore`, so both apps share
-/// pane widths, generator settings, and per-device SSH key bindings.
+/// Non-secret UI preferences in `~/.keylease/ui.json`: pane widths, generator
+/// settings, and per-device SSH key bindings.
 @MainActor @Observable
 final class PreferencesStore {
     private(set) var values: [String: JSONValue] = [:]

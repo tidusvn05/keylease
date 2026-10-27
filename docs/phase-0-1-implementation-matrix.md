@@ -22,7 +22,6 @@ acceptance checks listed below.
 | Deliverable | Current implementation |
 |---|---|
 | Rust CLI/headless Linux | One `keylease` binary with standalone administrative commands and Unix-socket `serve`; JSON stdout and stable structured errors. Master passwords are TTY-only and zeroized. |
-| macOS Flutter | Checked-in macOS runner and capability-gated Material client with master-password unlock/manual lock, full group CRUD, metadata search, extensible entry templates and create/edit/delete, Rust password generation, separately authorized username/password reveal and copy, TOTP countdown/copy, basic history, connection add/enroll/test/refresh/disconnect/revoke, pending approval decisions, redacted audit view, token-file validation and bounded IPC. The native adapter uses a security-scoped token-file picker, clears sensitive clipboard content after 30 seconds, and requests daemon lock plus clipboard clearing on sleep/screen lock. Native build/exercise still requires macOS. |
 | Native vault | Encrypted objects and groups, master-password unlock, inactivity auto-lock, manual lock, metadata search, custom fields, TOTP, password generator, optimistic revisions, history and recycle-bin tombstones. Lock/idle expiry revokes session grants, approvals and leases. |
 | Native backup | Version 2 ciphertext-only backup/restore with a vault-keyed MAC over the complete manifest; excludes clients, grants, approvals, leases, execution sessions and audit. Restored connections are disconnected. Tampering and tombstone restoration have tests. |
 | KDBX | Two-step preview/commit, source checksum, duplicate decisions, loss warnings, protected custom fields and both `otp`/KeePass `TimeOtp-*` forms. Whole-vault or selected-item export targets KDBX 4.1 and excludes agent authorization. |
@@ -38,8 +37,8 @@ acceptance checks listed below.
 The following proposal exit criteria cannot be honestly certified in this Linux
 workspace and remain release blockers:
 
-- Build and exercise the generated macOS runner, security-scoped bookmarks,
-  clipboard timeout and sleep/session-lock hooks with a Flutter/macOS toolchain.
+- Build and exercise the macOS app's security-scoped bookmarks, clipboard
+  timeout and sleep/session-lock hooks on a Mac.
 - Validate representative KDBX 4.0/4.1 fixtures produced by Strongbox and open
   KeyLease exports in current Strongbox and KeePassXC releases.
 - Validate the 1PUX fixture matrix against exports produced by current 1Password

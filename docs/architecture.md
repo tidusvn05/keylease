@@ -117,6 +117,6 @@ Details: [agent approvals and trust](agent-approvals.md).
 | `crates/leasegate-mcp` | Streamable HTTP MCP adapter over the service (connector actions) |
 | `crates/leasegate-edge`, `keylease-cloud`, `leasegate-credentials` | LeaseGate Edge gateway, Cloud control plane, dynamic credentials |
 | `apps/desktop-macos`, `apps/desktop-macos-app` | Native Swift client core and SwiftUI app |
-| `apps/desktop-flutter`, `packages/leasegate_vault_ui` | Flutter desktop shell and shared vault UI |
+| `packages/leasegate_vault_ui` | Shared Flutter vault UI for the mobile app |
 | `apps/mobile-flutter`, `crates/keylease-mobile` | Android vault client and its in-process FFI |
 | `apps/approval-flutter` | LeaseGate Cloud approval and Edge health app |

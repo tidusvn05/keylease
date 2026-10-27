@@ -65,13 +65,12 @@ struct VaultProfile: Sendable, Equatable, Identifiable {
 
 /// Runs the bundled `keylease` binary and manages the LaunchAgent daemon.
 ///
-/// Port of `LocalRuntimeBridge` in the Flutter runner's
-/// `MainFlutterWindow.swift`. CLI calls are identical; the MethodChannel hop
-/// disappears because the app is native now.
+/// Runs the `keylease` helper and registers its LaunchAgent with
+/// `SMAppService`.
 final class RuntimeService: Sendable {
     /// Resolution order: `$KEYLEASE_HELPER` (development), the bundled
-    /// `Contents/Resources/keylease`, then the CLI install location used by
-    /// `build-install-macos.sh`.
+    /// `Contents/Resources/keylease`, then `~/.local/bin/keylease` (where
+    /// `install.sh` puts the CLI).
     func helperURL() -> URL? {
         if let override = ProcessInfo.processInfo.environment["KEYLEASE_HELPER"],
             FileManager.default.isExecutableFile(atPath: override)

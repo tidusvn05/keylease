@@ -1,8 +1,0 @@
-analyzer:
-  exclude:
-    - build/**
-    - macos/**
-    # Reference-only comparison spike. It needs the archived `macos_ui`
-    # dependency and is deliberately outside the production build graph.
-    - spikes/**
-include: package:flutter_lints/flutter.yaml

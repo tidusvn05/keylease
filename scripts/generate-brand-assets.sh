@@ -3,7 +3,6 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BRAND_DIR="$REPO_DIR/brand"
-MAC_DIR="$REPO_DIR/apps/desktop-flutter/macos/Runner/Assets.xcassets/AppIcon.appiconset"
 IOS_DIR="$REPO_DIR/apps/approval-flutter/ios/Runner/Assets.xcassets/AppIcon.appiconset"
 ANDROID_DIR="$REPO_DIR/apps/approval-flutter/android/app/src/main/res"
 WEB_DIR="$REPO_DIR/apps/approval-flutter/web"
@@ -23,10 +22,6 @@ render() {
   local destination="$3"
   rsvg-convert -w "$size" -h "$size" "$source" -o "$destination"
 }
-
-for size in 16 32 64 128 256 512 1024; do
-  render "$BRAND_DIR/leasegate-app-icon-macos.svg" "$size" "$MAC_DIR/app_icon_${size}.png"
-done
 
 while read -r filename size; do
   render "$BRAND_DIR/leasegate-app-icon-ios.svg" "$size" "$IOS_DIR/$filename"
