@@ -5,6 +5,20 @@ All notable changes to KeyLease are listed here. The format follows
 [Semantic Versioning](https://semver.org/) (see docs/releasing.md). This file is
 generated from commit messages by git-cliff.
 
+## [0.2.0] - 2026-10-27
+
+### Features
+
+- **cloud:** Share items with VPS nodes, back up and recover through a cloud relay (#4) (c653acd)
+
+### Continuous integration
+
+- Build an ad-hoc signed macOS DMG for every release (#5) (eec7c4b)
+
+### Other
+
+- Remove the Flutter desktop app (#3) (4888311)
+
 ## [0.1.0] - 2026-10-27
 
 ### Features

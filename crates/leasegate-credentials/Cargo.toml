@@ -11,7 +11,7 @@ async-trait.workspace = true
 base64.workspace = true
 chrono.workspace = true
 ed25519-dalek.workspace = true
-keylease-core = { path = "../keylease-core", version = "0.1.0" }
+keylease-core = { path = "../keylease-core", version = "0.2.0" }
 quick-xml.workspace = true
 rand.workspace = true
 reqwest.workspace = true

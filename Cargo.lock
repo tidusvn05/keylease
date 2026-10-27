@@ -1727,7 +1727,7 @@ dependencies = [
 
 [[package]]
 name = "keylease"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -1761,7 +1761,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-1pux"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1775,7 +1775,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-cloud"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1813,7 +1813,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "schemars",
@@ -1827,7 +1827,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-crypto"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -1846,7 +1846,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-kdbx"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "keepass",
@@ -1861,7 +1861,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-mobile"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "jni",
@@ -1877,7 +1877,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-rpc"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1894,7 +1894,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-service"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1928,7 +1928,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-store"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1946,7 +1946,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-sync"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "keylease-core",
@@ -1965,7 +1965,7 @@ dependencies = [
 
 [[package]]
 name = "leasegate-connector-sdk"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1986,7 +1986,7 @@ dependencies = [
 
 [[package]]
 name = "leasegate-connectors"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2003,7 +2003,7 @@ dependencies = [
 
 [[package]]
 name = "leasegate-control"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "keylease-core",
@@ -2017,7 +2017,7 @@ dependencies = [
 
 [[package]]
 name = "leasegate-credentials"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2043,7 +2043,7 @@ dependencies = [
 
 [[package]]
 name = "leasegate-edge"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2078,7 +2078,7 @@ dependencies = [
 
 [[package]]
 name = "leasegate-mcp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "keylease-core",
@@ -2096,7 +2096,7 @@ dependencies = [
 
 [[package]]
 name = "leasegate-policy"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "keylease-core",
@@ -2108,7 +2108,7 @@ dependencies = [
 
 [[package]]
 name = "leasegate-policy-bundle"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
