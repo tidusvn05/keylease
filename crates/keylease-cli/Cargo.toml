@@ -21,12 +21,12 @@ base64.workspace = true
 chrono.workspace = true
 clap.workspace = true
 ed25519-dalek.workspace = true
-keylease-core = { path = "../keylease-core", version = "0.1.0" }
-keylease-rpc = { path = "../keylease-rpc", version = "0.1.0" }
-keylease-service = { path = "../keylease-service", version = "0.1.0" }
-keylease-store = { path = "../keylease-store", version = "0.1.0" }
-leasegate-connectors = { path = "../leasegate-connectors", version = "0.1.0" }
-leasegate-policy = { path = "../leasegate-policy", version = "0.1.0" }
+keylease-core = { path = "../keylease-core", version = "0.2.0" }
+keylease-rpc = { path = "../keylease-rpc", version = "0.2.0" }
+keylease-service = { path = "../keylease-service", version = "0.2.0" }
+keylease-store = { path = "../keylease-store", version = "0.2.0" }
+leasegate-connectors = { path = "../leasegate-connectors", version = "0.2.0" }
+leasegate-policy = { path = "../leasegate-policy", version = "0.2.0" }
 rand.workspace = true
 reqwest.workspace = true
 rmcp = { version = "3.2.0", default-features = false, features = ["server", "transport-io", "transport-streamable-http-server"] }
