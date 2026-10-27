@@ -79,38 +79,47 @@ Status and gaps:
 Agents (a Claude Code session over SSH, a deploy bot) run on the server; the
 vault lives there too. Mode A of ADR 0005.
 
-1. Build and install the CLI: `cargo build --release -p keylease`, copy
-   `target/release/keylease` to `/usr/local/bin/`.
+1. Install the CLI (`install.sh` from the [GitHub release](https://github.com/tidusvn05/keylease/releases),
+   or `cargo install --locked keylease`) into `/usr/local/bin/`.
+   The daemon accepts connections only from the Unix user that owns the
+   vault, so run the daemon and the agents as the same user (here `deployer`).
 2. Create the vault and fill it. Typing secrets on the server is optional:
    export from your Mac vault (`keylease vault export-kdbx`) and import, after
    reading the migration report:
 
    ```sh
-   keylease --db /var/lib/keylease/vault.sqlite vault init
-   keylease --db /var/lib/keylease/vault.sqlite vault import-kdbx vps.kdbx          # preview
-   keylease --db /var/lib/keylease/vault.sqlite vault import-kdbx vps.kdbx --commit
+   keylease vault init                                   # ~/.keylease/keylease.sqlite
+   keylease vault import-kdbx vps.kdbx                   # preview
+   keylease vault import-kdbx vps.kdbx --commit
    ```
+
+   Or share items from your laptop through a cloud ([cloud-sharing.md](cloud-sharing.md)).
 
 3. Run the daemon under systemd and unlock it with a host-sealed credential
    ([unit and options](agent-approvals.md#unlocking-after-a-reboot)).
 4. Register the agent with the approval baseline and store its token:
 
    ```sh
-   keylease --db /var/lib/keylease/vault.sqlite client register deployer --baseline
-   # save "client_token" to /home/deployer/.keylease/deployer.token, chmod 600
-   export KEYLEASE_AGENT_ID=agent_deployer
-   export KEYLEASE_CLIENT_TOKEN_FILE=/home/deployer/.keylease/deployer.token
-   export KEYLEASE_SOCKET=/run/keylease/keylease.sock
+   keylease client register claude --baseline
+   # save "client_token" to ~/.keylease/claude.token, chmod 600
+   export KEYLEASE_AGENT_ID=agent_claude
+   export KEYLEASE_CLIENT_TOKEN_FILE=~/.keylease/claude.token
    ```
+
+   With `--db` or `--socket` elsewhere than `~/.keylease`, pass the same
+   values to the agent (`KEYLEASE_SOCKET`).
 
 5. The agent uses the same brokers as on a Mac. Requests that need approval
    are decided over SSH with the master password:
 
    ```sh
-   keylease --db /var/lib/keylease/vault.sqlite approval approve APPROVAL_ID
-   keylease --db /var/lib/keylease/vault.sqlite approval approve APPROVAL_ID --trust 1h
-   keylease --db /var/lib/keylease/vault.sqlite approval deny APPROVAL_ID
+   keylease approval approve APPROVAL_ID
+   keylease approval approve APPROVAL_ID --trust 1h
+   keylease approval deny APPROVAL_ID
    ```
+
+   Some actions are approved one use at a time: `--trust` is refused for
+   them, for example `run` putting a secret into a program's environment.
 
    The running daemon sees admin decisions, grants and revocations at once; it
    never needs a restart for them.

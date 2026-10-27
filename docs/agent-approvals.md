@@ -165,7 +165,8 @@ and reference it from the unit; `keylease serve` picks it up from
 
 ```ini
 [Service]
-User=keylease
+# The daemon accepts only its own Unix user: the user the agents run as.
+User=deployer
 LoadCredentialEncrypted=keylease-master-password
 ExecStart=/usr/local/bin/keylease --db /var/lib/keylease/vault.sqlite \
   --socket /run/keylease/keylease.sock serve
