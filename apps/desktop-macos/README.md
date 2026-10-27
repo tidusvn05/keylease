@@ -12,8 +12,6 @@ the wire layer). The SwiftUI app target itself requires a Mac + Xcode.
 swift build && swift test
 ```
 
-Status and the remaining Mac-side work are tracked in
-[`docs/desktop-native-swift-port.md`](../../docs/desktop-native-swift-port.md).
 
 ## Layout
 

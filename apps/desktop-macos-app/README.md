@@ -36,5 +36,5 @@ Sources/KeyLease/
 └── Views/                  # phase router, unlock, onboarding, vault UI
 ```
 
-Remaining work is tracked in
-[`docs/desktop-native-swift-port.md`](../../docs/desktop-native-swift-port.md).
+The port has not yet been built and tested on a Mac in this branch; build it
+with `swift build && swift test` before relying on it.

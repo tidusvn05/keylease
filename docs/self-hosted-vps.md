@@ -25,7 +25,7 @@ Use a dedicated non-root operator, enable the host firewall, expose only
 directory:
 
 ```sh
-git clone git@github.com:ai1-maker/leasegate.git
+git clone https://github.com/tidusvn05/leasegate.git
 cd leasegate/deploy/compose
 cp .env.example .env
 ./bootstrap-secrets.sh

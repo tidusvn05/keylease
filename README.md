@@ -93,15 +93,13 @@ There are two macOS clients over the same daemon:
 - **`apps/desktop-flutter`** — the app installed today. It approves or denies
   agent requests once; trusts are granted from the CLI.
 - **`apps/desktop-macos-app`** — the native SwiftUI port, in progress
-  ([status](docs/desktop-native-swift-port.md)). It adds the trust picker,
+  ([README](apps/desktop-macos-app/README.md)). It adds the trust picker,
   the Agents section (enroll agents, list and revoke trusts), Remote Vaults
   (approve for a VPS) and notifications with Touch ID; this code has not yet
   been built on a Mac.
 
-For an Intel Mac (`x86_64`) build and release-acceptance walkthrough, see
-[`docs/macos-x86_64-build-test.md`](docs/macos-x86_64-build-test.md). The
-companion `scripts/macos-x86_64-check.sh` runs the automated Rust, Flutter,
-architecture and codesign checks.
+On an Intel Mac (`x86_64`), `scripts/macos-x86_64-check.sh` runs the
+automated Rust, Flutter, architecture and codesign checks.
 
 For subsequent local macOS app builds, use the faster incremental build and
 installer:

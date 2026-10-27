@@ -84,6 +84,4 @@ own intents, and a Vault menu adds New Item ⌘N, Refresh ⌘R and Lock Vault �
 The window restores its last size and position.
 
 Signing/notarization and exercising the sandbox, security-scoped URL, VoiceOver
-and sleep/screen-lock behavior remain macOS release acceptance checks. See
-[docs/macos-ui-ux-improvement-plan.md](../../docs/macos-ui-ux-improvement-plan.md)
-for the acceptance checklist and what is still unverified.
+and sleep/screen-lock behavior remain macOS release acceptance checks.

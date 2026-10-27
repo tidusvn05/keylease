@@ -70,7 +70,7 @@ Status and gaps:
   `keylease approval decide ID --approve --trust 1h` for trusts there.
 - 🟡 The trust picker, Agents, Remote Vaults, notifications and Touch ID are in
   the **native Swift app** (`apps/desktop-macos-app`), which is still a port in
-  progress ([status](desktop-native-swift-port.md)) and not yet built on a Mac.
+  progress and not yet built on a Mac.
 - Same-user limit: an agent running as you can read files you can read. The
   separate identity is a policy boundary, not an OS sandbox; run agents in a
   sandbox that hides `~/.keylease/desktop.token` where you can.
