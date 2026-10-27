@@ -7,7 +7,7 @@ import KeyLeaseCore
 /// The toolbar title + scroll body each top-level section uses. Sections
 /// render in the detail column, so `.navigationTitle` lands in the real
 /// window toolbar instead of a hand-drawn header.
-private struct SectionScaffold<Content: View>: View {
+struct SectionScaffold<Content: View>: View {
     let title: String
     let subtitle: String
     var centered = false
@@ -68,7 +68,7 @@ private struct SectionScaffold<Content: View>: View {
 /// The empty/error/loading body shared by list sections — the same
 /// `ContentUnavailableView` language as the vault list.
 @ViewBuilder
-@MainActor private func sectionBody<Item: Sendable>(
+@MainActor func sectionBody<Item: Sendable>(
     _ controller: SectionController<Item>,
     emptyTitle: String, emptyIcon: String, emptyDetail: String,
     @ViewBuilder rows: ([Item]) -> some View
@@ -90,14 +90,6 @@ private struct SectionScaffold<Content: View>: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     case .rows:
         rows(controller.items)
-    }
-}
-
-extension ISO8601DateFormatter {
-    fileprivate static func parse(_ value: String?) -> Date? {
-        guard let value else { return nil }
-        return ISO8601DateFormatter.default.date(from: value)
-            ?? ISO8601DateFormatter().date(from: value)
     }
 }
 
@@ -464,173 +456,6 @@ private struct GoogleConnectSheet: View {
         } catch {
             failure = UserMessage(error)
         }
-    }
-}
-
-// MARK: - Approvals (`approvals_page.dart` + `RequestSummary`)
-
-struct ApprovalsView: View {
-    let app: AppController
-    @State private var failure: UserMessage?
-
-    private var controller: ApprovalsController { app.approvals }
-
-    var body: some View {
-        SectionScaffold(
-            title: "Approvals",
-            subtitle: "Requests waiting for a human decision",
-            centered: controller.list.phase != .rows)
-        {
-            Button {
-                Task { await controller.list.load() }
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-            }
-            .help("Refresh")
-        } content: {
-            if let failure {
-                MessageBanner(
-                    message: failure, onDismiss: { self.failure = nil })
-            }
-            sectionBody(
-                controller.list,
-                emptyTitle: "Nothing waiting for you",
-                emptyIcon: "checkmark.shield",
-                emptyDetail: "New approval requests will appear here."
-            ) { items in
-                ForEach(items, id: \.id) { approval in
-                    ApprovalCard(
-                        approval: approval,
-                        onDecide: { approve in
-                            await decide(approval, approve: approve)
-                        })
-                }
-            }
-        }
-        // Approvals arrive asynchronously — poll while the section is
-        // open so a request is never silently stale. `.task` cancels
-        // the loop when the view goes away.
-        .task {
-            while !Task.isCancelled {
-                await controller.list.load()
-                try? await Task.sleep(for: .seconds(30))
-            }
-        }
-    }
-
-    private func decide(_ approval: ApprovalRecord, approve: Bool) async {
-        let summary = approval.semanticSummary
-        guard
-            confirmAction(
-                title: approve
-                    ? "Approve this exact request?" : "Deny this request?",
-                message: "\(summary?.operation ?? approval.action ?? "Access")"
-                    + " on "
-                    + (summary?.target ?? approval.resource
-                        ?? "unknown resource"),
-                confirmLabel: approve ? "Approve" : "Deny",
-                destructive: !approve)
-        else { return }
-        do {
-            try await controller.decide(approval, approve: approve)
-        } catch let stale as StaleApprovalError {
-            failure = UserMessage(
-                title: "That request moved on", detail: stale.message)
-        } catch {
-            failure = UserMessage(error)
-        }
-    }
-}
-
-private struct ApprovalCard: View {
-    let approval: ApprovalRecord
-    let onDecide: (Bool) async -> Void
-    @State private var busy = false
-
-    private var expiresAt: Date? {
-        ISO8601DateFormatter.parse(approval.expiresAt)
-    }
-
-    var body: some View {
-        let summary = approval.semanticSummary
-        let expired = (expiresAt ?? .distantPast) <= Date()
-        return KLCard {
-            VStack(alignment: .leading, spacing: KL.Space.xs) {
-            HStack {
-                Text(
-                    summary?.operation ?? approval.action
-                        ?? "Access request")
-                    .font(.callout.weight(.semibold))
-                Spacer()
-                if let risk = approval.risk {
-                    Text("\(risk.rawValue) risk")
-                        .font(.caption)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(
-                            Capsule().fill(
-                                risk == .r3 || risk == .r4
-                                    ? KL.Colors.danger.opacity(0.14)
-                                    : KL.Colors.warning.opacity(0.14)))
-                }
-                if !approval.isPending || expired {
-                    Text(expired ? "Expired" : approval.state.rawValue)
-                        .font(.caption)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(
-                            Capsule().stroke(
-                                Color.primary.opacity(0.2)))
-                }
-            }
-            line("What it wants to do", approval.action ?? "unknown action")
-            line(
-                "Where",
-                summary?.target ?? approval.resource ?? "unknown resource")
-            line("Requested by", approval.agentId ?? "unknown client")
-            if let changed = summary?.changedFields, !changed.isEmpty {
-                line("Fields it would change", changed.joined(separator: ", "))
-            }
-            if let blast = summary?.blastRadius {
-                line("Scope", blast)
-            }
-            line(
-                expired ? "Expired" : "Expires",
-                "\(expiresAt.map(friendlyTime) ?? approval.expiresAt) · "
-                    + "policy v\(approval.policyVersion)")
-            SectionLabel(title: "Exact request").padding(.top, 4)
-            Text(approval.requestDigestHex)
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-            HStack {
-                Spacer()
-                KLButton(title: "Deny", role: .destructive) {
-                    busy = true
-                    Task {
-                        await onDecide(false)
-                        busy = false
-                    }
-                }
-                .disabled(busy || !approval.decidableNow)
-                KLButton(title: "Approve", role: .primary) {
-                    busy = true
-                    Task {
-                        await onDecide(true)
-                        busy = false
-                    }
-                }
-                .disabled(busy || !approval.decidableNow)
-            }
-            .padding(.top, KL.Space.xs)
-            }
-        }
-    }
-
-    private func line(_ label: String, _ value: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text("\(label):").foregroundStyle(.secondary)
-            Text(value)
-        }
-        .font(.callout)
     }
 }
 

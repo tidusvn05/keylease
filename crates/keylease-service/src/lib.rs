@@ -595,10 +595,14 @@ impl KeyLeaseService {
         }
         Ok(match guard.as_ref() {
             Some(s) => {
+                // A count, not records: polling it neither extends the idle
+                // timeout nor writes audit, unlike `approvals_list`.
+                let pending_approvals = self.store.count_pending_approvals(now)?;
                 serde_json::json!({
                     "locked":false,
                     "vault_id":s.vault.vault_id,
                     "idle_expires_at":s.last_activity+s.idle_timeout,
+                    "pending_approvals":pending_approvals,
                     "service_version":env!("CARGO_PKG_VERSION"),
                     "contract_version":CONTRACT_VERSION
                 })
@@ -4305,6 +4309,21 @@ impl KeyLeaseService {
     }
 
     fn with_vault<T>(&self, f: impl FnOnce(&UnlockedVault) -> Result<T>) -> Result<T> {
+        self.with_vault_touching(true, f)
+    }
+    /// Like `with_vault`, but not counted as activity: a poller (a remote
+    /// approver listing requests) must not keep an idle vault unlocked.
+    pub(crate) fn with_vault_passive<T>(
+        &self,
+        f: impl FnOnce(&UnlockedVault) -> Result<T>,
+    ) -> Result<T> {
+        self.with_vault_touching(false, f)
+    }
+    fn with_vault_touching<T>(
+        &self,
+        touch: bool,
+        f: impl FnOnce(&UnlockedVault) -> Result<T>,
+    ) -> Result<T> {
         let mut guard = self.session.lock().map_err(|_| KeyLeaseError::Storage)?;
         let now = Utc::now();
         if guard
@@ -4322,7 +4341,8 @@ impl KeyLeaseService {
             requires_user_action: true,
         })?;
         let result = f(&session.vault);
-        if result.is_ok()
+        if touch
+            && result.is_ok()
             && let Some(session) = guard.as_mut()
         {
             session.last_activity = now;

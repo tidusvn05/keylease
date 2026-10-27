@@ -172,11 +172,11 @@ impl KeyLeaseService {
     }
 
     pub fn remote_list_approvals(&self, _device: &ApproverDevice) -> Result<Vec<ApprovalRecord>> {
-        self.with_vault(|_| self.store.list_pending_approvals(200, Utc::now()))
+        self.with_vault_passive(|_| self.store.list_pending_approvals(200, Utc::now()))
     }
 
     pub fn remote_list_trusts(&self, _device: &ApproverDevice) -> Result<Vec<TrustRecord>> {
-        self.with_vault(|_| self.store.list_trusts(Utc::now()))
+        self.with_vault_passive(|_| self.store.list_trusts(Utc::now()))
     }
 
     /// Decides an approval for a paired device. The decision must name the
@@ -253,11 +253,49 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
 
+    /// The macOS app's `RemoteApproverTests` asserts the same bytes.
+    #[test]
+    fn signing_input_is_frozen() {
+        assert_eq!(
+            String::from_utf8(approver_signing_input(
+                "POST",
+                "/v1/approvals/a/decide",
+                1_700_000_000,
+                br#"{"approve":true}"#,
+            ))
+            .unwrap(),
+            "KEYLEASE-APPROVER-V1\nPOST\n/v1/approvals/a/decide\n1700000000\n\
+             d80736cb968002b333b9dbd349375db423a42c381558798f8abba960c41a5862"
+        );
+    }
+
     fn signed(key: &SigningKey, method: &str, path: &str, timestamp: i64, body: &[u8]) -> String {
         base64::engine::general_purpose::STANDARD.encode(
             key.sign(&approver_signing_input(method, path, timestamp, body))
                 .to_bytes(),
         )
+    }
+
+    #[test]
+    fn polling_an_approver_list_does_not_keep_the_vault_unlocked() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(NativeStore::open(dir.path().join("vault.sqlite")).unwrap());
+        let service = KeyLeaseService::new(store).unwrap();
+        service.initialize(b"password", Duration::hours(1)).unwrap();
+        let device = ApproverDevice {
+            id: "device_test".into(),
+            name: "laptop".into(),
+            public_key: String::new(),
+            created_at: Utc::now(),
+        };
+        let idle = |service: &KeyLeaseService| service.status().unwrap()["idle_expires_at"].clone();
+        let before = idle(&service);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        service.remote_list_approvals(&device).unwrap();
+        service.remote_list_trusts(&device).unwrap();
+        assert_eq!(idle(&service), before);
+        service.current_vault_id().unwrap();
+        assert_ne!(idle(&service), before, "ordinary use still counts");
     }
 
     #[test]

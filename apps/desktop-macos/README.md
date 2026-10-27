@@ -22,7 +22,8 @@ Sources/KeyLeaseCore/
 ├── JSONValue.swift            # dynamic JSON (the Dart `dynamic` counterpart)
 ├── KeyLeaseError.swift        # typed error codes, mirror of the Dart client
 ├── RpcAuth.swift              # auth block, spliced in at call time
-├── RpcRequest.swift           # the 51 wire commands (frozen by commands.json)
+├── RpcRequest.swift           # the 59 wire commands (frozen by commands.json)
+├── AgentTrust.swift           # hand-maintained trust/enroll types (ADR 0005)
 ├── PasswordRecipe.swift       # hand-maintained; not in `keylease contracts`
 ├── ClientTokenFile.swift      # regular-file + mode-0600 token validation
 ├── KeyLeaseRpc.swift          # POSIX AF_UNIX transport, 4 MiB bound

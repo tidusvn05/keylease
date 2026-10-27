@@ -726,6 +726,7 @@ mod tests {
             first, retried,
             "a retry must not queue a duplicate approval"
         );
+        assert_eq!(f.service.status().unwrap()["pending_approvals"], 1);
 
         let pending = f
             .service

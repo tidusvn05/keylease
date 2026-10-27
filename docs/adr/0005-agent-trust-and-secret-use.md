@@ -271,8 +271,9 @@ The node exposes pairing and approval endpoints on its existing HTTPS listener
 
 1. Vault approvals, `purpose`, agent enrollment with a least-privilege
    baseline, and time-boxed trust. **Implemented** (see
-   `docs/agent-approvals.md`). macOS notifications and the trust picker need the
-   Swift app and are not done; key-bound identity moved to step 6.
+   `docs/agent-approvals.md`), including the macOS trust picker, agent
+   enrollment, trust list and notifications (driven by a passive
+   `pending_approvals` count in `status`). Key-bound identity moved to step 6.
 2. SSH agent. **Implemented** (`keylease ssh`, `keylease ssh-agent`; see
    `docs/ssh-agent.md`). Session-bind host binding and CA-issued ephemeral
    certificates are not done.
@@ -290,8 +291,9 @@ The node exposes pairing and approval endpoints on its existing HTTPS listener
 5. Pairing, signed remote approvals and remote unlock (mode B); then mobile.
    **Pairing and signed remote approvals implemented** with the CLI as the
    approver (`keylease serve --approver-listen`, `keylease remote`; see
-   `docs/remote-approval.md`). The macOS/mobile approver UI, push delivery and
-   remote unlock are not done.
+   `docs/remote-approval.md`) and in the macOS app's Remote Vaults section
+   (key in the Keychain). The mobile approver, push delivery and remote unlock
+   are not done.
 6. Signed client identity becomes required for new registrations.
 7. `keylease run` with output scrubbing; then browser login fill. **`keylease
    run` implemented** (`docs/run-with-secrets.md`) as `entry:inject_secret`,

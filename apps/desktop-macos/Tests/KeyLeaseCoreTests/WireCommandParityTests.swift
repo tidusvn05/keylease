@@ -69,7 +69,7 @@ final class WireCommandParityTests: XCTestCase {
                 input: NewEntryInput(
                     customFields: nil, favorite: nil, groupId: "g",
                     kind: "core.login", notes: nil, password: nil,
-                    sections: nil, title: "t", totp: nil, totpUri: nil,
+                    projectSlug: nil, sections: nil, title: "t", totp: nil, totpUri: nil,
                     url: nil, username: nil
                 ),
                 idempotencyKey: "k", dryRun: false
@@ -77,9 +77,9 @@ final class WireCommandParityTests: XCTestCase {
             .entriesUpdate(
                 id: "i",
                 patch: EntryPatch(
-                    customFields: nil, favorite: nil, fieldUpdates: nil,
-                    groupId: nil, notes: nil, password: nil,
-                    removeFieldIds: nil, sections: nil, title: nil,
+                    clearProject: nil, customFields: nil, favorite: nil,
+                    fieldUpdates: nil, groupId: nil, notes: nil,
+                    password: nil, projectSlug: nil, removeFieldIds: nil, sections: nil, title: nil,
                     totp: nil, totpUri: nil, url: nil, username: nil
                 ),
                 ifRevision: 1, idempotencyKey: "k", dryRun: false
@@ -108,6 +108,20 @@ final class WireCommandParityTests: XCTestCase {
             .connectionGoogleOauthComplete(flowId: "f"),
             .approvalsList(limit: 50),
             .approvalDecide(id: "a", approve: true),
+            .trustsList,
+            .trustRevoke(id: "trust_1"),
+            .agentEnroll(name: "codex"),
+            .sshIdentities,
+            .entriesInject(
+                program: "terraform",
+                fields: [InjectField(itemId: "item_1", field: "password")]
+            ),
+            .dbTarget(id: "item_1"),
+            .dbScram(
+                id: "item_1", database: "postgres", clientFirstBare: "n=,r=a",
+                serverFirst: "r=ab,s=c2FsdA==,i=4096"
+            ),
+            .sshSign(publicKeyBlob: "AAAA", data: "AAAA", flags: 0),
             .auditQuery(limit: 50),
             .leaseRequest(
                 request: ActionRequest(
@@ -116,7 +130,8 @@ final class WireCommandParityTests: XCTestCase {
                     resource: "kl://v", schemaVersion: 1,
                     subject: ActorContext(
                         agentId: "a", clientSessionId: "s",
-                        humanPrincipal: nil, onBehalfOf: nil, workloadId: nil
+                        humanPrincipal: nil, onBehalfOf: nil, purpose: nil,
+                        workloadId: nil
                     ),
                     taskId: nil
                 ),
@@ -130,7 +145,8 @@ final class WireCommandParityTests: XCTestCase {
                     resource: "kl://v", schemaVersion: 1,
                     subject: ActorContext(
                         agentId: "a", clientSessionId: "s",
-                        humanPrincipal: nil, onBehalfOf: nil, workloadId: nil
+                        humanPrincipal: nil, onBehalfOf: nil, purpose: nil,
+                        workloadId: nil
                     ),
                     taskId: nil
                 )
@@ -160,6 +176,31 @@ final class WireCommandParityTests: XCTestCase {
         let value = try JSONDecoder().decode(JSONValue.self, from: data)
         XCTAssertEqual(value["command"], .string("entries_search"))
         XCTAssertEqual(value["query"], .string("q"))
+    }
+
+    func testApprovalTrustIsOmittedUnlessGiven() throws {
+        let once = try JSONDecoder().decode(
+            JSONValue.self,
+            from: JSONEncoder().encode(
+                RpcRequest.approvalDecide(id: "a", approve: true)))
+        XCTAssertNil(once["trust"])
+        let trusted = try JSONDecoder().decode(
+            JSONValue.self,
+            from: JSONEncoder().encode(
+                RpcRequest.approvalDecide(
+                    id: "a", approve: true,
+                    trust: TrustDecision(scope: .item, duration: .hour1))))
+        XCTAssertEqual(trusted["trust"]?["scope"], .string("item"))
+        XCTAssertEqual(trusted["trust"]?["duration"], .string("1h"))
+    }
+
+    func testTrustCeilingsFollowRiskTiers() {
+        XCTAssertEqual(TrustDuration.allowed(for: .r4), [.once])
+        XCTAssertEqual(TrustDuration.allowed(for: nil), [.once])
+        XCTAssertEqual(
+            TrustDuration.allowed(for: .r3), [.once, .minutes30, .hour1])
+        XCTAssertEqual(TrustDuration.allowed(for: .r2).last, .day1)
+        XCTAssertEqual(TrustDuration.allowed(for: .r1).last, .days7)
     }
 
     func testOptionalsEncodeAsExplicitNull() throws {

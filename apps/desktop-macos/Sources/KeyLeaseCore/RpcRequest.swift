@@ -114,7 +114,22 @@ public enum RpcRequest: Encodable, Sendable {
     case connectionGoogleOauthBegin(clientId: String, clientSecret: SecretValue?)
     case connectionGoogleOauthComplete(flowId: String)
     case approvalsList(limit: UInt32)
-    case approvalDecide(id: String, approve: Bool)
+    /// `trust` turns an approval into a time-boxed trust (ADR 0005).
+    case approvalDecide(id: String, approve: Bool, trust: TrustDecision? = nil)
+    case trustsList
+    case trustRevoke(id: String)
+    case agentEnroll(name: String)
+    case sshIdentities
+    case entriesInject(program: String, fields: [InjectField])
+    case dbTarget(id: String)
+    case dbScram(
+        id: String,
+        database: String,
+        clientFirstBare: String,
+        serverFirst: String
+    )
+    /// `publicKeyBlob` and `data` are base64.
+    case sshSign(publicKeyBlob: String, data: String, flags: UInt32)
     case auditQuery(limit: UInt32)
     case leaseRequest(
         request: ActionRequest,
@@ -175,6 +190,14 @@ public enum RpcRequest: Encodable, Sendable {
         case .connectionGoogleOauthComplete: "connection_google_oauth_complete"
         case .approvalsList: "approvals_list"
         case .approvalDecide: "approval_decide"
+        case .trustsList: "trusts_list"
+        case .trustRevoke: "trust_revoke"
+        case .agentEnroll: "agent_enroll"
+        case .sshIdentities: "ssh_identities"
+        case .entriesInject: "entries_inject"
+        case .dbTarget: "db_target"
+        case .dbScram: "db_scram"
+        case .sshSign: "ssh_sign"
         case .auditQuery: "audit_query"
         case .leaseRequest: "lease_request"
         case .gateExecute: "gate_execute"
@@ -200,7 +223,8 @@ public enum RpcRequest: Encodable, Sendable {
         try c.encode(command, forKey: key("command"))
         switch self {
         case .status, .groupsList, .templatesList, .migrationsStatus,
-            .projectsList, .connectionsList, .lock:
+            .projectsList, .connectionsList, .trustsList, .sshIdentities,
+            .lock:
             break
         case .unlock(let password, let sessionTtlSeconds):
             try c.encode(password, forKey: key("password"))
@@ -336,9 +360,28 @@ public enum RpcRequest: Encodable, Sendable {
             try c.encode(flowId, forKey: key("flow_id"))
         case .approvalsList(let limit):
             try c.encode(limit, forKey: key("limit"))
-        case .approvalDecide(let id, let approve):
+        case .approvalDecide(let id, let approve, let trust):
             try c.encode(id, forKey: key("id"))
             try c.encode(approve, forKey: key("approve"))
+            // serde `#[serde(default)]`: omitted means a single-use
+            // approval, the wire every older client sends.
+            try c.encodeIfPresent(trust, forKey: key("trust"))
+        case .trustRevoke(let id), .dbTarget(let id):
+            try c.encode(id, forKey: key("id"))
+        case .agentEnroll(let name):
+            try c.encode(name, forKey: key("name"))
+        case .entriesInject(let program, let fields):
+            try c.encode(program, forKey: key("program"))
+            try c.encode(fields, forKey: key("fields"))
+        case .dbScram(let id, let database, let clientFirstBare, let serverFirst):
+            try c.encode(id, forKey: key("id"))
+            try c.encode(database, forKey: key("database"))
+            try c.encode(clientFirstBare, forKey: key("client_first_bare"))
+            try c.encode(serverFirst, forKey: key("server_first"))
+        case .sshSign(let publicKeyBlob, let data, let flags):
+            try c.encode(publicKeyBlob, forKey: key("public_key_blob"))
+            try c.encode(data, forKey: key("data"))
+            try c.encode(flags, forKey: key("flags"))
         case .auditQuery(let limit):
             try c.encode(limit, forKey: key("limit"))
         case .leaseRequest(let request, let ttlSeconds, let maxUses, let approvalId):

@@ -1574,6 +1574,12 @@ impl NativeStore {
             .collect()
     }
 
+    /// How many approvals are pending and unexpired — no record content, so
+    /// the desktop can poll it through `status` to raise a notification.
+    pub fn count_pending_approvals(&self, now: DateTime<Utc>) -> Result<usize> {
+        Ok(self.list_pending_approvals(1000, now)?.len())
+    }
+
     pub fn save_lease(&self, lease: &AccessLease) -> Result<()> {
         let token_hash = hex_digest(lease.token.as_bytes());
         let mut persisted = lease.clone();

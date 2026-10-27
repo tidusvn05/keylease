@@ -32,7 +32,9 @@ Shared Prompt/Runbook/Note content keeps its own grant-free channel
 
 ## Personal setup
 
-Run once, as yourself, with the vault unlocked in the app:
+Run once, as yourself, with the vault unlocked in the app — or use
+**Agents → Connect an agent** in the macOS app, which does the same and shows
+the environment to copy:
 
 ```sh
 keylease agent enroll codex
@@ -68,8 +70,19 @@ different purpose needs a new approval. It is never written to the audit log.
 
 ## Deciding
 
-The macOS app's existing Approvals view lists and decides these approvals. From
-a terminal (owner client):
+In the macOS app, a new request raises a notification (agent and action only,
+never the item) and a Dock badge. **Approvals → Approve…** opens a sheet with
+the agent's stated purpose and an **Allow** menu offering only the durations
+the request's risk tier admits, plus the scope when you pick a window.
+Approving a trust, or any R3/R4 request, asks for Touch ID or the login
+password. Active trusts are listed under **Agents**, with **Revoke**.
+
+The app learns about new requests by polling `status`, which now includes a
+`pending_approvals` count. That read is passive: it neither extends the idle
+timeout nor writes audit. The list itself is reloaded only when the count
+grows.
+
+From a terminal (owner client):
 
 ```sh
 keylease approval list

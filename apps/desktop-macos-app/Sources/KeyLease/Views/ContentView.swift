@@ -7,6 +7,8 @@ import KeyLeaseCore
 enum AppSection: String, CaseIterable, Identifiable {
     case vault = "Vault"
     case approvals = "Approvals"
+    case agents = "Agents"
+    case remoteVaults = "Remote Vaults"
     case activity = "Activity"
     case connections = "Connections"
 
@@ -16,6 +18,8 @@ enum AppSection: String, CaseIterable, Identifiable {
         switch self {
         case .vault: "lock.shield"
         case .approvals: "checkmark.shield"
+        case .agents: "person.badge.key"
+        case .remoteVaults: "server.rack"
         case .activity: "clock.arrow.circlepath"
         case .connections: "link"
         }
@@ -74,6 +78,10 @@ struct ContentView: View {
             Task { await app.vault.reload() }
         case .approvals:
             Task { await app.approvals.list.load() }
+        case .agents:
+            Task { await app.trusts.list.load() }
+        case .remoteVaults:
+            Task { await app.remotes.refreshAll() }
         case .activity:
             Task { await app.activity.list.load() }
         case .connections:
@@ -87,6 +95,10 @@ struct ContentView: View {
             EmptyView()
         case .approvals:
             ApprovalsView(app: app)
+        case .agents:
+            AgentsView(app: app)
+        case .remoteVaults:
+            RemoteVaultsView(app: app)
         case .activity:
             ActivityView(app: app)
         case .connections:
@@ -166,6 +178,12 @@ private struct SidebarView: View {
                         Label(item.rawValue, systemImage: item.icon)
                             .badge(pendingApprovals)
                             .tag(SidebarItem.section(item))
+                    } else if item == .remoteVaults,
+                        app.remotes.pendingCount > 0
+                    {
+                        Label(item.rawValue, systemImage: item.icon)
+                            .badge(app.remotes.pendingCount)
+                            .tag(SidebarItem.section(item))
                     } else if item == .connections {
                         // Not wired end-to-end yet — demoted to the
                         // bottom of the rail with a "Soon" badge.
@@ -234,8 +252,10 @@ private struct SidebarView: View {
         }
     }
 
+    /// From `status`, so the badge follows requests decided elsewhere
+    /// (the CLI, a remote approver) without reloading the list.
     private var pendingApprovals: Int {
-        app.approvals.list.items.filter(\.decidableNow).count
+        app.localPendingApprovals
     }
 
     @ViewBuilder private var vaultGroups: some View {

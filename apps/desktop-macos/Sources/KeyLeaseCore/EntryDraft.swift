@@ -188,6 +188,7 @@ public final class EntryDraft {
             kind: kind,
             notes: notes.isEmpty ? nil : notes,
             password: password.isEmpty ? nil : password,
+            projectSlug: nil,
             sections: parsedSections() ?? [],
             title: title.trimmingCharacters(in: .whitespaces),
             totp: totpConfig(),
@@ -228,12 +229,14 @@ public final class EntryDraft {
     /// stored value instead of being overwritten with a blank.
     public func patch() -> EntryPatch {
         EntryPatch(
+            clearProject: nil,
             customFields: nil,
             favorite: favorite != originalFavorite ? favorite : nil,
             fieldUpdates: parsedCustomFields(),
             groupId: groupId != originalGroupId ? groupId : nil,
             notes: notes.isEmpty ? nil : notes,
             password: password.isEmpty ? nil : password,
+            projectSlug: nil,
             removeFieldIds: removeFieldIds.isEmpty ? nil : removeFieldIds,
             sections: sections.trimmingCharacters(in: .whitespaces).isEmpty
                 ? nil : parsedSections(),

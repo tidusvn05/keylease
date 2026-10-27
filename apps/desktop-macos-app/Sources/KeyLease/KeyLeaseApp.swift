@@ -14,6 +14,7 @@ struct KeyLeaseApp: App {
                 .task {
                     app.installLockObservers()
                     app.installQuickAccess()
+                    app.installApprovalNotifications()
                     await app.bootstrap()
                 }
         }
@@ -31,6 +32,12 @@ struct KeyLeaseApp: App {
                     .disabled(app.phase != .ready)
                 Button("Connections") { app.section = .connections }
                     .keyboardShortcut("4", modifiers: .command)
+                    .disabled(app.phase != .ready)
+                Button("Agents") { app.section = .agents }
+                    .keyboardShortcut("5", modifiers: .command)
+                    .disabled(app.phase != .ready)
+                Button("Remote Vaults") { app.section = .remoteVaults }
+                    .keyboardShortcut("6", modifiers: .command)
                     .disabled(app.phase != .ready)
             }
             CommandMenu("Vault") {

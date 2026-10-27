@@ -256,7 +256,7 @@ final class DeveloperTemplateTests: XCTestCase {
             metadata: ItemMetadata(
                 favorite: false, groupId: "g", hasNotes: false,
                 hasPassword: false, hasTotp: false, id: "item_e",
-                kind: "core.environment", revision: 2,
+                kind: "core.environment", projectId: nil, revision: 2,
                 title: "Env", updatedAt: "t", urls: [], username: nil),
             projectId: nil,
             sections: [

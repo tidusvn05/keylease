@@ -9,12 +9,16 @@ struct VaultStatus: Sendable, Equatable {
     let requiresUserAction: Bool
     let vaultId: String?
     let idleExpiresAt: String?
+    /// Pending approvals, counted by the daemon. Polling `status` for it
+    /// neither extends the idle timeout nor writes audit.
+    let pendingApprovals: Int?
 
     init(_ json: JSONValue) {
         locked = json["locked"]?.boolValue ?? true
         requiresUserAction = json["requires_user_action"]?.boolValue ?? false
         vaultId = json["vault_id"]?.stringValue
         idleExpiresAt = json["idle_expires_at"]?.stringValue
+        pendingApprovals = json["pending_approvals"]?.intValue.map(Int.init)
     }
 }
 
@@ -110,7 +114,7 @@ final class AppController {
     private(set) var copiedToast: String?
     private var toastTask: Task<Void, Never>?
     /// Top-level section shown in `ContentView` — lives here so the Go
-    /// menu (⌘1–⌘5) can switch sections from outside the view tree.
+    /// menu (⌘1–⌘6) can switch sections from outside the view tree.
     var section: AppSection = .vault
     /// Menu-bar quick access — status item + popover + ⌥⌘K hotkey.
     private var quickAccess: QuickAccessController?
@@ -125,7 +129,12 @@ final class AppController {
     let vault = VaultController()
     let connections = ConnectionsController()
     let approvals = ApprovalsController()
+    let trusts = TrustsController()
+    let remotes = RemoteVaultsController()
     let activity = ActivityController()
+    let notifier = ApprovalNotifier()
+    /// Pending local approvals from the last `status` poll.
+    private(set) var localPendingApprovals = 0
 
     var isReady: Bool { phase == .ready }
 
@@ -139,6 +148,8 @@ final class AppController {
     /// Debounces `handleSessionLocked` — a burst of in-flight RPCs can all
     /// fail `vault_locked` at once but only one refresh should run.
     private var sessionLockCheck: Task<Void, Never>?
+    /// Watches for new approval requests while the vault is open.
+    private var approvalWatchTask: Task<Void, Never>?
 
     private var client: KeyLeaseRpc {
         KeyLeaseRpc(
@@ -213,6 +224,7 @@ final class AppController {
             vault.clear()
             connections.list.clear()
             approvals.list.clear()
+            trusts.clear()
             activity.list.clear()
             enter(
                 .locked,
@@ -246,11 +258,85 @@ final class AppController {
         preferences.load()
         connections.use(monitoredClient)
         approvals.use(monitoredClient)
+        trusts.use(monitoredClient)
         activity.use(monitoredClient)
         await vault.load(using: monitoredClient)
-        // The sidebar badge needs pending approvals without a visit to
-        // the section — load once here, the section itself polls.
-        Task { await approvals.list.load() }
+        localPendingApprovals = next.pendingApprovals ?? 0
+        // Notify about requests already waiting, then watch for new ones.
+        Task {
+            await approvals.list.load()
+            notifier.notify(approvals.list.items, source: nil)
+        }
+        startApprovalWatch()
+    }
+
+    // MARK: - Approval watch and notifications (ADR 0005)
+
+    func installApprovalNotifications() {
+        notifier.install()
+        notifier.onOpen = { [weak self] remote in
+            guard let self, self.phase == .ready else { return }
+            self.section = remote == nil ? .approvals : .remoteVaults
+            self.mainWindow?.makeKeyAndOrderFront(nil)
+        }
+        remotes.onApprovals = { [weak self] approvals, remote in
+            self?.notifier.notify(approvals, source: remote)
+            self?.notifier.retire(keeping: approvals, source: remote)
+            self?.updateDockBadge()
+        }
+    }
+
+    /// Polls `status` every 5 s for the pending count — it is the cheap,
+    /// passive read — and reloads the list only when a request arrives.
+    /// Paired remote nodes are polled every 15 s.
+    private func startApprovalWatch() {
+        guard approvalWatchTask == nil else { return }
+        approvalWatchTask = Task { [weak self] in
+            var tick = 0
+            while !Task.isCancelled {
+                guard let app = self, app.phase == .ready else { return }
+                await app.pollApprovals(includeRemotes: tick % 3 == 0)
+                tick += 1
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+
+    private func stopApprovalWatch() {
+        approvalWatchTask?.cancel()
+        approvalWatchTask = nil
+        localPendingApprovals = 0
+        updateDockBadge()
+    }
+
+    private func pollApprovals(includeRemotes: Bool) async {
+        if let raw = try? await client.unauthenticated(.status) {
+            let next = VaultStatus(raw)
+            if next.locked {
+                handleSessionLocked()
+                return
+            }
+            let pending = next.pendingApprovals ?? 0
+            let arrived = pending > localPendingApprovals
+            localPendingApprovals = pending
+            if arrived {
+                // An authorized read, so only on arrival: every reload
+                // counts as vault activity and is audited.
+                await approvals.list.load()
+                notifier.notify(approvals.list.items, source: nil)
+            } else if pending == 0 {
+                notifier.retire(keeping: [], source: nil)
+            }
+        }
+        if includeRemotes {
+            await remotes.refreshAll()
+        }
+        updateDockBadge()
+    }
+
+    private func updateDockBadge() {
+        let total = localPendingApprovals + remotes.pendingCount
+        NSApp.dockTile.badgeLabel = total > 0 ? String(total) : nil
     }
 
     /// Polls `status` until the freshly started daemon accepts connections —
@@ -586,7 +672,10 @@ final class AppController {
     }
 
     private func enter(_ phase: AppPhase, _ message: UserMessage? = nil) {
-        if phase != .ready { idleWatchTask?.cancel() }
+        if phase != .ready {
+            idleWatchTask?.cancel()
+            stopApprovalWatch()
+        }
         self.phase = phase
         self.message = message
     }

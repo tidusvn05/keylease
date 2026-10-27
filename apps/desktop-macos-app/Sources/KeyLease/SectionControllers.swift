@@ -180,8 +180,13 @@ final class ApprovalsController {
     }
 
     /// Re-reads the pending list and refuses to decide on a request that
-    /// expired, was decided elsewhere, or whose digest changed.
-    func decide(_ approval: ApprovalRecord, approve: Bool) async throws {
+    /// expired, was decided elsewhere, or whose digest changed. `trust`
+    /// (approve only) keeps answering this agent for a window, capped by
+    /// the daemon at the request's risk tier.
+    func decide(
+        _ approval: ApprovalRecord, approve: Bool,
+        trust: TrustDecision? = nil
+    ) async throws {
         guard let client else { return }
         let current = try await client.authorized(.approvalsList(limit: 100))
             .decoded(as: [ApprovalRecord].self)
@@ -198,7 +203,9 @@ final class ApprovalsController {
                 message: "This request expired before the decision was sent.")
         }
         _ = try await client.authorized(
-            .approvalDecide(id: approval.id, approve: approve))
+            .approvalDecide(
+                id: approval.id, approve: approve,
+                trust: approve ? trust : nil))
         await list.load()
     }
 }
@@ -209,8 +216,7 @@ extension ApprovalRecord {
     /// `decidableAt(now)` — pending and not yet expired.
     var decidableNow: Bool {
         isPending
-            && (ISO8601DateFormatter.default.date(from: expiresAt) ?? .distantPast)
-                > Date()
+            && (ISO8601DateFormatter.parse(expiresAt) ?? .distantPast) > Date()
     }
 
     /// The exact request this decision would bind to.
@@ -253,10 +259,16 @@ extension AuditEvent {
 }
 
 extension ISO8601DateFormatter {
-    /// Lenient parser for daemon timestamps (with or without fractions).
-    static var `default`: ISO8601DateFormatter {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
+    /// Lenient parser for daemon timestamps. chrono writes fractional
+    /// seconds whenever they are non-zero, which a plain internet-date-time
+    /// formatter rejects.
+    static func parse(_ value: String?) -> Date? {
+        guard let value else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [
+            .withInternetDateTime, .withFractionalSeconds,
+        ]
+        return fractional.date(from: value)
+            ?? ISO8601DateFormatter().date(from: value)
     }
 }

@@ -10,12 +10,14 @@ public struct ActorContext: Codable, Equatable, Sendable {
     public let clientSessionId: String
     public let humanPrincipal: String?
     public let onBehalfOf: String?
+    public let purpose: String?
     public let workloadId: String?
-    public init(agentId: String, clientSessionId: String, humanPrincipal: String?, onBehalfOf: String?, workloadId: String?) {
+    public init(agentId: String, clientSessionId: String, humanPrincipal: String?, onBehalfOf: String?, purpose: String?, workloadId: String?) {
         self.agentId = agentId
         self.clientSessionId = clientSessionId
         self.humanPrincipal = humanPrincipal
         self.onBehalfOf = onBehalfOf
+        self.purpose = purpose
         self.workloadId = workloadId
     }
     private enum CodingKeys: String, CodingKey {
@@ -23,6 +25,7 @@ public struct ActorContext: Codable, Equatable, Sendable {
         case clientSessionId = "client_session_id"
         case humanPrincipal = "human_principal"
         case onBehalfOf = "on_behalf_of"
+        case purpose = "purpose"
         case workloadId = "workload_id"
     }
 }
@@ -589,12 +592,13 @@ public struct ItemMetadata: Codable, Equatable, Sendable {
     public let hasTotp: Bool
     public let id: String
     public let kind: String
+    public let projectId: String?
     public let revision: UInt64
     public let title: String
     public let updatedAt: String
     public let urls: [String]
     public let username: String?
-    public init(favorite: Bool, groupId: String, hasNotes: Bool, hasPassword: Bool, hasTotp: Bool, id: String, kind: String, revision: UInt64, title: String, updatedAt: String, urls: [String], username: String?) {
+    public init(favorite: Bool, groupId: String, hasNotes: Bool, hasPassword: Bool, hasTotp: Bool, id: String, kind: String, projectId: String?, revision: UInt64, title: String, updatedAt: String, urls: [String], username: String?) {
         self.favorite = favorite
         self.groupId = groupId
         self.hasNotes = hasNotes
@@ -602,6 +606,7 @@ public struct ItemMetadata: Codable, Equatable, Sendable {
         self.hasTotp = hasTotp
         self.id = id
         self.kind = kind
+        self.projectId = projectId
         self.revision = revision
         self.title = title
         self.updatedAt = updatedAt
@@ -616,6 +621,7 @@ public struct ItemMetadata: Codable, Equatable, Sendable {
         case hasTotp = "has_totp"
         case id = "id"
         case kind = "kind"
+        case projectId = "project_id"
         case revision = "revision"
         case title = "title"
         case updatedAt = "updated_at"
@@ -1020,6 +1026,7 @@ public struct ApprovalRecord: Codable, Equatable, Sendable {
     public let expiresAt: String
     public let id: String
     public let policyVersion: UInt64
+    public let purpose: String?
     public let requestDigestHex: String
     public let requestId: String?
     public let resource: String?
@@ -1027,7 +1034,7 @@ public struct ApprovalRecord: Codable, Equatable, Sendable {
     public let semanticSummary: ApprovalSemanticSummary?
     public let state: ApprovalState
     public let taskId: String?
-    public init(action: String?, agentId: String?, connectionId: String?, createdAt: String?, expiresAt: String, id: String, policyVersion: UInt64, requestDigestHex: String, requestId: String?, resource: String?, risk: RiskTier?, semanticSummary: ApprovalSemanticSummary?, state: ApprovalState, taskId: String?) {
+    public init(action: String?, agentId: String?, connectionId: String?, createdAt: String?, expiresAt: String, id: String, policyVersion: UInt64, purpose: String?, requestDigestHex: String, requestId: String?, resource: String?, risk: RiskTier?, semanticSummary: ApprovalSemanticSummary?, state: ApprovalState, taskId: String?) {
         self.action = action
         self.agentId = agentId
         self.connectionId = connectionId
@@ -1035,6 +1042,7 @@ public struct ApprovalRecord: Codable, Equatable, Sendable {
         self.expiresAt = expiresAt
         self.id = id
         self.policyVersion = policyVersion
+        self.purpose = purpose
         self.requestDigestHex = requestDigestHex
         self.requestId = requestId
         self.resource = resource
@@ -1051,6 +1059,7 @@ public struct ApprovalRecord: Codable, Equatable, Sendable {
         case expiresAt = "expires_at"
         case id = "id"
         case policyVersion = "policy_version"
+        case purpose = "purpose"
         case requestDigestHex = "request_digest_hex"
         case requestId = "request_id"
         case resource = "resource"
@@ -1078,8 +1087,9 @@ public struct AuditEvent: Codable, Equatable, Sendable {
     public let resource: String
     public let schemaVersion: UInt32
     public let timestamp: String
+    public let trustId: String?
     public let workloadId: String?
-    public init(action: String, agentId: String, byteCount: UInt64?, cellCount: UInt64?, changedFields: [String], connectionId: String?, connector: String?, decision: String, itemCount: UInt64?, onBehalfOf: String?, outcome: String, policyVersion: UInt64?, requestId: String, resource: String, schemaVersion: UInt32, timestamp: String, workloadId: String?) {
+    public init(action: String, agentId: String, byteCount: UInt64?, cellCount: UInt64?, changedFields: [String], connectionId: String?, connector: String?, decision: String, itemCount: UInt64?, onBehalfOf: String?, outcome: String, policyVersion: UInt64?, requestId: String, resource: String, schemaVersion: UInt32, timestamp: String, trustId: String?, workloadId: String?) {
         self.action = action
         self.agentId = agentId
         self.byteCount = byteCount
@@ -1096,6 +1106,7 @@ public struct AuditEvent: Codable, Equatable, Sendable {
         self.resource = resource
         self.schemaVersion = schemaVersion
         self.timestamp = timestamp
+        self.trustId = trustId
         self.workloadId = workloadId
     }
     private enum CodingKeys: String, CodingKey {
@@ -1115,6 +1126,7 @@ public struct AuditEvent: Codable, Equatable, Sendable {
         case resource = "resource"
         case schemaVersion = "schema_version"
         case timestamp = "timestamp"
+        case trustId = "trust_id"
         case workloadId = "workload_id"
     }
 }
@@ -1240,12 +1252,14 @@ public struct ContentPatch: Codable, Equatable, Sendable {
 }
 
 public struct EntryPatch: Codable, Equatable, Sendable {
+    public let clearProject: Bool?
     public let customFields: [ItemField]?
     public let favorite: Bool?
     public let fieldUpdates: [ItemField]?
     public let groupId: String?
     public let notes: String?
     public let password: String?
+    public let projectSlug: String?
     public let removeFieldIds: [String]?
     public let sections: [ItemSection]?
     public let title: String?
@@ -1253,13 +1267,15 @@ public struct EntryPatch: Codable, Equatable, Sendable {
     public let totpUri: String?
     public let url: String?
     public let username: String?
-    public init(customFields: [ItemField]?, favorite: Bool?, fieldUpdates: [ItemField]?, groupId: String?, notes: String?, password: String?, removeFieldIds: [String]?, sections: [ItemSection]?, title: String?, totp: TotpConfig?, totpUri: String?, url: String?, username: String?) {
+    public init(clearProject: Bool?, customFields: [ItemField]?, favorite: Bool?, fieldUpdates: [ItemField]?, groupId: String?, notes: String?, password: String?, projectSlug: String?, removeFieldIds: [String]?, sections: [ItemSection]?, title: String?, totp: TotpConfig?, totpUri: String?, url: String?, username: String?) {
+        self.clearProject = clearProject
         self.customFields = customFields
         self.favorite = favorite
         self.fieldUpdates = fieldUpdates
         self.groupId = groupId
         self.notes = notes
         self.password = password
+        self.projectSlug = projectSlug
         self.removeFieldIds = removeFieldIds
         self.sections = sections
         self.title = title
@@ -1269,12 +1285,14 @@ public struct EntryPatch: Codable, Equatable, Sendable {
         self.username = username
     }
     private enum CodingKeys: String, CodingKey {
+        case clearProject = "clear_project"
         case customFields = "custom_fields"
         case favorite = "favorite"
         case fieldUpdates = "field_updates"
         case groupId = "group_id"
         case notes = "notes"
         case password = "password"
+        case projectSlug = "project_slug"
         case removeFieldIds = "remove_field_ids"
         case sections = "sections"
         case title = "title"
@@ -1358,19 +1376,21 @@ public struct NewEntryInput: Codable, Equatable, Sendable {
     public let kind: String
     public let notes: String?
     public let password: String?
+    public let projectSlug: String?
     public let sections: [ItemSection]?
     public let title: String
     public let totp: TotpConfig?
     public let totpUri: String?
     public let url: String?
     public let username: String?
-    public init(customFields: [ItemField]?, favorite: Bool?, groupId: String, kind: String, notes: String?, password: String?, sections: [ItemSection]?, title: String, totp: TotpConfig?, totpUri: String?, url: String?, username: String?) {
+    public init(customFields: [ItemField]?, favorite: Bool?, groupId: String, kind: String, notes: String?, password: String?, projectSlug: String?, sections: [ItemSection]?, title: String, totp: TotpConfig?, totpUri: String?, url: String?, username: String?) {
         self.customFields = customFields
         self.favorite = favorite
         self.groupId = groupId
         self.kind = kind
         self.notes = notes
         self.password = password
+        self.projectSlug = projectSlug
         self.sections = sections
         self.title = title
         self.totp = totp
@@ -1385,6 +1405,7 @@ public struct NewEntryInput: Codable, Equatable, Sendable {
         case kind = "kind"
         case notes = "notes"
         case password = "password"
+        case projectSlug = "project_slug"
         case sections = "sections"
         case title = "title"
         case totp = "totp"

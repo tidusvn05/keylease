@@ -533,9 +533,9 @@ final class VaultController {
             .entriesUpdate(
                 id: entryId,
                 patch: EntryPatch(
-                    customFields: nil, favorite: nil, fieldUpdates: nil,
-                    groupId: groupId, notes: nil, password: nil,
-                    removeFieldIds: nil, sections: nil, title: nil,
+                    clearProject: nil, customFields: nil, favorite: nil,
+                    fieldUpdates: nil, groupId: groupId, notes: nil,
+                    password: nil, projectSlug: nil, removeFieldIds: nil, sections: nil, title: nil,
                     totp: nil, totpUri: nil, url: nil, username: nil),
                 ifRevision: entry.revision,
                 idempotencyKey: idempotencyKey(),
@@ -635,9 +635,10 @@ final class VaultController {
                     .entriesUpdate(
                         id: entry.id,
                         patch: EntryPatch(
-                            customFields: nil, favorite: !entry.favorite,
-                            fieldUpdates: nil, groupId: nil, notes: nil,
-                            password: nil, removeFieldIds: nil,
+                            clearProject: nil, customFields: nil,
+                            favorite: !entry.favorite, fieldUpdates: nil,
+                            groupId: nil, notes: nil, password: nil,
+                            projectSlug: nil, removeFieldIds: nil,
                             sections: nil, title: nil, totp: nil,
                             totpUri: nil, url: nil, username: nil),
                         ifRevision: entry.revision,
