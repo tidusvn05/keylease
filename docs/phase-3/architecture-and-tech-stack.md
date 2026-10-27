@@ -493,7 +493,7 @@ way around.
 ## 16. Normative references
 
 - Existing product target architecture:
-  `agent-friendly-keepass-app-proposal.md`, sections 19, 24 and Phase 3.
+  `docs/design/original-proposal-vi.md`, sections 19, 24 and Phase 3.
 - MCP Streamable HTTP specification:
   <https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2026-07-28/basic/transports/streamable-http.mdx>
 - Official Rust MCP SDK:

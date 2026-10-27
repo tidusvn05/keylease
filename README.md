@@ -210,7 +210,7 @@ and the `approval-flutter` operator app. To run it on one VPS, follow
 [`docs/self-hosted-vps.md`](docs/self-hosted-vps.md).
 
 This work was built in phases from
-[`agent-friendly-keepass-app-proposal.md`](agent-friendly-keepass-app-proposal.md);
+the [original design proposal](docs/design/original-proposal-vi.md) (Vietnamese);
 platform and live-provider release evidence is tracked separately and is not
 claimed complete from a Linux workspace.
 
