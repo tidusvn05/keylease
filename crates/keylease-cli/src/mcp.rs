@@ -115,7 +115,7 @@ impl VaultMcp {
                 json!({
                     "type": "object",
                     "properties": {
-                        "destination": {"type": "string", "description": "user@host or a Host alias from ~/.ssh/config."},
+                        "destination": {"type": "string", "description": "user@host (ssh_config aliases are not used)."},
                         "command": {"type": "string", "description": "Shell command to run on the server."},
                         "port": {"type": "integer", "minimum": 1, "maximum": 65535},
                         "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": MAX_COMMAND_TIMEOUT_SECONDS},
@@ -392,6 +392,15 @@ struct SshArgs {
     purpose: Option<String>,
 }
 
+/// A PostgreSQL identifier-like name; never a connection string.
+fn valid_database_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 63
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
 /// Rejects anything OpenSSH would read as an option, and whitespace.
 fn valid_destination(destination: &str) -> bool {
     !destination.is_empty()
@@ -414,8 +423,16 @@ async fn ssh_exec(backend: &Backend, arguments: Value) -> ToolResult {
     let (listener, socket, directory) = ssh_agent::bind(None)?;
     let agent = tokio::spawn(ssh_agent::serve(listener, backend.clone()));
     let mut command = tokio::process::Command::new("ssh");
+    // `-F none`: no ssh_config at all, so no IdentityFile, ProxyCommand,
+    // PKCS#11 or GSSAPI from this host can sign in instead of the vault.
     command
+        .arg("-F")
+        .arg("none")
         .arg("-T")
+        .arg("-o")
+        .arg("GSSAPIAuthentication=no")
+        .arg("-o")
+        .arg("PKCS11Provider=none")
         .arg("-o")
         .arg("BatchMode=yes")
         .arg("-o")
@@ -457,7 +474,29 @@ async fn db_query(backend: &Backend, arguments: Value, options: &ToolOptions) ->
     if args.sql.trim().is_empty() {
         return Err(invalid("sql is empty"));
     }
-    let backend = purposed(backend, args.purpose)?;
+    // psql runs a `-c` string that starts with a backslash as a meta-command
+    // (`\!` is a shell escape), and reads a `-d` value with `=` or a URI as a
+    // whole connection string that could point anywhere. Neither may come
+    // from the model.
+    if args.sql.trim_start().starts_with('\\') {
+        return Err(invalid("sql must be SQL, not a psql meta-command"));
+    }
+    if let Some(database) = &args.database
+        && !valid_database_name(database)
+    {
+        return Err(invalid("database must be a plain database name"));
+    }
+    // The mode is part of what the approver sees and of the approval.
+    let mode = if args.allow_writes {
+        "[writes allowed]"
+    } else {
+        "[read-only]"
+    };
+    let purpose = Some(match args.purpose.as_deref().map(str::trim) {
+        Some(purpose) if !purpose.is_empty() => format!("{mode} {purpose}"),
+        _ => mode.to_owned(),
+    });
+    let backend = purposed(backend, purpose)?;
     let target = db_proxy::target(&backend, &args.item_id).await?;
     let (listener, directory, temporary) = db_proxy::bind(None, target.port)?;
     let proxy = tokio::spawn(db_proxy::serve(
@@ -467,7 +506,12 @@ async fn db_query(backend: &Backend, arguments: Value, options: &ToolOptions) ->
         TlsArgs::with_ca(options.db_tls_ca.clone()),
     ));
     let mut command = tokio::process::Command::new("psql");
+    // A clean environment: no PGSERVICE, PGOPTIONS or PGPASSWORD from the
+    // KeyLease host can redirect or reconfigure the connection.
     command
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("LANG", "C.UTF-8")
         .args(["-X", "-q", "--csv", "-v", "ON_ERROR_STOP=1"])
         .arg("-h")
         .arg(&directory)
@@ -478,8 +522,7 @@ async fn db_query(backend: &Backend, arguments: Value, options: &ToolOptions) ->
         .arg("-d")
         .arg(args.database.as_deref().unwrap_or(&target.database))
         .env("PGSSLMODE", "disable")
-        .env("PGCONNECT_TIMEOUT", "15")
-        .env_remove("PGPASSWORD");
+        .env("PGCONNECT_TIMEOUT", "15");
     if !args.allow_writes {
         command
             .arg("-c")
@@ -521,25 +564,14 @@ async fn run_with_secrets(backend: &Backend, arguments: Value) -> ToolResult {
         .map_err(|_| invalid("env values must be item_…/field"))?
         .into_iter()
         .unzip();
-    // The approval shows the whole command line, not just the program, so
-    // the user sees what will receive the secrets.
-    let shown = shell_words(&args.command);
-    let purpose = match args.purpose {
-        Some(purpose) if !purpose.trim().is_empty() => {
-            format!("{} — runs: {shown}", purpose.trim())
-        }
-        _ => format!("runs: {shown}"),
-    };
-    let purpose: String = purpose
-        .chars()
-        .take(keylease_core::MAX_PURPOSE_CHARS)
-        .collect();
+    let purpose = run::run_purpose(&args.command, args.purpose.as_deref())?;
     let backend = backend.with_purpose(Some(purpose));
     let value = backend
         .call(|auth| RpcRequest::EntriesInject {
             auth,
             program: program.clone(),
             fields: requests.clone(),
+            argv: args.command.clone(),
         })
         .await?;
     let values: Vec<Zeroizing<String>> = serde_json::from_value::<Vec<String>>(value)
@@ -560,24 +592,6 @@ async fn run_with_secrets(backend: &Backend, arguments: Value) -> ToolResult {
     run_captured(command, timeout(args.timeout_seconds), &patterns)
         .await
         .map(|output| output.render())
-}
-
-fn shell_words(words: &[String]) -> String {
-    words
-        .iter()
-        .map(|word| {
-            if !word.is_empty()
-                && word
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "-_./=:@,+%".contains(c))
-            {
-                word.clone()
-            } else {
-                format!("'{}'", word.replace('\'', "'\\''"))
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 // ------------------------------------------------------------- processes
@@ -817,10 +831,10 @@ pub(crate) async fn setup(
             for (key, value) in &env {
                 line.push_str(&format!(
                     " -e {key}={}",
-                    shell_words(&[value.as_str().unwrap_or_default().to_owned()])
+                    run::shell_words(&[value.as_str().unwrap_or_default().to_owned()])
                 ));
             }
-            line.push_str(&format!(" -- {}", shell_words(&[program])));
+            line.push_str(&format!(" -- {}", run::shell_words(&[program])));
             for arg in &args {
                 line.push_str(&format!(" {arg}"));
             }
@@ -894,6 +908,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn database_names_cannot_be_connection_strings() {
+        assert!(valid_database_name("app_prod"));
+        for bad in ["host=evil", "postgresql://evil/x", "a b", "", "x'"] {
+            assert!(!valid_database_name(bad), "{bad}");
+        }
+    }
+
+    #[test]
     fn destinations_cannot_smuggle_options() {
         assert!(valid_destination("deploy@prod.example.com"));
         assert!(valid_destination("prod"));
@@ -905,7 +927,7 @@ mod tests {
     #[test]
     fn shown_command_lines_are_quoted() {
         assert_eq!(
-            shell_words(&["stripe".into(), "customers list".into(), "it's".into()]),
+            run::shell_words(&["stripe".into(), "customers list".into(), "it's".into()]),
             "stripe 'customers list' 'it'\\''s'"
         );
     }

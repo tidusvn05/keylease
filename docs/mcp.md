@@ -44,11 +44,19 @@ approvals.
 | `db_query` | run SQL on a PostgreSQL item, read-only by default | CSV output | `db:connect` (R2; R3 for production) |
 | `run_with_secrets` | run a local program with vault values in its environment (opt-in) | output with the values scrubbed | every run (R4) |
 
-There is deliberately **no tool that returns a secret**. `ssh_exec` signs
-inside the vault and never falls back to key files on disk; `db_query` answers
-the SCRAM challenge inside the vault and sets `default_transaction_read_only`
-unless `allow_writes` is true; `run_with_secrets` shows the approver the whole
-command line.
+There is deliberately **no tool that returns a secret**.
+
+- `ssh_exec` signs inside the vault. It runs `ssh -F none` with no identity
+  files, GSSAPI or PKCS#11, so nothing on the host can sign in instead of the
+  vault — and `~/.ssh/config` aliases are not used; give `user@host`.
+- `db_query` answers the SCRAM challenge inside the vault, in a clean
+  environment, refuses psql meta-commands (`\…`) and connection strings in
+  `database`. "Read-only" sets `default_transaction_read_only`, which SQL can
+  switch off: it guards against accidents; the database role is the real
+  limit. The mode (`[read-only]` / `[writes allowed]`) is shown to the approver
+  and is part of the approval.
+- `run_with_secrets` shows the approver the whole command line and binds it
+  into the approval, so approving one command does not approve another.
 
 Each tool takes an optional `purpose`, shown to you when you approve.
 
@@ -68,7 +76,7 @@ trust and the next calls run without asking.
 - Results — command output, query rows, item metadata — go to the model and
   its provider. Use a read-only database role where that is enough.
 - `ssh_exec` accepts a new host key on first use (`StrictHostKeyChecking=accept-new`)
-  and refuses a changed one.
+  and refuses a changed one; it uses the KeyLease user's `~/.ssh/known_hosts`.
 - `db_query` needs `psql` installed; output is capped at 64 KiB per stream and
   commands time out after 120 s (`timeout_seconds`, at most 600).
 - ChatGPT Desktop does not start local MCP servers; use the

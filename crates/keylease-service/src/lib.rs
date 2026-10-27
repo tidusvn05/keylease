@@ -4409,9 +4409,12 @@ impl KeyLeaseService {
     fn sync_external_policy_changes(&self) -> Result<()> {
         use std::sync::atomic::Ordering;
         let current = self.store.data_version()?;
-        if self.policy_data_version.swap(current, Ordering::AcqRel) != current {
+        if self.policy_data_version.load(Ordering::Acquire) != current {
+            // Recorded only after a successful reload, so a failed one is
+            // retried on the next request instead of leaving policy stale.
             let rules = self.store.load_policy_rules()?;
             self.install_policy(rules)?;
+            self.policy_data_version.store(current, Ordering::Release);
         }
         Ok(())
     }

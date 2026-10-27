@@ -345,6 +345,10 @@ pub enum RpcRequest {
         /// The program that will receive the values; shown to the approver.
         program: String,
         fields: Vec<keylease_service::InjectRequest>,
+        /// The whole command line, bound into the approval so an approval
+        /// for one command cannot be reused for another. Older clients omit it.
+        #[serde(default)]
+        argv: Vec<String>,
     },
     DbTarget {
         auth: RpcAuth,
@@ -884,10 +888,13 @@ pub async fn handle_rpc(
             auth,
             program,
             fields,
+            argv,
         } => {
             let actor = actor(service, &auth)?;
-            serde_json::to_value(service.inject_fields_authorized(&actor, &program, &fields)?)
-                .map_err(|_| KeyLeaseError::Storage)
+            serde_json::to_value(
+                service.inject_fields_authorized(&actor, &program, &argv, &fields)?,
+            )
+            .map_err(|_| KeyLeaseError::Storage)
         }
         RpcRequest::DbTarget { auth, id } => {
             let actor = actor(service, &auth)?;

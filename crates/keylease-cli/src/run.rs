@@ -41,6 +41,43 @@ pub(crate) fn parse_binding(binding: &str) -> Result<(String, InjectRequest)> {
     ))
 }
 
+pub(crate) fn shell_words(words: &[String]) -> String {
+    words
+        .iter()
+        .map(|word| {
+            if !word.is_empty()
+                && word
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_./=:@,+%".contains(c))
+            {
+                word.clone()
+            } else {
+                format!("'{}'", word.replace('\'', "'\\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// What the approver of a run sees: the whole command line first, then why.
+/// Refused rather than cut when too long, so the command is never hidden.
+pub(crate) fn run_purpose(argv: &[String], purpose: Option<&str>) -> Result<String> {
+    let purpose = purpose.map(str::trim).filter(|purpose| !purpose.is_empty());
+    let text = match purpose {
+        Some(purpose) => format!("runs: {} — {purpose}", shell_words(argv)),
+        None => format!("runs: {}", shell_words(argv)),
+    };
+    if text.chars().count() > MAX_PURPOSE_CHARS {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: format!(
+                "the command line and purpose must fit in {MAX_PURPOSE_CHARS} characters so the \
+                 approver sees all of it"
+            ),
+        });
+    }
+    Ok(text)
+}
+
 /// Every form of a secret worth scrubbing: raw, base64 and percent-encoded.
 pub(crate) fn redaction_patterns(values: &[Zeroizing<String>]) -> Vec<Zeroizing<Vec<u8>>> {
     let mut patterns = Vec::new();
@@ -146,12 +183,15 @@ pub(crate) async fn run(
         .ok_or_else(|| KeyLeaseError::InvalidRequest {
             reason: "no command to run".into(),
         })?;
+    let mut auth = auth(cli)?;
+    auth.purpose = Some(run_purpose(&command, auth.purpose.as_deref())?);
     let value = rpc(
         daemon,
         RpcRequest::EntriesInject {
-            auth: auth(cli)?,
+            auth,
             program: program.clone(),
             fields: requests,
+            argv: command.clone(),
         },
     )
     .await?;

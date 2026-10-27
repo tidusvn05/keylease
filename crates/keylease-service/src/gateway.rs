@@ -271,6 +271,11 @@ impl KeyLeaseService {
                 "a PKCE S256 code_challenge is required",
             ));
         }
+        // Checked before the code is used up, so a locked vault does not
+        // waste it.
+        let vault_id = self.current_vault_id().map_err(|_| {
+            OAuthError::AccessDenied("the vault is locked; unlock it and try again")
+        })?;
         let name = self
             .store
             .consume_gateway_connect_code(&digest(&normalize_code(connect_code)), Utc::now())?
@@ -278,9 +283,6 @@ impl KeyLeaseService {
                 "the connect code is wrong or expired; create a new one with \
                  `keylease gateway connect-code`",
             ))?;
-        let vault_id = self.current_vault_id().map_err(|_| {
-            OAuthError::AccessDenied("the vault is locked; unlock it and try again")
-        })?;
         let suffix = &uuid::Uuid::now_v7().simple().to_string()[24..];
         let (agent_id, _token) = self.register_client(&format!("gw_{name}_{suffix}"))?;
         if let Err(error) = self.install_agent_baseline(&agent_id, &vault_id) {
@@ -411,18 +413,31 @@ impl KeyLeaseService {
         }))
     }
 
+    /// Whether a gateway connection (and its agent client) is still live.
+    pub fn gateway_connection_active(&self, agent_id: &str) -> Result<bool> {
+        self.store.gateway_connection_active(agent_id)
+    }
+
     pub fn list_gateway_connections(&self) -> Result<Vec<GatewayConnection>> {
         self.store.list_gateway_connections()
     }
 
     /// Ends a connection: tokens, the agent client, its baseline and trusts.
     pub fn revoke_gateway_connection(&self, agent_id: &str) -> Result<()> {
-        if !self.store.revoke_gateway_connection(agent_id)? {
+        if !self
+            .list_gateway_connections()?
+            .iter()
+            .any(|connection| connection.agent_id.0 == agent_id)
+        {
             return Err(KeyLeaseError::NotFound {
                 resource: format!("gateway connection {agent_id}"),
             });
         }
-        let _ = self.store.revoke_client(&AgentId(agent_id.into()));
+        // The client first: once it is revoked the connection's tokens are
+        // dead (`gateway_connection_active` requires both), whatever happens
+        // next.
+        self.store.revoke_client(&AgentId(agent_id.into()))?;
+        self.store.revoke_gateway_connection(agent_id)?;
         self.gateway_audit(agent_id, "gateway:revoke", "revoked")
     }
 }

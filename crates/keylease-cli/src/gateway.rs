@@ -172,6 +172,30 @@ pub(crate) fn router(service: Arc<KeyLeaseService>, config: GatewayConfig) -> Ro
         .merge(mcp_routes)
         .merge(approver::approver_routes().with_state(service))
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024))
+        .layer(middleware::from_fn(security_headers))
+}
+
+/// Browsers ignore `frame-ancestors` in a `<meta>` policy, so the consent
+/// page's protection against framing must travel as headers.
+async fn security_headers(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(
+            "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+        ),
+    );
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response
 }
 
 // ---------------------------------------------------------------- bearer
@@ -720,6 +744,13 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert!(page.contains("&lt;b&gt;Evil&lt;/b&gt;") && !page.contains("<b>Evil"));
         assert!(headers.get(header::LOCATION).is_none());
+        assert_eq!(headers[header::X_FRAME_OPTIONS], "DENY");
+        assert!(
+            headers[header::CONTENT_SECURITY_POLICY]
+                .to_str()
+                .unwrap()
+                .contains("frame-ancestors 'none'")
+        );
 
         let connect = service.create_gateway_connect_code("test").unwrap();
         let (status, headers, _) = send(

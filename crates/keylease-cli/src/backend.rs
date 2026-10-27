@@ -95,6 +95,14 @@ impl Backend {
                     rpc_once(daemon, &encoded).await
                 }
                 Target::InProcess(service, actor) => {
+                    // The token was checked when the request arrived; a call
+                    // still waiting for approval must stop once the
+                    // connection is revoked.
+                    if !service.gateway_connection_active(&actor.agent_id.0)? {
+                        return Err(KeyLeaseError::Denied {
+                            reason: "this connection was revoked".into(),
+                        });
+                    }
                     handle_rpc_as(
                         service,
                         RpcCapabilities::MOBILE,

@@ -102,7 +102,8 @@ trusts at once. Connecting again needs a new code and creates a new agent.
 - Authorization code with PKCE S256 is required. A code lives 5 minutes and is
   single-use; a wrong verifier burns it. Errors about the client or redirect
   address are shown on the page, never redirected.
-- The consent page is self-contained (no scripts, `frame-ancestors 'none'`),
+- The consent page is self-contained (no scripts; `Content-Security-Policy:
+  frame-ancestors 'none'` and `X-Frame-Options: DENY` headers),
   escapes everything the client supplied, and requires the connect code, an
   80-bit single-use secret that only someone with the master password can make.
 - Access tokens live 1 hour; refresh tokens 30 days and rotate on use.
@@ -121,3 +122,7 @@ trusts at once. Connecting again needs a new code and creates a new agent.
 - MCP sessions live in memory: after a restart, clients reconnect on their own
   (their OAuth tokens stay valid).
 - One VPS process serves one vault.
+- `/register` is unauthenticated, as the standard requires; put rate limiting
+  in the reverse proxy if the gateway is public.
+- Revoking a connection also stops its tool calls that are waiting for an
+  approval.

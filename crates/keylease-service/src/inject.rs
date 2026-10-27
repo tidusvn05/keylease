@@ -28,9 +28,15 @@ impl KeyLeaseService {
         &self,
         actor: &ActorContext,
         program: &str,
+        argv: &[String],
         requests: &[InjectRequest],
     ) -> Result<Vec<String>> {
         let program = program.rsplit('/').next().unwrap_or(program);
+        if argv.len() > 256 || argv.iter().map(String::len).sum::<usize>() > 8192 {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "command line is too long".into(),
+            });
+        }
         if requests.is_empty()
             || requests.len() > MAX_INJECTED_FIELDS
             || program.is_empty()
@@ -61,7 +67,11 @@ impl KeyLeaseService {
                     actor,
                     "entry:inject_secret",
                     &format!("kl://{}/{}", vault.vault_id.0, item_id),
-                    serde_json::json!({"program": program, "fields": fields}),
+                    if argv.is_empty() {
+                        serde_json::json!({"program": program, "fields": fields})
+                    } else {
+                        serde_json::json!({"program": program, "argv": argv, "fields": fields})
+                    },
                 )?;
             }
             let mut values = Vec::with_capacity(requests.len());
@@ -148,7 +158,7 @@ mod tests {
                 field: "username".into(),
             },
         ];
-        let id = match service.inject_fields_authorized(&agent, "/usr/bin/stripe", &requests) {
+        let id = match service.inject_fields_authorized(&agent, "/usr/bin/stripe", &[], &requests) {
             Err(KeyLeaseError::ApprovalRequired { approval_id }) => approval_id,
             other => panic!("expected approval_required, got {other:?}"),
         };
@@ -176,13 +186,23 @@ mod tests {
             .unwrap();
         assert_eq!(
             service
-                .inject_fields_authorized(&agent, "stripe", &requests)
+                .inject_fields_authorized(&agent, "stripe", &[], &requests)
                 .unwrap(),
             vec!["sk_live_fixture".to_owned(), "ops".to_owned()]
         );
-        // A different program is a different approval.
+        // A different program, or the same program with other arguments,
+        // is a different approval.
         assert!(matches!(
-            service.inject_fields_authorized(&agent, "curl", &requests),
+            service.inject_fields_authorized(
+                &agent,
+                "stripe",
+                &["stripe".into(), "x".into()],
+                &requests
+            ),
+            Err(KeyLeaseError::ApprovalRequired { .. })
+        ));
+        assert!(matches!(
+            service.inject_fields_authorized(&agent, "curl", &[], &requests),
             Err(KeyLeaseError::ApprovalRequired { .. })
         ));
     }
