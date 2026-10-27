@@ -27,7 +27,10 @@ use tokio::{
 use zeroize::Zeroizing;
 
 mod approver;
+mod backend;
 mod db_proxy;
+mod gateway;
+mod mcp;
 mod run;
 mod ssh_agent;
 mod trust;
@@ -36,12 +39,18 @@ mod trust;
 #[command(
     name = "keylease",
     version,
-    about = "Local-first encrypted vault and LeaseGate agent gateway"
+    about = "Local-first encrypted vault and LeaseGate agent gateway",
+    after_help = "Agents:\
+        \n  keylease agent enroll NAME                  a CLI agent with its own identity\
+        \n  keylease ssh | db | run                     use a secret without revealing it\
+        \n  keylease mcp setup claude-desktop --write   Claude Desktop, Cursor, Codex (MCP)\
+        \n  keylease serve --gateway-url URL            ChatGPT / claude.ai via your HTTPS gateway\
+        \n\nDocs: docs/use-cases.md"
 )]
 struct Cli {
     #[arg(long, global = true, default_value_os_t = default_database())]
     db: PathBuf,
-    #[arg(long, global = true)]
+    #[arg(long, global = true, env = "KEYLEASE_SOCKET")]
     socket: Option<PathBuf>,
     #[arg(long, global = true, env = "KEYLEASE_AGENT_ID")]
     agent_id: Option<String>,
@@ -84,6 +93,24 @@ enum Command {
         /// Allow --approver-listen on a non-loopback address.
         #[arg(long, requires = "approver_listen")]
         approver_listen_public: bool,
+        /// Serve the MCP gateway for web assistants at this public URL
+        /// (https://vault.example.com). See docs/mcp-gateway.md.
+        #[arg(long)]
+        gateway_url: Option<String>,
+        /// Loopback address the gateway listens on, behind a TLS proxy.
+        #[arg(long, default_value = "127.0.0.1:8787", requires = "gateway_url")]
+        gateway_listen: std::net::SocketAddr,
+        /// Offer `run_with_secrets` through the gateway (runs programs on this host).
+        #[arg(long, requires = "gateway_url")]
+        gateway_allow_run: bool,
+        /// PEM CA for database servers with a private certificate.
+        #[arg(long, requires = "gateway_url")]
+        gateway_db_tls_ca: Option<PathBuf>,
+    },
+    /// Connect web assistants to the MCP gateway (admin, master password).
+    Gateway {
+        #[command(subcommand)]
+        command: gateway::GatewayCommand,
     },
     Status,
     Unlock {
@@ -161,6 +188,19 @@ enum Command {
         bindings: Vec<String>,
         #[arg(allow_hyphen_values = true, required = true)]
         command: Vec<String>,
+    },
+    /// Serve vault tools to an MCP client (Claude Desktop, Cursor…) on stdio.
+    /// Clients start this themselves; configure one with `keylease mcp setup`.
+    Mcp {
+        /// Also offer `run_with_secrets`, which runs a local program the model
+        /// chooses (each run still needs approval).
+        #[arg(long)]
+        allow_run: bool,
+        /// PEM CA for database servers with a private certificate.
+        #[arg(long)]
+        db_tls_ca: Option<PathBuf>,
+        #[command(subcommand)]
+        command: Option<mcp::McpCommand>,
     },
     /// Pair approver devices with a headless node, and approve from them.
     Remote {
@@ -665,7 +705,17 @@ enum LeaseCommand {
 #[derive(Subcommand)]
 enum ApprovalCommand {
     /// Approve directly against the database (admin, master password).
-    Approve { id: String },
+    Approve {
+        id: String,
+        /// Trust this agent for a window instead of one use.
+        #[arg(long, value_parser = ["once", "30m", "1h", "6h", "1d", "3d", "7d"])]
+        trust: Option<String>,
+        /// What the trust covers: the exact resource, or every field of its item.
+        #[arg(long, default_value = "resource", value_parser = ["resource", "item"])]
+        scope: String,
+    },
+    /// Deny directly against the database (admin, master password).
+    Deny { id: String },
     /// List pending approvals through the running daemon.
     List {
         #[arg(long, default_value_t = 50)]
@@ -725,8 +775,28 @@ async fn run() -> Result<()> {
             password_file,
             approver_listen,
             approver_listen_public,
+            gateway_url,
+            gateway_listen,
+            gateway_allow_run,
+            gateway_db_tls_ca,
         } => {
             let password_file = password_file.or_else(systemd_password_credential);
+            let gateway = gateway_url
+                .map(|url| {
+                    gateway::GatewayConfig::new(
+                        &url,
+                        gateway_listen,
+                        mcp::ToolOptions {
+                            allow_run: gateway_allow_run,
+                            db_tls_ca: gateway_db_tls_ca,
+                        },
+                        std::time::Duration::from_secs(match cli.wait_approval {
+                            0 => mcp::DEFAULT_MCP_APPROVAL_WAIT_SECONDS,
+                            seconds => seconds.min(600),
+                        }),
+                    )
+                })
+                .transpose()?;
             serve(
                 &cli.db,
                 &socket,
@@ -734,9 +804,11 @@ async fn run() -> Result<()> {
                 start_locked,
                 password_file.as_deref(),
                 approver_listen.map(|address| (address, approver_listen_public)),
+                gateway,
             )
             .await
         }
+        Command::Gateway { command } => gateway::gateway_command(&cli.db, command),
         Command::Status => print_rpc(&socket, RpcRequest::Status).await,
         Command::Unlock {
             session_ttl_seconds,
@@ -918,6 +990,32 @@ async fn run() -> Result<()> {
         Command::Ssh { args } => ssh_agent::run_ssh(&cli, &socket, args).await,
         Command::Db { command } => db_proxy::db_command(&cli, &socket, command).await,
         Command::Remote { command } => approver::remote_command(&cli, command).await,
+        Command::Mcp {
+            allow_run,
+            db_tls_ca,
+            command,
+        } => match command {
+            None => {
+                let options = mcp::ToolOptions {
+                    allow_run,
+                    db_tls_ca,
+                };
+                mcp::serve_stdio(&cli, &socket, options).await
+            }
+            Some(mcp::McpCommand::Setup {
+                client,
+                agent,
+                write,
+                allow_run,
+                db_tls_ca,
+            }) => {
+                let options = mcp::ToolOptions {
+                    allow_run,
+                    db_tls_ca,
+                };
+                mcp::setup(&cli, &socket, &client, agent, write, options).await
+            }
+        },
         Command::Run { bindings, command } => run::run(&cli, &socket, bindings, command).await,
         Command::Gate { command } => gate_command(&cli, &socket, command).await,
         Command::Audit { command } => {
@@ -1218,7 +1316,16 @@ async fn desktop_command(command: DesktopCommand) -> Result<()> {
         DesktopCommand::Serve { home } => {
             let paths = desktop_paths(home)?;
             ensure_desktop_home(&paths)?;
-            serve(&paths.database, &paths.socket, 28_800, true, None, None).await
+            serve(
+                &paths.database,
+                &paths.socket,
+                28_800,
+                true,
+                None,
+                None,
+                None,
+            )
+            .await
         }
         DesktopCommand::VaultsList => {
             let root = managed_home().ok_or_else(|| KeyLeaseError::InvalidRequest {
@@ -1675,7 +1782,7 @@ fn grant_command(db: &Path, command: GrantCommand) -> Result<()> {
 async fn agent_command(cli: &Cli, socket: &Path, command: AgentCommand) -> Result<()> {
     match command {
         AgentCommand::Enroll { name, token_file } => {
-            trust::enroll_agent(cli, socket, &name, token_file).await
+            trust::enroll_agent(cli, socket, &name, token_file, false).await
         }
         AgentCommand::NewItem { handoff_id, json } => {
             let value = rpc(
@@ -2281,9 +2388,15 @@ async fn lease_command(cli: &Cli, socket: &Path, command: LeaseCommand) -> Resul
 fn approval_command(db: &Path, command: ApprovalCommand) -> Result<()> {
     let service = admin_service(db)?;
     match command {
-        ApprovalCommand::Approve { id } => {
-            service.approve(&id)?;
-            print_json(&json!({"approved":id}))
+        ApprovalCommand::Approve { id, trust, scope } => {
+            print_json(&service.decide_approval_admin(
+                &id,
+                true,
+                trust::parse_trust(trust.as_deref(), &scope),
+            )?)
+        }
+        ApprovalCommand::Deny { id } => {
+            print_json(&service.decide_approval_admin(&id, false, None)?)
         }
         ApprovalCommand::List { .. } | ApprovalCommand::Decide(_) => unreachable!(),
     }
@@ -2327,6 +2440,7 @@ async fn serve(
     start_locked: bool,
     password_file: Option<&Path>,
     approver: Option<(std::net::SocketAddr, bool)>,
+    gateway: Option<gateway::GatewayConfig>,
 ) -> Result<()> {
     let owner_uid = fs::metadata(db)
         .map_err(|_| KeyLeaseError::NotFound {
@@ -2364,6 +2478,14 @@ async fn serve(
         tokio::spawn(async move {
             if let Err(error) = approver::serve_approver(service, address, allow_public).await {
                 eprintln!("KeyLease approver API stopped: {error:?}");
+            }
+        });
+    }
+    if let Some(config) = gateway {
+        let service = service.clone();
+        tokio::spawn(async move {
+            if let Err(error) = gateway::serve_gateway(service, config).await {
+                eprintln!("KeyLease gateway stopped: {error:?}");
             }
         });
     }

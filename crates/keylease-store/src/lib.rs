@@ -39,6 +39,33 @@ impl std::fmt::Debug for UnlockedVault {
     }
 }
 
+/// One stored OAuth access or refresh token (only its hash is kept).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OAuthTokenRow {
+    pub token_hash: String,
+    pub kind: String,
+    pub family_id: String,
+    pub agent_id: String,
+    pub client_id: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+impl OAuthTokenRow {
+    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        let expires: String = row.get(5)?;
+        Ok(Self {
+            token_hash: row.get(0)?,
+            kind: row.get(1)?,
+            family_id: row.get(2)?,
+            agent_id: row.get(3)?,
+            client_id: row.get(4)?,
+            expires_at: DateTime::parse_from_rfc3339(&expires)
+                .map(|time| time.with_timezone(&Utc))
+                .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        })
+    }
+}
+
 pub struct NativeStore {
     connection: Mutex<Connection>,
 }
@@ -1574,6 +1601,15 @@ impl NativeStore {
             .collect()
     }
 
+    /// SQLite `PRAGMA data_version`: changes whenever another connection
+    /// commits to this database file.
+    pub fn data_version(&self) -> Result<i64> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .query_row("PRAGMA data_version", [], |row| row.get(0))
+            .map_err(|_| KeyLeaseError::Storage)
+    }
+
     /// How many approvals are pending and unexpired — no record content, so
     /// the desktop can poll it through `status` to raise a notification.
     pub fn count_pending_approvals(&self, now: DateTime<Utc>) -> Result<usize> {
@@ -2033,6 +2069,287 @@ impl NativeStore {
             .map_err(|_| KeyLeaseError::Storage)?
             .map(|raw| from_json(&raw))
             .transpose()
+    }
+
+    // ------------------------------------------------ gateway (OAuth 2.1)
+
+    pub fn save_gateway_connect_code(
+        &self,
+        code_hash: &str,
+        name: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<()> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "DELETE FROM gateway_connect_codes WHERE expires_at<=?1",
+                [Utc::now().to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "INSERT INTO gateway_connect_codes(code_hash,name,expires_at) VALUES(?1,?2,?3)",
+                params![code_hash, name, expires_at.to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        Ok(())
+    }
+
+    /// Consumes a connect code, returning the connection name it was made for.
+    pub fn consume_gateway_connect_code(
+        &self,
+        code_hash: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<String>> {
+        let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let name: Option<String> = tx
+            .query_row(
+                "SELECT name FROM gateway_connect_codes WHERE code_hash=?1 AND expires_at>?2",
+                params![code_hash, now.to_rfc3339()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| KeyLeaseError::Storage)?;
+        tx.execute(
+            "DELETE FROM gateway_connect_codes WHERE code_hash=?1",
+            [code_hash],
+        )
+        .map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().map_err(|_| KeyLeaseError::Storage)?;
+        Ok(name)
+    }
+
+    pub fn save_gateway_connection<T: Serialize>(&self, agent_id: &str, record: &T) -> Result<()> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "INSERT INTO gateway_connections(agent_id,record_json,revoked) VALUES(?1,?2,0)",
+                params![agent_id, json(record)?],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        Ok(())
+    }
+
+    pub fn list_gateway_connections<T: serde::de::DeserializeOwned>(&self) -> Result<Vec<T>> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let mut stmt = connection
+            .prepare(
+                "SELECT record_json FROM gateway_connections WHERE revoked=0 ORDER BY agent_id",
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|_| KeyLeaseError::Storage)?;
+        rows.map(|row| from_json(&row.map_err(|_| KeyLeaseError::Storage)?))
+            .collect()
+    }
+
+    /// Ends a gateway connection: its tokens stop working at once.
+    pub fn revoke_gateway_connection(&self, agent_id: &str) -> Result<bool> {
+        let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let changed = tx
+            .execute(
+                "UPDATE gateway_connections SET revoked=1 WHERE agent_id=?1 AND revoked=0",
+                [agent_id],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        tx.execute("DELETE FROM oauth_tokens WHERE agent_id=?1", [agent_id])
+            .map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().map_err(|_| KeyLeaseError::Storage)?;
+        Ok(changed == 1)
+    }
+
+    pub fn gateway_connection_active(&self, agent_id: &str) -> Result<bool> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM gateway_connections g JOIN clients c ON c.agent_id=g.agent_id \
+                 WHERE g.agent_id=?1 AND g.revoked=0 AND c.revoked=0)",
+                [agent_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| KeyLeaseError::Storage)
+    }
+
+    /// Registers an OAuth client, keeping at most `limit` registrations: the
+    /// oldest ones that never received a token are dropped first.
+    pub fn save_oauth_client<T: Serialize>(
+        &self,
+        client_id: &str,
+        record: &T,
+        limit: usize,
+    ) -> Result<()> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "INSERT INTO oauth_clients(client_id,record_json,created_at) VALUES(?1,?2,?3)",
+                params![client_id, json(record)?, Utc::now().to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "DELETE FROM oauth_clients WHERE client_id IN (SELECT client_id FROM oauth_clients \
+                 WHERE client_id NOT IN (SELECT client_id FROM oauth_tokens) \
+                 ORDER BY created_at DESC LIMIT -1 OFFSET ?1)",
+                [limit as i64],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        Ok(())
+    }
+
+    pub fn get_oauth_client<T: serde::de::DeserializeOwned>(
+        &self,
+        client_id: &str,
+    ) -> Result<Option<T>> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let row: Option<String> = connection
+            .query_row(
+                "SELECT record_json FROM oauth_clients WHERE client_id=?1",
+                [client_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| KeyLeaseError::Storage)?;
+        row.map(|row| from_json(&row)).transpose()
+    }
+
+    pub fn save_oauth_code<T: Serialize>(
+        &self,
+        code_hash: &str,
+        record: &T,
+        expires_at: DateTime<Utc>,
+    ) -> Result<()> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "DELETE FROM oauth_codes WHERE expires_at<=?1",
+                [Utc::now().to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "INSERT INTO oauth_codes(code_hash,record_json,expires_at) VALUES(?1,?2,?3)",
+                params![code_hash, json(record)?, expires_at.to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        Ok(())
+    }
+
+    /// Removes and returns an unexpired authorization code (single use).
+    pub fn take_oauth_code<T: serde::de::DeserializeOwned>(
+        &self,
+        code_hash: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<T>> {
+        let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let row: Option<String> = tx
+            .query_row(
+                "SELECT record_json FROM oauth_codes WHERE code_hash=?1 AND expires_at>?2",
+                params![code_hash, now.to_rfc3339()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| KeyLeaseError::Storage)?;
+        tx.execute("DELETE FROM oauth_codes WHERE code_hash=?1", [code_hash])
+            .map_err(|_| KeyLeaseError::Storage)?;
+        tx.commit().map_err(|_| KeyLeaseError::Storage)?;
+        row.map(|row| from_json(&row)).transpose()
+    }
+
+    pub fn save_oauth_token(&self, token: &OAuthTokenRow) -> Result<()> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "DELETE FROM oauth_tokens WHERE expires_at<=?1",
+                [Utc::now().to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "INSERT INTO oauth_tokens(token_hash,kind,family_id,agent_id,client_id,expires_at,used) \
+                 VALUES(?1,?2,?3,?4,?5,?6,0)",
+                params![
+                    token.token_hash,
+                    token.kind,
+                    token.family_id,
+                    token.agent_id,
+                    token.client_id,
+                    token.expires_at.to_rfc3339()
+                ],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        Ok(())
+    }
+
+    /// An unexpired token of `kind`, without consuming it.
+    pub fn get_oauth_token(
+        &self,
+        token_hash: &str,
+        kind: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<OAuthTokenRow>> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .query_row(
+                "SELECT token_hash,kind,family_id,agent_id,client_id,expires_at FROM oauth_tokens \
+                 WHERE token_hash=?1 AND kind=?2 AND expires_at>?3 AND used=0",
+                params![token_hash, kind, now.to_rfc3339()],
+                OAuthTokenRow::from_row,
+            )
+            .optional()
+            .map_err(|_| KeyLeaseError::Storage)
+    }
+
+    /// Consumes a refresh token. Presenting one that was already used means
+    /// it leaked: the whole token family is revoked and `None` returned.
+    pub fn use_refresh_token(
+        &self,
+        token_hash: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<OAuthTokenRow>> {
+        let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let row: Option<(OAuthTokenRow, bool)> = tx
+            .query_row(
+                "SELECT token_hash,kind,family_id,agent_id,client_id,expires_at,used FROM oauth_tokens \
+                 WHERE token_hash=?1 AND kind='refresh'",
+                [token_hash],
+                |row| Ok((OAuthTokenRow::from_row(row)?, row.get::<_, i64>(6)? != 0)),
+            )
+            .optional()
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let outcome = match row {
+            Some((row, true)) => {
+                tx.execute(
+                    "DELETE FROM oauth_tokens WHERE family_id=?1",
+                    [&row.family_id],
+                )
+                .map_err(|_| KeyLeaseError::Storage)?;
+                None
+            }
+            Some((row, false)) if row.expires_at > now => {
+                tx.execute(
+                    "UPDATE oauth_tokens SET used=1 WHERE token_hash=?1",
+                    [token_hash],
+                )
+                .map_err(|_| KeyLeaseError::Storage)?;
+                Some(row)
+            }
+            _ => None,
+        };
+        tx.commit().map_err(|_| KeyLeaseError::Storage)?;
+        Ok(outcome)
     }
 
     pub fn list_approver_devices<T: serde::de::DeserializeOwned>(&self) -> Result<Vec<T>> {
@@ -2714,6 +3031,11 @@ CREATE TABLE IF NOT EXISTS agent_baseline_rules(rule_id TEXT PRIMARY KEY,agent_i
 CREATE TABLE IF NOT EXISTS pairing_codes(code_hash TEXT PRIMARY KEY,expires_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS approver_devices(device_id TEXT PRIMARY KEY,record_json TEXT NOT NULL,revoked INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS trusts(trust_id TEXT PRIMARY KEY,agent_id TEXT NOT NULL,record_json TEXT NOT NULL,rule_json TEXT NOT NULL,expires_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS gateway_connect_codes(code_hash TEXT PRIMARY KEY,name TEXT NOT NULL,expires_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS gateway_connections(agent_id TEXT PRIMARY KEY,record_json TEXT NOT NULL,revoked INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS oauth_clients(client_id TEXT PRIMARY KEY,record_json TEXT NOT NULL,created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS oauth_codes(code_hash TEXT PRIMARY KEY,record_json TEXT NOT NULL,expires_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS oauth_tokens(token_hash TEXT PRIMARY KEY,kind TEXT NOT NULL,family_id TEXT NOT NULL,agent_id TEXT NOT NULL,client_id TEXT NOT NULL,expires_at TEXT NOT NULL,used INTEGER NOT NULL);
 "#;
 
 #[cfg(test)]

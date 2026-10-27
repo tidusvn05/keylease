@@ -26,19 +26,23 @@ pub(crate) struct DecideArgs {
     scope: String,
 }
 
-pub(crate) async fn decide(cli: &Cli, socket: &Path, args: DecideArgs) -> Result<()> {
-    let trust = args
-        .trust
-        .as_deref()
+/// `--trust DURATION --scope resource|item` as a decision; `once` or no
+/// duration means a single use.
+pub(crate) fn parse_trust(duration: Option<&str>, scope: &str) -> Option<TrustDecision> {
+    duration
         .and_then(TrustDuration::parse)
         .map(|duration| TrustDecision {
-            scope: if args.scope == "item" {
+            scope: if scope == "item" {
                 TrustScope::Item
             } else {
                 TrustScope::Resource
             },
             duration,
-        });
+        })
+}
+
+pub(crate) async fn decide(cli: &Cli, socket: &Path, args: DecideArgs) -> Result<()> {
+    let trust = parse_trust(args.trust.as_deref(), &args.scope);
     print_rpc(
         socket,
         RpcRequest::ApprovalDecide {
@@ -71,25 +75,29 @@ pub(crate) async fn trust_command(cli: &Cli, socket: &Path, command: TrustComman
 ///
 /// The token is never printed: an agent reading this command's output must
 /// not learn a credential, and a human pasting it into a chat would leak one.
+/// `~/.keylease/clients/agent_NAME.token`, creating the private directory.
+pub(crate) fn agent_token_path(name: &str) -> Result<PathBuf> {
+    let directory = managed_home()
+        .ok_or(KeyLeaseError::Storage)?
+        .join("clients");
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&directory)
+        .map_err(|_| KeyLeaseError::Storage)?;
+    Ok(directory.join(format!("agent_{name}.token")))
+}
+
 pub(crate) async fn enroll_agent(
     cli: &Cli,
     socket: &Path,
     name: &str,
     token_file: Option<PathBuf>,
+    quiet: bool,
 ) -> Result<()> {
     let path = match token_file {
         Some(path) => path,
-        None => {
-            let directory = managed_home()
-                .ok_or(KeyLeaseError::Storage)?
-                .join("clients");
-            fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(&directory)
-                .map_err(|_| KeyLeaseError::Storage)?;
-            directory.join(format!("agent_{name}.token"))
-        }
+        None => agent_token_path(name)?,
     };
     if path.exists() {
         return Err(KeyLeaseError::InvalidRequest {
@@ -125,6 +133,9 @@ pub(crate) async fn enroll_agent(
     file.write_all(token.as_bytes())
         .and_then(|()| file.sync_all())
         .map_err(|_| KeyLeaseError::Storage)?;
+    if quiet {
+        return Ok(());
+    }
     print_json(&json!({
         "agent_id": agent_id,
         "token_file": path,

@@ -386,6 +386,25 @@ pub enum RpcRequest {
     },
 }
 
+tokio::task_local! {
+    /// Set only by [`handle_rpc_as`]: an identity the transport verified
+    /// itself (the HTTP gateway's OAuth token), used instead of a client token.
+    static PREAUTHENTICATED: ActorContext;
+}
+
+/// Runs `request` as an actor the caller has already authenticated. The
+/// request's `auth.agent_id` must name the same agent; its token is ignored.
+pub async fn handle_rpc_as(
+    service: &KeyLeaseService,
+    capabilities: RpcCapabilities,
+    actor: ActorContext,
+    request: RpcRequest,
+) -> Result<Value> {
+    PREAUTHENTICATED
+        .scope(actor, handle_rpc(service, capabilities, request))
+        .await
+}
+
 pub async fn handle_rpc(
     service: &KeyLeaseService,
     capabilities: RpcCapabilities,
@@ -973,6 +992,17 @@ pub async fn handle_rpc(
 fn actor(service: &KeyLeaseService, auth: &RpcAuth) -> Result<ActorContext> {
     if let Some(purpose) = &auth.purpose {
         validate_purpose(purpose)?;
+    }
+    if let Ok(verified) = PREAUTHENTICATED.try_with(Clone::clone) {
+        if verified.agent_id != auth.agent_id {
+            return Err(KeyLeaseError::Denied {
+                reason: "request names a different agent than its credential".into(),
+            });
+        }
+        return Ok(ActorContext {
+            purpose: auth.purpose.clone(),
+            ..verified
+        });
     }
     let mut actor = service.authenticate(&auth.agent_id, &auth.token.0, &auth.session_id)?;
     actor.purpose = auth.purpose.clone();

@@ -33,11 +33,16 @@ use tokio::{
 use zeroize::{Zeroize, Zeroizing};
 
 mod db;
+mod gateway;
 mod inject;
 mod remote;
 mod ssh;
 mod trust;
 pub use db::{DbTarget, ScramClientFinal};
+pub use gateway::{
+    ACCESS_TOKEN_TTL_SECONDS, ConnectCode, GatewayConnection, OAuthClient, OAuthError, OAuthTokens,
+    pkce_matches, valid_redirect_uri,
+};
 pub use inject::InjectRequest;
 pub use remote::{APPROVER_SIGNATURE_CONTEXT, ApproverDevice, PairingCode, approver_signing_input};
 pub use ssh::{SSH_AGENT_RSA_SHA2_256, SSH_AGENT_RSA_SHA2_512, SshIdentity, SshSignature};
@@ -65,6 +70,9 @@ pub struct KeyLeaseService {
     authentication_failures: Mutex<HashMap<String, VecDeque<Instant>>>,
     agent_handoffs: Mutex<HashMap<String, AgentNewItemHandoff>>,
     google_oauth_flows: Arc<Mutex<HashMap<String, GoogleOAuthFlow>>>,
+    /// SQLite `data_version` when the in-memory policy was last built; a
+    /// change means another process (the admin CLI) wrote the database.
+    policy_data_version: std::sync::atomic::AtomicI64,
 }
 struct Session {
     vault: UnlockedVault,
@@ -489,7 +497,9 @@ impl KeyLeaseService {
         connectors.insert("github".into(), Arc::new(BuiltinConnector::github()));
         connectors.insert("linear".into(), Arc::new(BuiltinConnector::linear()));
         connectors.insert("notion".into(), Arc::new(BuiltinConnector::notion()));
+        let data_version = store.data_version()?;
         Ok(Self {
+            policy_data_version: std::sync::atomic::AtomicI64::new(data_version),
             store,
             session: Mutex::new(None),
             policy: RwLock::new(RulePolicyEngine::new(rules)),
@@ -3854,6 +3864,7 @@ impl KeyLeaseService {
         max_uses: u64,
         approval_id: Option<&str>,
     ) -> Result<LeaseRequestOutcome> {
+        self.sync_external_policy_changes()?;
         if request.subject.agent_id != actor.agent_id {
             return Err(KeyLeaseError::Denied {
                 reason: "request subject does not match authenticated client".into(),
@@ -4392,6 +4403,18 @@ impl KeyLeaseService {
             .clear();
         Ok(())
     }
+    /// Rebuilds the in-memory policy when another process changed the
+    /// database — a `grant create`, `client revoke` or admin approval with a
+    /// trust — so the daemon never needs a restart to see it.
+    fn sync_external_policy_changes(&self) -> Result<()> {
+        use std::sync::atomic::Ordering;
+        let current = self.store.data_version()?;
+        if self.policy_data_version.swap(current, Ordering::AcqRel) != current {
+            let rules = self.store.load_policy_rules()?;
+            self.install_policy(rules)?;
+        }
+        Ok(())
+    }
     fn reload_policy_for_client(&self, agent_id: &AgentId, vault_id: &VaultId) -> Result<()> {
         let mut rules = self.store.load_policy_rules()?;
         rules.extend(self.store.load_standing_rules(Utc::now())?);
@@ -4432,6 +4455,7 @@ impl KeyLeaseService {
         arguments: Value,
         risk: RiskTier,
     ) -> Result<()> {
+        self.sync_external_policy_changes()?;
         let request = ActionRequest {
             schema_version: CONTRACT_VERSION,
             request_id: RequestId::new(),

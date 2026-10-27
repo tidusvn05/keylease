@@ -229,7 +229,7 @@ impl KeyLeaseService {
 }
 
 /// RFC 4648 base32 without padding, upper case.
-fn data_encoding_base32(bytes: &[u8]) -> String {
+pub(crate) fn data_encoding_base32(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
     let mut output = String::new();
     let mut buffer = 0_u32;

@@ -386,6 +386,25 @@ impl KeyLeaseService {
     /// Records a decision whose authority the caller has already established:
     /// the policy engine for a local client, a verified device signature for a
     /// paired remote approver.
+    /// The admin path (`keylease approval approve|deny`, master password):
+    /// the person holding the master password is an approver.
+    pub fn decide_approval_admin(
+        &self,
+        id: &str,
+        approve: bool,
+        trust: Option<TrustDecision>,
+    ) -> Result<ApprovalDecisionOutcome> {
+        let actor = ActorContext {
+            agent_id: AgentId("local-human".into()),
+            workload_id: None,
+            human_principal: Some("local-human".into()),
+            on_behalf_of: None,
+            purpose: None,
+            client_session_id: self.current_vault_session_id()?,
+        };
+        self.decide_approval_as(&actor, id, approve, trust)
+    }
+
     pub(crate) fn decide_approval_as(
         &self,
         actor: &ActorContext,
@@ -885,6 +904,50 @@ mod tests {
             f.service
                 .reveal_field_authorized(&f.agent, &f.item, "username"),
         );
+    }
+
+    #[test]
+    fn an_admin_decision_in_another_process_reaches_the_running_daemon() {
+        let f = fixture();
+        let id = approval_id(
+            f.service
+                .reveal_field_authorized(&f.agent, &f.item, "username"),
+        );
+        // The admin CLI opens its own connection to the same database file.
+        let admin = KeyLeaseService::new(Arc::new(
+            NativeStore::open(f._dir.path().join("vault.sqlite")).unwrap(),
+        ))
+        .unwrap();
+        admin.unlock(b"password", Duration::minutes(5)).unwrap();
+        let outcome = admin
+            .decide_approval_admin(
+                &id,
+                true,
+                Some(TrustDecision {
+                    scope: TrustScope::Resource,
+                    duration: TrustDuration::Hour1,
+                }),
+            )
+            .unwrap();
+        assert!(outcome.trust.is_some());
+        for _ in 0..3 {
+            assert!(
+                f.service
+                    .reveal_field_authorized(&f.agent, &f.item, "username")
+                    .is_ok(),
+                "the daemon picks up the trust without a restart"
+            );
+        }
+        let denied = approval_id(
+            f.service
+                .reveal_field_authorized(&f.agent, &f.item, "password"),
+        );
+        admin.decide_approval_admin(&denied, false, None).unwrap();
+        assert!(matches!(
+            f.service
+                .reveal_field_authorized(&f.agent, &f.item, "password"),
+            Err(KeyLeaseError::Denied { .. })
+        ));
     }
 
     #[test]

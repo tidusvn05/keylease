@@ -300,4 +300,11 @@ The node exposes pairing and approval endpoints on its existing HTTPS listener
    R4, one approval per run naming the program. Browser login fill is not
    done.
 
+8. MCP surfaces. **Implemented**: `keylease mcp` (stdio, configured with
+   `keylease mcp setup`) and the self-hosted gateway (`serve --gateway-url`,
+   OAuth 2.1 with connect codes; each connection a baseline agent). Tools:
+   `vault_search`, `vault_item`, `ssh_exec`, `db_query` (the T0 query, via
+   `psql` through the SCRAM proxy) and opt-in `run_with_secrets`; none reveals
+   a secret. See `docs/mcp.md` and `docs/mcp-gateway.md`.
+
 Each step updates `docs/security/threat-model.md` in the same change.

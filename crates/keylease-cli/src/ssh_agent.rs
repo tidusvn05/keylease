@@ -7,6 +7,7 @@
 //! policy decision in the daemon and may wait for an approval.
 
 use super::*;
+use crate::backend::{Backend, listener_owner_uid};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use std::os::unix::fs::DirBuilderExt;
 
@@ -64,10 +65,8 @@ pub(crate) fn bind(
 }
 
 /// Accepts agent connections until the listener is dropped.
-pub(crate) async fn serve(listener: UnixListener, daemon: PathBuf, auth: RpcAuth) {
-    let owner_uid = fs::metadata(&daemon)
-        .map(|metadata| metadata.uid())
-        .unwrap_or(u32::MAX);
+pub(crate) async fn serve(listener: UnixListener, backend: Backend) {
+    let owner_uid = listener_owner_uid(&listener);
     loop {
         let Ok((stream, _)) = listener.accept().await else {
             continue;
@@ -76,15 +75,14 @@ pub(crate) async fn serve(listener: UnixListener, daemon: PathBuf, auth: RpcAuth
             eprintln!("keylease ssh-agent: rejected a peer with an unexpected uid");
             continue;
         }
-        let daemon = daemon.clone();
-        let auth = auth.clone();
+        let backend = backend.clone();
         tokio::spawn(async move {
-            let _ = connection(stream, &daemon, &auth).await;
+            let _ = connection(stream, &backend).await;
         });
     }
 }
 
-async fn connection(mut stream: UnixStream, daemon: &Path, auth: &RpcAuth) -> io::Result<()> {
+async fn connection(mut stream: UnixStream, backend: &Backend) -> io::Result<()> {
     loop {
         let mut length = [0_u8; 4];
         if stream.read_exact(&mut length).await.is_err() {
@@ -97,8 +95,8 @@ async fn connection(mut stream: UnixStream, daemon: &Path, auth: &RpcAuth) -> io
         let mut message = vec![0_u8; length];
         stream.read_exact(&mut message).await?;
         let reply = match message[0] {
-            SSH_AGENTC_REQUEST_IDENTITIES => identities(daemon, auth).await,
-            SSH_AGENTC_SIGN_REQUEST => sign(daemon, auth, &message[1..]).await,
+            SSH_AGENTC_REQUEST_IDENTITIES => identities(backend).await,
+            SSH_AGENTC_SIGN_REQUEST => sign(backend, &message[1..]).await,
             _ => None,
         }
         .unwrap_or_else(|| vec![SSH_AGENT_FAILURE]);
@@ -133,8 +131,9 @@ fn report(error: &KeyLeaseError) {
     eprintln!("keylease ssh-agent: {message}");
 }
 
-async fn identities(daemon: &Path, auth: &RpcAuth) -> Option<Vec<u8>> {
-    let value = rpc(daemon, RpcRequest::SshIdentities { auth: auth.clone() })
+async fn identities(backend: &Backend) -> Option<Vec<u8>> {
+    let value = backend
+        .call(|auth| RpcRequest::SshIdentities { auth })
         .await
         .map_err(|error| report(&error))
         .ok()?;
@@ -154,22 +153,20 @@ async fn identities(daemon: &Path, auth: &RpcAuth) -> Option<Vec<u8>> {
     Some(reply)
 }
 
-async fn sign(daemon: &Path, auth: &RpcAuth, mut body: &[u8]) -> Option<Vec<u8>> {
-    let key_blob = take_string(&mut body)?;
-    let data = take_string(&mut body)?;
+async fn sign(backend: &Backend, mut body: &[u8]) -> Option<Vec<u8>> {
+    let key_blob = STANDARD.encode(take_string(&mut body)?);
+    let data = STANDARD.encode(take_string(&mut body)?);
     let flags = u32::from_be_bytes(body.get(..4)?.try_into().ok()?);
-    let value = rpc(
-        daemon,
-        RpcRequest::SshSign {
-            auth: auth.clone(),
-            public_key_blob: STANDARD.encode(key_blob),
-            data: STANDARD.encode(data),
+    let value = backend
+        .call(|auth| RpcRequest::SshSign {
+            auth,
+            public_key_blob: key_blob.clone(),
+            data: data.clone(),
             flags,
-        },
-    )
-    .await
-    .map_err(|error| report(&error))
-    .ok()?;
+        })
+        .await
+        .map_err(|error| report(&error))
+        .ok()?;
     let signature = STANDARD
         .decode(value.get("signature_blob")?.as_str()?)
         .ok()?;
@@ -181,7 +178,7 @@ async fn sign(daemon: &Path, auth: &RpcAuth, mut body: &[u8]) -> Option<Vec<u8>>
 /// `keylease ssh-agent`: serve until interrupted, printing the socket for
 /// `eval "$(keylease ssh-agent)"`-style use.
 pub(crate) async fn run_agent(cli: &Cli, daemon: &Path, socket: Option<PathBuf>) -> Result<()> {
-    let auth = auth(cli)?;
+    let backend = Backend::for_cli(cli, daemon)?;
     let (listener, path, _directory) = bind(socket)?;
     println!(
         "SSH_AUTH_SOCK={}; export SSH_AUTH_SOCK;",
@@ -190,7 +187,7 @@ pub(crate) async fn run_agent(cli: &Cli, daemon: &Path, socket: Option<PathBuf>)
     io::stdout().flush().map_err(|_| KeyLeaseError::Storage)?;
     eprintln!("keylease ssh-agent: listening on {}", path.display());
     tokio::select! {
-        () = serve(listener, daemon.to_path_buf(), auth) => {}
+        () = serve(listener, backend) => {}
         _ = tokio::signal::ctrl_c() => {}
     }
     let _ = fs::remove_file(&path);
@@ -199,9 +196,9 @@ pub(crate) async fn run_agent(cli: &Cli, daemon: &Path, socket: Option<PathBuf>)
 
 /// `keylease ssh ARGS…`: run OpenSSH with a private, single-use agent.
 pub(crate) async fn run_ssh(cli: &Cli, daemon: &Path, args: Vec<String>) -> Result<()> {
-    let auth = auth(cli)?;
+    let backend = Backend::for_cli(cli, daemon)?;
     let (listener, path, _directory) = bind(None)?;
-    let server = tokio::spawn(serve(listener, daemon.to_path_buf(), auth));
+    let server = tokio::spawn(serve(listener, backend));
     let status = tokio::process::Command::new("ssh")
         .arg("-o")
         .arg(format!("IdentityAgent={}", path.display()))

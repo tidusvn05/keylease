@@ -14,6 +14,9 @@ with a human approving what matters.
   `keylease run` injects into a child process and scrubs its output.
 - **Your Mac or a VPS.** The same daemon runs under the macOS app or under
   systemd; a headless VPS can be approved from your Mac.
+- **Any assistant.** CLI agents use `keylease` directly; Claude Desktop,
+  Cursor and Codex start `keylease mcp`; ChatGPT and claude.ai connect to your
+  self-hosted gateway with OAuth.
 
 The security-sensitive implementation is Rust. The CLI, desktop and mobile
 clients are transport/presentation adapters and cannot reach storage, policy
@@ -22,7 +25,7 @@ or connectors except through `KeyLeaseService`.
 ## Architecture
 
 ```text
- agent CLI (Claude Code, Codex, bots)
+ agent CLI (Claude Code, Codex, bots)          MCP clients: keylease mcp (stdio)
    └─ keylease ssh | db | run ──────────────────────► servers, databases
         │ (brokers in the agent's process)               (SSH, PostgreSQL wire)
         │ Unix socket, the agent's own token
@@ -32,7 +35,8 @@ or connectors except through `KeyLeaseService`.
  │ vault · policy · trust · audit        │
  │ signs SSH, answers SCRAM, injects     │ ◄── remote approver over HTTPS
  └──────────────────────────────────────┘     (Mac app / keylease remote;
-                                                signed, approvals only)
+        ▲                                        signed, approvals only)
+        └── gateway: OAuth 2.1 + MCP over HTTPS ◄── ChatGPT, claude.ai
 ```
 
 Roles, secret-handling tiers, the approval sequence and the component map are
@@ -51,8 +55,8 @@ Step-by-step guides, with what is and is not implemented, are in
 | Agents on a VPS, approve on the VPS (self-trust) | ✅ |
 | Agents on a VPS, approve from your Mac (paired approver) | ✅ CLI · 🟡 native Mac UI |
 | Unattended automation with narrow grants | ✅ |
-| Claude Desktop / ChatGPT Desktop | ❌ no local MCP server for the vault yet |
-| Gateway for ChatGPT Web / claude.ai | ❌ Edge MCP exists, but no OAuth, public profile or vault tools |
+| Claude Desktop, Cursor, Codex through local MCP (`keylease mcp`) | ✅ |
+| ChatGPT / claude.ai through your own HTTPS gateway (OAuth 2.1) | ✅ simulated client · not yet tried on the live services |
 
 ✅ implemented and tested on Linux · 🟡 written, not yet verified on a Mac ·
 ❌ not implemented.
@@ -69,7 +73,14 @@ keylease approval decide APPROVAL_ID --approve --trust 1h
 keylease trust list
 ```
 
+For an MCP client instead of a CLI agent:
+
+```sh
+keylease mcp setup claude-desktop --write       # or cursor, claude-code, codex
+```
+
 Guides: [agent approvals and trust](docs/agent-approvals.md) ·
+[MCP clients](docs/mcp.md) · [self-hosted MCP gateway](docs/mcp-gateway.md) ·
 [SSH agent](docs/ssh-agent.md) · [PostgreSQL proxy](docs/db-proxy.md) ·
 [`keylease run`](docs/run-with-secrets.md) ·
 [remote approval for a VPS](docs/remote-approval.md) ·

@@ -173,6 +173,17 @@ async fn revoke_trust(
     Ok(Json(json!({"revoked": id})))
 }
 
+/// The approver API's routes, also mounted by the MCP gateway.
+pub(crate) fn approver_routes() -> Router<Arc<KeyLeaseService>> {
+    Router::new()
+        .route("/v1/pair", post(pair))
+        .route("/v1/approvals", get(approvals))
+        .route("/v1/approvals/{id}/decide", post(decide))
+        .route("/v1/trusts", get(trusts))
+        .route("/v1/trusts/{id}/revoke", post(revoke_trust))
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+}
+
 /// Serves the approver API. Binding beyond loopback needs an explicit opt-in:
 /// put it behind a TLS reverse proxy (Caddy) or a private network instead.
 pub(crate) async fn serve_approver(
@@ -187,14 +198,7 @@ pub(crate) async fn serve_approver(
                 .into(),
         });
     }
-    let router = Router::new()
-        .route("/v1/pair", post(pair))
-        .route("/v1/approvals", get(approvals))
-        .route("/v1/approvals/{id}/decide", post(decide))
-        .route("/v1/trusts", get(trusts))
-        .route("/v1/trusts/{id}/revoke", post(revoke_trust))
-        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
-        .with_state(service);
+    let router = approver_routes().with_state(service);
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .map_err(|_| KeyLeaseError::Storage)?;
@@ -463,17 +467,7 @@ pub(crate) async fn remote_command(cli: &Cli, command: RemoteCommand) -> Result<
                 .ok_or_else(|| KeyLeaseError::NotFound {
                     resource: "pending approval".into(),
                 })?;
-            let trust = trust
-                .as_deref()
-                .and_then(TrustDuration::parse)
-                .map(|duration| TrustDecision {
-                    scope: if scope == "item" {
-                        TrustScope::Item
-                    } else {
-                        TrustScope::Resource
-                    },
-                    duration,
-                });
+            let trust = crate::trust::parse_trust(trust.as_deref(), &scope);
             let body = DecideBody {
                 approve,
                 request_digest_hex: record

@@ -23,13 +23,20 @@ leasegate-connectors = { path = "../leasegate-connectors" }
 leasegate-policy = { path = "../leasegate-policy" }
 rand.workspace = true
 reqwest.workspace = true
+rmcp = { version = "3.2.0", default-features = false, features = ["server", "transport-io", "transport-streamable-http-server"] }
 rpassword.workspace = true
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_urlencoded = "0.7"
 tempfile.workspace = true
 tokio.workspace = true
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 webpki-roots = "1"
 zeroize.workspace = true
+
+[dev-dependencies]
+http-body-util = "0.1"
+sha2.workspace = true
+tower = { workspace = true, features = ["util"] }

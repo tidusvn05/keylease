@@ -140,8 +140,10 @@ asks for the master password:
 keylease --db /var/lib/keylease/vault.sqlite approval approve APPROVAL_ID
 ```
 
-The daemon loads grants and standing rules when it starts or unlocks, so
-restart it after an admin change, as with `grant create`.
+`approval approve` also takes `--trust 30m|1h|… --scope resource|item`, and
+`approval deny ID` refuses a request. The running daemon notices admin
+changes made from another process (decisions, grants, revocations) on its
+next request, so it never needs a restart for them.
 
 ### Unlocking after a reboot
 

@@ -13,8 +13,8 @@ not yet verified on its platform · ❌ not implemented.
 | 2 | [Agents on a VPS, approve on the VPS itself](#2-agents-on-a-vps-self-trust) | ✅ |
 | 3 | [Move VPS approvals to your Mac](#3-move-vps-approvals-to-your-mac) | ✅ protocol + CLI · 🟡 Mac UI |
 | 4 | [Approve and trust: the day-to-day loop](#4-approving-and-trusting) | ✅ |
-| 5 | [Claude Desktop, ChatGPT Desktop](#5-claude-desktop-and-chatgpt-desktop) | ❌ no local MCP server for the vault |
-| 6 | [A gateway for ChatGPT Web / claude.ai](#6-a-gateway-for-chatgpt-web-or-claudeai) | ❌ building blocks only |
+| 5 | [Claude Desktop, Cursor, Codex (local MCP)](#5-claude-desktop-cursor-and-other-mcp-clients) | ✅ |
+| 6 | [ChatGPT / claude.ai through your own gateway](#6-chatgpt-or-claudeai-through-your-own-gateway) | ✅ tested with a simulated OAuth client |
 | 7 | [Unattended automation (CI, cron)](#7-unattended-automation) | ✅ |
 
 ---
@@ -101,28 +101,25 @@ vault lives there too. Mode A of ADR 0005.
    # save "client_token" to /home/deployer/.keylease/deployer.token, chmod 600
    export KEYLEASE_AGENT_ID=agent_deployer
    export KEYLEASE_CLIENT_TOKEN_FILE=/home/deployer/.keylease/deployer.token
-   alias keylease='keylease --socket /run/keylease/keylease.sock'
+   export KEYLEASE_SOCKET=/run/keylease/keylease.sock
    ```
 
-   There is no environment variable for the socket yet, so a system daemon's
-   socket is passed with `--socket` (an alias or wrapper script works; use a
-   wrapper for `GIT_SSH_COMMAND`, which does not see shell aliases).
 5. The agent uses the same brokers as on a Mac. Requests that need approval
    are decided over SSH with the master password:
 
    ```sh
    keylease --db /var/lib/keylease/vault.sqlite approval approve APPROVAL_ID
+   keylease --db /var/lib/keylease/vault.sqlite approval approve APPROVAL_ID --trust 1h
+   keylease --db /var/lib/keylease/vault.sqlite approval deny APPROVAL_ID
    ```
+
+   The running daemon sees admin decisions, grants and revocations at once; it
+   never needs a restart for them.
 
 Status and gaps:
 
 - ✅ All of the above, including systemd-credential unlock.
-- ❌ `approval approve` (the admin path) approves **once**; it cannot grant a
-  time-boxed trust. For repeated unattended actions use a `grant` (see
-  [7](#7-unattended-automation)) or a paired approver (see [3](#3-move-vps-approvals-to-your-mac)).
-- ❌ No deny from the admin path; an unapproved request expires after 10
-  minutes.
-- ❌ No `KEYLEASE_SOCKET` environment variable; see step 4.
+- To approve from your laptop instead of SSH, see [3](#3-move-vps-approvals-to-your-mac).
 
 ## 3. Move VPS approvals to your Mac
 
@@ -195,57 +192,55 @@ Good habits: trust per task window (1h) rather than per week; keep R4 reveals
 rare by using brokers; give database items a read-only role where possible —
 an approved connection can run any SQL that role allows.
 
-## 5. Claude Desktop and ChatGPT Desktop
+## 5. Claude Desktop, Cursor and other MCP clients
 
-These apps talk to tools through MCP (Model Context Protocol), not a shell.
+These apps reach tools through MCP, not a shell. The client starts
+`keylease mcp` itself; you configure it once:
 
-❌ **Not supported today.** KeyLease has no local (stdio) MCP server for the
-vault, so these apps cannot search items, run `keylease ssh`/`db`, or wait for
-an approval. `crates/leasegate-mcp` serves only connector actions over HTTP
-for the LeaseGate Edge (see [6](#6-a-gateway-for-chatgpt-web-or-claudeai)).
+```sh
+keylease mcp setup claude-desktop --write    # or: cursor --write, claude-code, codex, json
+```
 
-Workarounds, with their cost:
+This enrolls an agent for the client, writes its config, and leaves the rest
+of the file alone. Restart the client and ask it, for example, "check disk
+space on the staging server": it finds the SSH key with `vault_search`, runs
+`ssh_exec`, and the call waits while you approve it in KeyLease.
 
-- Use a CLI agent (Claude Code, Codex CLI) for work that needs credentials —
-  setup [1](#1-agent-cli-on-your-mac).
-- In Claude Desktop, a general shell MCP server can run `keylease` commands.
-  The brokers still keep SSH keys and database passwords out of the model, but
-  the shell server's own permissions apply to everything else it runs.
+Tools: `vault_search`, `vault_item`, `ssh_exec`, `db_query` (read-only by
+default) and, with `--allow-run`, `run_with_secrets`. None returns a secret.
+Details: [MCP clients](mcp.md).
 
-What is needed (proposed): `keylease mcp --stdio`, running under an enrolled
-agent identity, exposing tools such as `vault_search`, `item_metadata`,
-`ssh_exec`, `db_query` (T0, bounded) and `run_with_secrets`, with approvals
-decided in the Mac app while the tool call waits.
+Status: ✅ tested end to end over stdio against a real `sshd` and PostgreSQL
+(approval wait, trust, read-only refusal, output scrubbing, retry after a
+timed-out wait). ChatGPT Desktop does not start local MCP servers; use the
+gateway in [6](#6-chatgpt-or-claudeai-through-your-own-gateway).
 
-## 6. A gateway for ChatGPT Web or claude.ai
+## 6. ChatGPT or claude.ai through your own gateway
 
-Web assistants call **remote** MCP servers over public HTTPS.
+Web assistants call **remote** MCP servers over HTTPS with OAuth sign-in. Run
+the gateway on your VPS:
 
-❌ **Not usable today.** What exists:
+```sh
+keylease … serve --gateway-url https://vault.example.com     # behind Caddy, see the guide
+keylease … gateway connect-code chatgpt                       # one-time, 10 minutes
+```
 
-- `leasegate-edge` serves MCP at `/mcp` with typed connector tools (GitHub,
-  Linear, Notion, Slack, Jira, Google) and `leasegate.execute`, enforced by
-  signed policy and approvals in LeaseGate Cloud
-  ([single-VPS install](self-hosted-vps.md)).
-- It authenticates one agent with a static bearer token and listens on
-  loopback by default.
+Add `https://vault.example.com/mcp` as a custom connector in ChatGPT or
+claude.ai, enter the connect code on the KeyLease consent page, and the
+assistant becomes an agent with the approval baseline. Approve its requests
+on the VPS, or from your Mac as a paired approver — the approver API is
+served on the same URL. Revoke with `keylease gateway revoke`.
 
-What is missing for ChatGPT Web / claude.ai custom connectors:
+Full guide: [self-hosted MCP gateway](mcp-gateway.md).
 
-- An OAuth 2.1 authorization server and the MCP authorization flow (these
-  clients sign in with OAuth rather than a configured static header).
-- A supported public-exposure profile for `/mcp` (today: loopback, SSH tunnel
-  or VPN).
-- Vault tools over MCP (SSH, database, secret use); the Edge exposes connector
-  actions only.
-- Approval UX for a waiting tool call: today a call returns
-  `approval_required` and the approval is decided in the `approval-flutter`
-  app, then the assistant must call again.
+Status: ✅ OAuth 2.1 (discovery, dynamic registration, PKCE, refresh rotation
+with reuse detection), consent page and MCP over Streamable HTTP are tested
+with a client that follows the same steps as ChatGPT/claude.ai, against a real
+`sshd`. Not yet tried against the live ChatGPT and claude.ai services.
 
-Until then, have the web assistant hand work to a CLI agent on your Mac or VPS
-(setups 1–3), or use the Edge MCP from a client that can send a bearer token
-(for example Claude Code with an HTTP MCP server entry and an `Authorization`
-header) over an SSH tunnel.
+The older `leasegate-edge` MCP endpoint (connector actions with a static
+bearer token, [single-VPS LeaseGate install](self-hosted-vps.md)) remains for
+the Cloud/Edge product.
 
 ## 7. Unattended automation
 
@@ -261,9 +256,9 @@ keylease --db /var/lib/keylease/vault.sqlite grant create \
   --ttl-seconds 2592000 --max-lease-ttl-seconds 300
 ```
 
-`VAULT_ID` is the `vault_id` in `keylease status`. Restart the daemon after
-admin changes. Prefer `keylease ssh` / `keylease db`
-over `reveal` so the job's logs never contain the secret.
+`VAULT_ID` is the `vault_id` in `keylease status`. The running daemon picks
+the grant up immediately. Prefer `keylease ssh` / `keylease db` over `reveal`
+so the job's logs never contain the secret.
 
 ## Summary of gaps
 
@@ -271,9 +266,7 @@ over `reveal` so the job's logs never contain the secret.
 |---|---|
 | Native Swift app not yet at parity; the Flutter app lacks trust/Agents/Remote Vaults/notifications | 1, 3 |
 | Mac Swift UI not compiled or tested on a Mac | 1, 3 |
-| Headless `approval approve` cannot grant a trust or deny; no `KEYLEASE_SOCKET` | 2 |
-| No push, mobile approver or remote unlock | 3 |
-| No stdio MCP server for the vault | 5 |
-| No OAuth/public MCP profile, no vault tools over MCP | 6 |
-| `db query` (T0), HTTP header proxy, browser login fill | all |
+| No push, mobile approver or remote unlock | 3, 6 |
+| Gateway not yet tried against the live ChatGPT / claude.ai services | 6 |
+| MCP database tool is PostgreSQL only; HTTP header proxy, browser login fill | all |
 | Key-bound client identity (ADR 0005 step 6) | all |

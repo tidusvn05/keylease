@@ -11,7 +11,7 @@ use keylease_service::InjectRequest;
 use tokio::io::AsyncRead;
 
 /// Parses `NAME=kl://<vault>/<item>/<field>` (or `NAME=<item>/<field>`).
-fn parse_binding(binding: &str) -> Result<(String, InjectRequest)> {
+pub(crate) fn parse_binding(binding: &str) -> Result<(String, InjectRequest)> {
     let invalid = || KeyLeaseError::InvalidRequest {
         reason: "use --env NAME=kl://VAULT/ITEM/FIELD or NAME=ITEM/FIELD".into(),
     };
@@ -42,7 +42,7 @@ fn parse_binding(binding: &str) -> Result<(String, InjectRequest)> {
 }
 
 /// Every form of a secret worth scrubbing: raw, base64 and percent-encoded.
-fn redaction_patterns(values: &[Zeroizing<String>]) -> Vec<Zeroizing<Vec<u8>>> {
+pub(crate) fn redaction_patterns(values: &[Zeroizing<String>]) -> Vec<Zeroizing<Vec<u8>>> {
     let mut patterns = Vec::new();
     for value in values {
         if value.len() < 4 {
@@ -100,8 +100,7 @@ fn scrub_prefix(
     index
 }
 
-#[cfg(test)]
-fn scrub(buffer: &[u8], patterns: &[Zeroizing<Vec<u8>>]) -> Vec<u8> {
+pub(crate) fn scrub(buffer: &[u8], patterns: &[Zeroizing<Vec<u8>>]) -> Vec<u8> {
     let mut out = Vec::with_capacity(buffer.len());
     scrub_prefix(buffer, patterns, true, &mut out);
     out

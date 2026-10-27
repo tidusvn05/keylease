@@ -7,6 +7,7 @@
 //! proxy only relays bytes.
 
 use super::*;
+use crate::backend::{Backend, listener_owner_uid};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use rand::RngCore;
 use std::sync::Arc as StdArc;
@@ -56,7 +57,7 @@ pub(crate) enum DbCommand {
     },
 }
 
-#[derive(Args, Clone)]
+#[derive(Args, Clone, Default)]
 pub(crate) struct TlsArgs {
     /// Allow an unencrypted connection to a non-loopback server.
     #[arg(long)]
@@ -67,27 +68,36 @@ pub(crate) struct TlsArgs {
     tls_ca: Option<PathBuf>,
 }
 
+impl TlsArgs {
+    pub(crate) fn with_ca(tls_ca: Option<PathBuf>) -> Self {
+        Self {
+            insecure_plaintext: false,
+            tls_ca,
+        }
+    }
+}
+
 #[derive(Clone)]
-struct Target {
+pub(crate) struct Target {
     item_id: ItemId,
-    host: String,
-    port: u16,
-    database: String,
-    username: String,
+    pub(crate) host: String,
+    pub(crate) port: u16,
+    pub(crate) database: String,
+    pub(crate) username: String,
 }
 
 trait Upstream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Upstream for T {}
 
 pub(crate) async fn db_command(cli: &Cli, daemon: &Path, command: DbCommand) -> Result<()> {
-    let auth = auth(cli)?;
+    let backend = Backend::for_cli(cli, daemon)?;
     match command {
         DbCommand::Proxy {
             item_id,
             socket_dir,
             tls,
         } => {
-            let target = target(daemon, &auth, &item_id).await?;
+            let target = target(&backend, &item_id).await?;
             let (listener, directory, _temporary) = bind(socket_dir, target.port)?;
             println!(
                 "PGHOST={dir}; PGPORT={port}; PGUSER={user}; PGDATABASE={db}; export PGHOST PGPORT PGUSER PGDATABASE;",
@@ -104,13 +114,13 @@ pub(crate) async fn db_command(cli: &Cli, daemon: &Path, command: DbCommand) -> 
                 directory.display()
             );
             tokio::select! {
-                () = serve(listener, daemon.to_path_buf(), auth, target, tls) => {}
+                () = serve(listener, backend, target, tls) => {}
                 _ = tokio::signal::ctrl_c() => {}
             }
             Ok(())
         }
         DbCommand::Psql { item_id, args, tls } => {
-            run_with_proxy(daemon, auth, &item_id, tls, "psql", args).await
+            run_with_proxy(backend, &item_id, tls, "psql", args).await
         }
         DbCommand::Exec {
             item_id,
@@ -118,20 +128,18 @@ pub(crate) async fn db_command(cli: &Cli, daemon: &Path, command: DbCommand) -> 
             tls,
         } => {
             let program = command.remove(0);
-            run_with_proxy(daemon, auth, &item_id, tls, &program, command).await
+            run_with_proxy(backend, &item_id, tls, &program, command).await
         }
     }
 }
 
-async fn target(daemon: &Path, auth: &RpcAuth, item_id: &str) -> Result<Target> {
-    let value = rpc(
-        daemon,
-        RpcRequest::DbTarget {
-            auth: auth.clone(),
+pub(crate) async fn target(backend: &Backend, item_id: &str) -> Result<Target> {
+    let value = backend
+        .call(|auth| RpcRequest::DbTarget {
+            auth,
             id: ItemId(item_id.into()),
-        },
-    )
-    .await?;
+        })
+        .await?;
     let field = |name: &str| {
         value
             .get(name)
@@ -152,7 +160,7 @@ async fn target(daemon: &Path, auth: &RpcAuth, item_id: &str) -> Result<Target> 
     })
 }
 
-fn bind(
+pub(crate) fn bind(
     directory: Option<PathBuf>,
     port: u16,
 ) -> Result<(UnixListener, PathBuf, Option<tempfile::TempDir>)> {
@@ -188,22 +196,15 @@ fn bind(
 }
 
 async fn run_with_proxy(
-    daemon: &Path,
-    auth: RpcAuth,
+    backend: Backend,
     item_id: &str,
     tls: TlsArgs,
     program: &str,
     args: Vec<String>,
 ) -> Result<()> {
-    let target = target(daemon, &auth, item_id).await?;
+    let target = target(&backend, item_id).await?;
     let (listener, directory, temporary) = bind(None, target.port)?;
-    let server = tokio::spawn(serve(
-        listener,
-        daemon.to_path_buf(),
-        auth,
-        target.clone(),
-        tls,
-    ));
+    let server = tokio::spawn(serve(listener, backend, target.clone(), tls));
     let url = format!(
         "postgresql://{user}@/{db}?host={host}&port={port}",
         user = url_component(&target.username),
@@ -230,16 +231,8 @@ async fn run_with_proxy(
     std::process::exit(status.code().unwrap_or(1));
 }
 
-async fn serve(
-    listener: UnixListener,
-    daemon: PathBuf,
-    auth: RpcAuth,
-    target: Target,
-    tls: TlsArgs,
-) {
-    let owner_uid = fs::metadata(&daemon)
-        .map(|metadata| metadata.uid())
-        .unwrap_or(u32::MAX);
+pub(crate) async fn serve(listener: UnixListener, backend: Backend, target: Target, tls: TlsArgs) {
+    let owner_uid = listener_owner_uid(&listener);
     let connector = match tls_connector(tls.tls_ca.as_deref()) {
         Ok(connector) => connector,
         Err(error) => {
@@ -255,17 +248,10 @@ async fn serve(
             eprintln!("keylease db proxy: rejected a peer with an unexpected uid");
             continue;
         }
-        let (daemon, auth, target, connector) = (
-            daemon.clone(),
-            auth.clone(),
-            target.clone(),
-            connector.clone(),
-        );
+        let (backend, target, connector) = (backend.clone(), target.clone(), connector.clone());
         let insecure = tls.insecure_plaintext;
         tokio::spawn(async move {
-            if let Err(message) =
-                session(stream, &daemon, &auth, &target, connector, insecure).await
-            {
+            if let Err(message) = session(stream, &backend, &target, connector, insecure).await {
                 eprintln!("keylease db proxy: {message}");
             }
         });
@@ -386,8 +372,7 @@ fn is_loopback(host: &str) -> bool {
 
 async fn session(
     mut client: UnixStream,
-    daemon: &Path,
-    auth: &RpcAuth,
+    backend: &Backend,
     target: &Target,
     connector: tokio_rustls::TlsConnector,
     insecure_plaintext: bool,
@@ -463,7 +448,7 @@ async fn session(
     packet.extend_from_slice(&body);
     upstream.write_all(&packet).await.map_err(io)?;
 
-    if let Err(text) = authenticate(&mut upstream, daemon, auth, target, &database).await {
+    if let Err(text) = authenticate(&mut upstream, backend, target, &database).await {
         let _ = client.write_all(&error_response(&text)).await;
         return Err(text);
     }
@@ -514,8 +499,7 @@ async fn connect_upstream(
 /// Runs the backend authentication exchange until AuthenticationOk.
 async fn authenticate(
     upstream: &mut Box<dyn Upstream>,
-    daemon: &Path,
-    auth: &RpcAuth,
+    backend: &Backend,
     target: &Target,
     database: &str,
 ) -> std::result::Result<(), String> {
@@ -556,18 +540,16 @@ async fn authenticate(
             11 => {
                 let server_first =
                     std::str::from_utf8(payload).map_err(|_| "invalid SCRAM challenge")?;
-                let answer = rpc(
-                    daemon,
-                    RpcRequest::DbScram {
-                        auth: auth.clone(),
+                let answer = backend
+                    .call(|auth| RpcRequest::DbScram {
+                        auth,
                         id: target.item_id.clone(),
                         database: database.into(),
                         client_first_bare: client_first_bare.clone(),
                         server_first: server_first.into(),
-                    },
-                )
-                .await
-                .map_err(|error| describe(&error))?;
+                    })
+                    .await
+                    .map_err(|error| describe(&error))?;
                 let client_final = answer
                     .get("client_final")
                     .and_then(Value::as_str)

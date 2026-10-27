@@ -10,7 +10,7 @@ in the [threat model](security/threat-model.md).
 |---|---|---|
 | What it is | An encrypted vault with a policy engine, served by `keylease serve` over a local Unix socket | A self-hosted control plane (Cloud API, worker, PostgreSQL) plus a gateway (Edge) that serves MCP and dynamic credentials |
 | Who uses it | One person: agents on a Mac or a VPS | An operator running agents against SaaS connectors with signed policy bundles |
-| Agent interface | `keylease` CLI (and the brokers below) | MCP over Streamable HTTP, credential API |
+| Agent interface | `keylease` CLI (and the brokers below), MCP over stdio, the OAuth MCP gateway | MCP over Streamable HTTP, credential API |
 | Approver | macOS app, `keylease approval …`, paired remote approver | `apps/approval-flutter` web/mobile app |
 | Docs | this page, [ADR 0005](adr/0005-agent-trust-and-secret-use.md) | [Phase 3 architecture](phase-3/architecture-and-tech-stack.md), [single-VPS install](self-hosted-vps.md) |
 
@@ -45,6 +45,11 @@ flowchart LR
   (`keylease agent enroll`, or `client register --baseline` on a headless host).
   It can search and read metadata; using a secret or changing the vault queues
   an approval.
+- **MCP surfaces** — `keylease mcp` (stdio, started by Claude Desktop, Cursor,
+  Codex as an enrolled agent) and the gateway (`serve --gateway-url`: OAuth
+  2.1 + Streamable HTTP for ChatGPT and claude.ai; each connection is a new
+  agent). Both expose the same tools, none of which returns a secret
+  ([MCP](mcp.md), [gateway](mcp-gateway.md)).
 - **Approver** — a human surface that decides approvals: the macOS app on the
   same Mac, the admin CLI on the node, or a paired remote device. An approver
   is never the agent that asked.
@@ -55,7 +60,7 @@ From most to least preferred (ADR 0005 section 3):
 
 | Tier | Mechanism | Status | Agent receives |
 |---|---|---|---|
-| T0 Execute | Typed SaaS connectors (`leasegate.execute`); `db query` | Connectors: yes. `db query`: **no** | The result only |
+| T0 Execute | Typed SaaS connectors (`leasegate.execute`); MCP `db_query` | **Yes** (PostgreSQL via `psql` through the proxy) | The result only |
 | T1 Proxy | `keylease ssh` / `ssh-agent` (signing in the service); `keylease db` (SCRAM answered by the service) | **Yes** (SSH, PostgreSQL). HTTP header proxy: **no** | A socket, never the secret |
 | T2 Ephemeral | AWS STS, SSH certificates, PostgreSQL roles (Edge credential API) | In the Edge only, not wired to the vault node | Short-lived material |
 | T3 Inject | `keylease run --env NAME=ITEM/field -- cmd`, output scrubbed | **Yes** | Nothing directly; the child process gets the value |
@@ -96,6 +101,7 @@ Details: [agent approvals and trust](agent-approvals.md).
 | Personal Mac | macOS app daemon | macOS app (notification, Touch ID for trusts) | Master password in the app |
 | VPS, self-trust (mode A) | `keylease serve` under systemd | Admin CLI on the VPS (`approval approve`), or pre-approved `grant`s | systemd credential, password file, or interactive |
 | VPS + paired approver (mode B) | `keylease serve --approver-listen` behind TLS | macOS app **Remote Vaults**, or `keylease remote` on a laptop | Same as mode A (remote unlock not implemented) |
+| VPS gateway for web assistants | `keylease serve --gateway-url` behind TLS | Same as mode A or B | Same as mode A |
 | LeaseGate Cloud + Edge | Edge's embedded `KeyLeaseService` | `approval-flutter` | Edge vault password file |
 
 ## Component map
@@ -107,7 +113,7 @@ Details: [agent approvals and trust](agent-approvals.md).
 | `crates/leasegate-policy` | Deny-by-default rules and approvals |
 | `crates/keylease-service` | The only orchestration layer: vault, policy, trust, SSH signing, SCRAM, injection, remote approvers |
 | `crates/keylease-rpc` | The local RPC contract (frozen by `test-vectors/rpc/commands.json`) |
-| `crates/keylease-cli` | `keylease` CLI, daemon, brokers (`ssh`, `db`, `run`), approver HTTP API |
+| `crates/keylease-cli` | `keylease` CLI, daemon, brokers (`ssh`, `db`, `run`), MCP server (`mcp.rs`), gateway HTTP + OAuth (`gateway.rs`), approver HTTP API |
 | `crates/leasegate-mcp` | Streamable HTTP MCP adapter over the service (connector actions) |
 | `crates/leasegate-edge`, `keylease-cloud`, `leasegate-credentials` | LeaseGate Edge gateway, Cloud control plane, dynamic credentials |
 | `apps/desktop-macos`, `apps/desktop-macos-app` | Native Swift client core and SwiftUI app |
