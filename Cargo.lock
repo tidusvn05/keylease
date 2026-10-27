@@ -1840,6 +1840,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "x25519-dalek",
  "zeroize",
 ]
 
@@ -1901,6 +1902,7 @@ dependencies = [
  "hmac 0.12.1",
  "keylease-1pux",
  "keylease-core",
+ "keylease-crypto",
  "keylease-kdbx",
  "keylease-store",
  "leasegate-connectors",
@@ -1915,6 +1917,7 @@ dependencies = [
  "sha2 0.10.9",
  "signature 2.2.0",
  "ssh-key",
+ "subtle",
  "tempfile",
  "tokio",
  "totp-rs",
@@ -4468,6 +4471,17 @@ name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
+
+[[package]]
+name = "x25519-dalek"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7e8131a03190127fb2263afc72b322ecadae46b6ff8c6f399ff5d02f5559af6"
+dependencies = [
+ "curve25519-dalek 5.0.0",
+ "rand_core 0.10.1",
+ "zeroize",
+]
 
 [[package]]
 name = "yoke"

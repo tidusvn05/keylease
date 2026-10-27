@@ -118,6 +118,8 @@ public enum RpcRequest: Encodable, Sendable {
     case approvalDecide(id: String, approve: Bool, trust: TrustDecision? = nil)
     case trustsList
     case trustRevoke(id: String)
+    /// A node agent asks the cloud owner for an item (ADR 0006).
+    case cloudRequest(purpose: String, hint: String?)
     case agentEnroll(name: String)
     case sshIdentities
     case entriesInject(program: String, fields: [InjectField])
@@ -198,6 +200,7 @@ public enum RpcRequest: Encodable, Sendable {
         case .dbTarget: "db_target"
         case .dbScram: "db_scram"
         case .sshSign: "ssh_sign"
+        case .cloudRequest: "cloud_request"
         case .auditQuery: "audit_query"
         case .leaseRequest: "lease_request"
         case .gateExecute: "gate_execute"
@@ -370,6 +373,9 @@ public enum RpcRequest: Encodable, Sendable {
             try c.encode(id, forKey: key("id"))
         case .agentEnroll(let name):
             try c.encode(name, forKey: key("name"))
+        case .cloudRequest(let purpose, let hint):
+            try c.encode(purpose, forKey: key("purpose"))
+            try c.encodeIfPresent(hint, forKey: key("hint"))
         case .entriesInject(let program, let fields):
             try c.encode(program, forKey: key("program"))
             try c.encode(fields, forKey: key("fields"))

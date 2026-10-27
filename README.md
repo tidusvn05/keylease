@@ -17,6 +17,10 @@ with a human approving what matters.
 - **Any assistant.** CLI agents use `keylease` directly; Claude Desktop,
   Cursor and Codex start `keylease mcp`; ChatGPT and claude.ai connect to your
   self-hosted gateway with OAuth.
+- **Share with a VPS, back up, recover.** Through your self-hosted cloud, a VPS
+  receives only the items (or projects) you share or approve, backs up its own
+  secrets sealed to you, and a recovery kit restores your vault on a new
+  device. The cloud cannot read or forge any of it.
 
 The security-sensitive implementation is Rust. The CLI, desktop and mobile
 clients are transport/presentation adapters and cannot reach storage, policy
@@ -97,6 +101,7 @@ Guides: [agent approvals and trust](docs/agent-approvals.md) ·
 [SSH agent](docs/ssh-agent.md) · [PostgreSQL proxy](docs/db-proxy.md) ·
 [`keylease run`](docs/run-with-secrets.md) ·
 [remote approval for a VPS](docs/remote-approval.md) ·
+[cloud sharing, backup and recovery](docs/cloud-sharing.md) ·
 [multiple vaults](docs/multi-vault.md).
 
 ## The macOS app

@@ -50,6 +50,7 @@
     "approval_decide",
     "trusts_list",
     "trust_revoke",
+    "cloud_request",
     "agent_enroll",
     "ssh_identities",
     "entries_inject",

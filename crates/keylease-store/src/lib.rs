@@ -21,6 +21,8 @@ use std::{path::Path, sync::Mutex};
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
+pub mod cloud;
+
 pub struct UnlockedVault {
     pub account_id: AccountId,
     pub vault_id: VaultId,
@@ -3036,6 +3038,7 @@ CREATE TABLE IF NOT EXISTS gateway_connections(agent_id TEXT PRIMARY KEY,record_
 CREATE TABLE IF NOT EXISTS oauth_clients(client_id TEXT PRIMARY KEY,record_json TEXT NOT NULL,created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS oauth_codes(code_hash TEXT PRIMARY KEY,record_json TEXT NOT NULL,expires_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS oauth_tokens(token_hash TEXT PRIMARY KEY,kind TEXT NOT NULL,family_id TEXT NOT NULL,agent_id TEXT NOT NULL,client_id TEXT NOT NULL,expires_at TEXT NOT NULL,used INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS cloud_records(kind TEXT NOT NULL,id TEXT NOT NULL,record_json TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(kind,id));
 "#;
 
 #[cfg(test)]

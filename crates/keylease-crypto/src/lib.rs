@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+pub mod sealed;
+
 pub const ENVELOPE_VERSION: u32 = 1;
 pub const ALGORITHM: &str = "xchacha20poly1305";
 

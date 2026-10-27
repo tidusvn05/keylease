@@ -333,6 +333,13 @@ pub enum RpcRequest {
         auth: RpcAuth,
         id: String,
     },
+    /// A node agent asks the cloud owner for an item (ADR 0006).
+    CloudRequest {
+        auth: RpcAuth,
+        purpose: String,
+        #[serde(default)]
+        hint: Option<String>,
+    },
     AgentEnroll {
         auth: RpcAuth,
         name: String,
@@ -883,6 +890,19 @@ pub async fn handle_rpc(
             let actor = actor(service, &auth)?;
             service.revoke_trust_authorized(&actor, &id)?;
             Ok(json!({"revoked": id}))
+        }
+        RpcRequest::CloudRequest {
+            auth,
+            purpose,
+            hint,
+        } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.cloud_request_share_authorized(
+                &actor,
+                &purpose,
+                hint.as_deref(),
+            )?)
+            .map_err(|_| KeyLeaseError::Storage)
         }
         RpcRequest::EntriesInject {
             auth,

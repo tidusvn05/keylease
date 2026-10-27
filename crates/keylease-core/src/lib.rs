@@ -7,6 +7,7 @@ mod domain;
 mod error;
 mod identity;
 mod policy;
+pub mod relay;
 mod template;
 mod trust;
 

@@ -16,6 +16,7 @@ not yet verified on its platform · ❌ not implemented.
 | 5 | [Claude Desktop, Cursor, Codex (local MCP)](#5-claude-desktop-cursor-and-other-mcp-clients) | ✅ |
 | 6 | [ChatGPT / claude.ai through your own gateway](#6-chatgpt-or-claudeai-through-your-own-gateway) | ✅ tested with a simulated OAuth client |
 | 7 | [Unattended automation (CI, cron)](#7-unattended-automation) | ✅ |
+| 8 | [Share with a VPS through your cloud, back up, recover](#8-share-with-a-vps-through-your-cloud-back-it-up-recover) | ✅ CLI · ❌ Mac UI for requests |
 
 ---
 
@@ -258,6 +259,29 @@ keylease --db /var/lib/keylease/vault.sqlite grant create \
 the grant up immediately. Prefer `keylease ssh` / `keylease db` over `reveal`
 so the job's logs never contain the secret.
 
+## 8. Share with a VPS through your cloud, back it up, recover
+
+Status: ✅ implemented and tested on Linux (CLI); the macOS app does not show
+share requests yet.
+
+1. On your laptop: `keylease cloud init --url https://cloud.example.com
+   --admin-token-file admin.token` and keep the printed recovery kit offline.
+2. `keylease cloud invite vps-prod` → on the VPS `keylease cloud join --url …`
+   with the code; compare the owner fingerprint; `keylease cloud sync` on the
+   laptop.
+3. Share: `keylease cloud share ITEM --to vps-prod [--ttl 7d]`, or a project
+   with `--project billing`.
+4. An agent on the VPS asks: `keylease cloud request "deploy billing" --hint
+   "stripe key"`; you run `keylease cloud requests` and `keylease cloud approve
+   REQ --item ITEM --ttl 1h`.
+5. The VPS backs up its own secrets sealed to you. If it dies: invite and join
+   a new VPS, `keylease cloud restore --from vps-prod --to vps-new`,
+   `keylease cloud remove vps-prod`.
+6. If you lose the laptop: `keylease cloud recover --url … --account …` on the
+   new device with the recovery code.
+
+Details: [cloud sharing](cloud-sharing.md).
+
 ## Summary of gaps
 
 | Gap | Affects |
@@ -265,5 +289,6 @@ so the job's logs never contain the secret.
 | Mac Swift UI not compiled or tested on a Mac | 1, 3 |
 | No push, mobile approver or remote unlock | 3, 6 |
 | Gateway not yet tried against the live ChatGPT / claude.ai services | 6 |
+| Share requests are decided from the CLI, not yet the macOS app; no live sync between two personal devices | 8 |
 | MCP database tool is PostgreSQL only; HTTP header proxy, browser login fill | all |
 | Key-bound client identity (ADR 0005 step 6) | all |

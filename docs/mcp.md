@@ -40,6 +40,7 @@ approvals.
 |---|---|---|---|
 | `vault_search` | find items by title, username, URL, tag | ids, titles, kinds, usernames, URLs | no |
 | `vault_item` | one item's fields without secret values | field names, hosts, ports | no |
+| `vault_request_item` | on a VPS linked to your [cloud](cloud-sharing.md): ask you for an item | the request id | you approve on your device |
 | `ssh_exec` | run a command over SSH with a vault key | exit status, stdout, stderr | `ssh:sign` (R2; R3 for production items) |
 | `db_query` | run SQL on a PostgreSQL item, read-only by default | CSV output | `db:connect` (R2; R3 for production) |
 | `run_with_secrets` | run a local program with vault values in its environment (opt-in) | output with the values scrubbed | every run (R4) |
