@@ -2480,6 +2480,13 @@ fn systemd_password_credential() -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+/// systemd gives a system service its credentials mode 0440 in a directory only the service can
+/// read, so the group bit there does not expose them.
+fn is_systemd_credential(path: &Path) -> bool {
+    std::env::var_os("CREDENTIALS_DIRECTORY")
+        .is_some_and(|directory| path.parent() == Some(Path::new(&directory)))
+}
+
 async fn serve(
     db: &Path,
     socket: &Path,
@@ -2665,7 +2672,7 @@ fn read_secret_file(path: &Path, label: &str) -> Result<Zeroizing<String>> {
             reason: format!("{label} path must be a regular non-symlink file"),
         });
     }
-    if metadata.permissions().mode() & 0o077 != 0 {
+    if metadata.permissions().mode() & 0o077 != 0 && !is_systemd_credential(path) {
         return Err(KeyLeaseError::Denied {
             reason: format!("{label} file must not be accessible by group or others"),
         });

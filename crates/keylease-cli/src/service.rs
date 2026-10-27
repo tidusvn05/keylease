@@ -327,6 +327,16 @@ async fn install(
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
     let Some(status) = status else {
+        let last = Process::new("journalctl")
+            .args(["-u", &unit_name, "-n", "1", "-o", "cat", "--no-pager"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty());
+        if let Some(last) = last {
+            eprintln!("{unit_name}: {last}");
+        }
         return Err(KeyLeaseError::InvalidRequest {
             reason: format!("{unit_name} did not start; see `journalctl -u {unit_name}`"),
         });
