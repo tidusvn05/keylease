@@ -118,6 +118,7 @@ vault lives there too. Mode A of ADR 0005.
    are decided over SSH with the master password:
 
    ```sh
+   keylease approval list                     # pending requests (master password)
    keylease approval approve APPROVAL_ID
    keylease approval approve APPROVAL_ID --trust 1h
    keylease approval deny APPROVAL_ID

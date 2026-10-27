@@ -388,6 +388,15 @@ impl KeyLeaseService {
     /// paired remote approver.
     /// The admin path (`keylease approval approve|deny`, master password):
     /// the person holding the master password is an approver.
+    /// Pending approvals for the admin path (master password): a headless host has no desktop
+    /// credential to list them through the daemon.
+    pub fn list_pending_approvals_admin(&self, limit: u32) -> Result<Vec<ApprovalRecord>> {
+        self.with_vault(|_| {
+            self.store
+                .list_pending_approvals(limit.min(1000), Utc::now())
+        })
+    }
+
     pub fn decide_approval_admin(
         &self,
         id: &str,

@@ -740,7 +740,8 @@ enum ApprovalCommand {
     },
     /// Deny directly against the database (admin, master password).
     Deny { id: String },
-    /// List pending approvals through the running daemon.
+    /// List pending approvals through the running daemon; on a host without the desktop
+    /// credential, directly against the database (master password).
     List {
         #[arg(long, default_value_t = 50)]
         limit: u32,
@@ -996,6 +997,15 @@ async fn run() -> Result<()> {
         Command::Connection { command } => connection_command(&cli, &socket, command).await,
         Command::Lease { command } => lease_command(&cli, &socket, command).await,
         Command::Approval { command } => match command {
+            // Without an agent or desktop credential (a headless host), list with the
+            // master password instead, like `approve` and `deny`.
+            ApprovalCommand::List { limit }
+                if cli.agent_id.is_none()
+                    && cli.client_token_file.is_none()
+                    && !default_client_token().exists() =>
+            {
+                print_json(&admin_service(&cli.db)?.list_pending_approvals_admin(limit)?)
+            }
             ApprovalCommand::List { limit } => {
                 print_rpc(
                     &socket,
