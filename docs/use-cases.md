@@ -79,8 +79,7 @@ Status and gaps:
 Agents (a Claude Code session over SSH, a deploy bot) run on the server; the
 vault lives there too. Mode A of ADR 0005.
 
-1. Install the CLI (`install.sh` from the [GitHub release](https://github.com/tidusvn05/keylease/releases),
-   or `cargo install --locked keylease`) into `/usr/local/bin/`.
+1. Install the CLI: `cargo install --locked keylease` (Rust 1.94+).
    The daemon accepts connections only from the Unix user that owns the
    vault, so run the daemon and the agents as the same user (here `deployer`).
 2. Create the vault and fill it. Typing secrets on the server is optional:

@@ -4,16 +4,18 @@ One tag `vX.Y.Z` on `main` produces everything a release ships:
 
 | Output | For | Made by |
 |---|---|---|
-| **GitHub release**: `keylease` archives for Linux and macOS (x86_64, aarch64), `SHA256SUMS`, release notes | people installing on a laptop or VPS without a Rust toolchain (`install.sh`) | `Release` workflow, jobs `build` and `release` |
-| **macOS app**: `KeyLease-vX.Y.Z-macos-universal.dmg` on the GitHub release, signed ad-hoc | Mac users who want the app | job `macos-app` (`macos.yml`, `scripts/package-macos-swift.sh --dmg`) |
+| **GitHub release**: release notes (no attached binaries) | people following releases | `Release` workflow, job `release` |
 | **crates.io**: `keylease` and the libraries it needs, at `X.Y.Z` | `cargo install --locked keylease`, and Rust code that embeds the vault | job `crates`, `scripts/release.py publish` with a short-lived Trusted Publishing token |
 | **Container images** `ghcr.io/tidusvn05/keylease-cloud:X.Y.Z` and `ghcr.io/tidusvn05/leasegate-edge:X.Y.Z` (and `latest`) | the single-VPS LeaseGate Cloud + Edge deployment ([self-hosted-vps.md](self-hosted-vps.md)) | job `image`, from `deploy/compose/Dockerfile.cloud` and `Dockerfile.edge` |
 
-The GitHub release is the primary output: `install.sh` uses it, and it holds the checksums and
-the notes. GitHub also attaches the source archives of the tag. A pre-release tag
-`vX.Y.Z-rc.N` makes only a GitHub pre-release (archives and DMG): no crates, no images.
+crates.io is the primary output: users install with `cargo install --locked keylease`. GitHub
+attaches the source archives of the tag to the release. A pre-release tag `vX.Y.Z-rc.N` makes
+only a GitHub pre-release: no crates, no images.
 
-What is **not** released here: the Android app, the approval web app (its image bakes in a Cloud URL, so each deployment builds it).
+What is **not** released here: prebuilt `keylease` binaries, the macOS app (built from source
+with `scripts/package-macos-swift.sh`, see [below](#the-macos-app)), the Android app, the
+approval web app (its image bakes in a Cloud URL, so each deployment builds it). Releases
+v0.2.0 and v0.2.1 still attached Linux and macOS archives and a DMG; later ones do not.
 
 ## Versioning
 
@@ -97,23 +99,25 @@ Check the name first: crate names are permanent.
    ```
 3. **Watch** the `Release` workflow. `check` confirms the tag format, that the commit is on
    `main`, the version and the changelog, runs `scripts/verify.sh` and packages every crate;
-   then come the archives, the DMG, the GitHub release, the images and crates.io.
-4. **Verify**: install with `install.sh --version vX.Y.Z` and run `keylease --version`; check
-   `SHA256SUMS`; open the DMG on a Mac ([ad-hoc signed](#the-macos-app));
-   `cargo install --locked keylease --version X.Y.Z`; and `docker run --rm ghcr.io/tidusvn05/leasegate-edge:X.Y.Z --help`.
+   then come the GitHub release, crates.io and the images.
+4. **Verify**: `cargo install --locked keylease --version X.Y.Z` and `keylease --version`; and
+   `docker run --rm ghcr.io/tidusvn05/leasegate-edge:X.Y.Z --help`.
 
 ## The macOS app
 
-Every release rebuilds the app, also when nothing under `apps/` changed: `KeyLease.app`
-embeds the `keylease` helper of the same tag, and the app and helper must speak the same RPC
-contract. `scripts/package-macos-swift.sh` takes the version from `[workspace.package]`
+Releases do not ship the app. Whoever needs it builds it on a Mac (Xcode 16+, Rust):
+`scripts/package-macos-swift.sh --install`, or `--dmg` for a DMG. `KeyLease.app` embeds the
+`keylease` helper built from the same checkout, so build the app from the tag of the
+`keylease` you run elsewhere. `scripts/package-macos-swift.sh` takes the version from `[workspace.package]`
 (`CFBundleShortVersionString`, without a pre-release suffix) and the commit count
 (`CFBundleVersion`), so `scripts/release.py version` is the only place a version is set.
-`macos.yml` also runs on pull requests that touch the app or its packaging, runs the Swift
-tests and keeps the DMG as a workflow artifact for 14 days, to try a change on a Mac.
+`macos.yml` runs on pull requests that touch the app or its packaging (and on demand), runs
+the Swift tests and keeps an ad-hoc signed DMG as a workflow artifact for 14 days, to try a
+change on a Mac.
 
-The app is **signed ad-hoc** (`EXPANDED_CODE_SIGN_IDENTITY=-`), not with an Apple Developer ID,
-and not notarized. Consequences for users, stated in the release notes:
+Without an Apple certificate the app is **signed ad-hoc** (`EXPANDED_CODE_SIGN_IDENTITY=-`),
+not with an Apple Developer ID, and not notarized. Consequences when the app is copied to
+another Mac:
 
 - Gatekeeper blocks the first launch of a downloaded copy. The user allows it in System
   Settings → Privacy & Security → **Open Anyway**, or removes the quarantine flag with
@@ -121,17 +125,17 @@ and not notarized. Consequences for users, stated in the release notes:
 - macOS identifies an ad-hoc app by its code hash, which changes with every build. After an
   update, macOS may ask again for Keychain access and for permissions such as Screen Recording
   (TOTP QR scan), and the Login Item may need to be allowed again.
-- macOS cannot tell who built the app; the only proof is `SHA256SUMS` on the GitHub release.
+- macOS cannot tell who built the app.
 
-Signing with a Developer ID later needs a "Developer ID Application" certificate and an App
-Store Connect API key as secrets in a protected environment, `codesign` with that identity and
-a timestamp, then `xcrun notarytool submit --wait` and `xcrun stapler staple` on the DMG. Until
-then, keep ad-hoc for every release.
+Shipping the app in releases again would need the DMG job back in `release.yml` and, to avoid
+the Gatekeeper prompt, a "Developer ID Application" certificate and an App Store Connect API key
+as secrets in a protected environment, `codesign` with that identity and a timestamp, then
+`xcrun notarytool submit --wait` and `xcrun stapler staple` on the DMG.
 
 ## When something fails
 
 - **Before the tag:** fix it on `main` (or the release branch) and start over.
-- **check, build, macOS app or GitHub release:** fix the cause and re-run the failed jobs. If the fix needs
+- **check or GitHub release:** fix the cause and re-run the failed jobs. If the fix needs
   a new commit, the tag is not moved: release `X.Y.Z+1` instead. `workflow_dispatch` with an
   existing tag rebuilds into a draft release.
 - **Images:** re-run the `image` job.
@@ -139,7 +143,7 @@ then, keep ad-hoc for every release.
   locally). Versions already published are skipped. If crates.io refuses the token, check the
   crate's Trusted Publishing settings: repository, workflow `release.yml` and environment
   `crates-io` must match.
-- **Never** move a published tag or replace its assets: users have verified the checksums.
+- **Never** move a published tag or replace its assets, and never reuse a version.
 
 ## Yanking and fixes
 

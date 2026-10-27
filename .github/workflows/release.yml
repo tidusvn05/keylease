@@ -1,9 +1,10 @@
 name: Release
 
-# Pushing a tag vX.Y.Z (or vX.Y.Z-rc.N) on main builds keylease for Linux and macOS and the macOS
-# app (an ad-hoc signed DMG, macos.yml), attaches them with SHA256SUMS to a GitHub release with notes from git-cliff, and, for final versions
-# only, pushes the Cloud and Edge container images and publishes the crates to crates.io through
-# Trusted Publishing. The procedure is in docs/releasing.md.
+# Pushing a tag vX.Y.Z (or vX.Y.Z-rc.N) on main checks the tag, creates a GitHub release with notes
+# from git-cliff and, for final versions only, publishes the crates to crates.io through Trusted
+# Publishing and pushes the Cloud and Edge container images. No prebuilt binaries or apps are
+# attached: users install with `cargo install --locked keylease` or build the apps themselves.
+# The procedure is in docs/releasing.md.
 
 on:
   push:
@@ -79,61 +80,9 @@ jobs:
       - name: Every crate packages for crates.io
         run: scripts/release.py publish --dry-run
 
-  build:
-    name: Build ${{ matrix.target }}
-    needs: check
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Older Ubuntu images keep the glibc requirement low.
-          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
-          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
-          - { target: x86_64-apple-darwin, os: macos-14 }
-          - { target: aarch64-apple-darwin, os: macos-14 }
-    runs-on: ${{ matrix.os }}
-    env:
-      TAG: ${{ needs.check.outputs.tag }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.check.outputs.tag }}
-      - run: rustup show active-toolchain || rustup toolchain install
-      - run: rustup target add ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
-      - run: cargo build --release --locked -p keylease --target ${{ matrix.target }}
-      - name: Third-party licenses
-        run: |
-          cargo install --locked cargo-about --features cli
-          cargo about generate --manifest-path crates/keylease-cli/Cargo.toml \
-            --target ${{ matrix.target }} packaging/about.hbs -o THIRD_PARTY_LICENSES.md
-      - name: Package
-        shell: bash
-        run: |
-          name="keylease-$TAG-${{ matrix.target }}"
-          mkdir -p "dist/$name"
-          cp "target/${{ matrix.target }}/release/keylease" "dist/$name/"
-          cp README.md LICENSE SECURITY.md CHANGELOG.md THIRD_PARTY_LICENSES.md "dist/$name/"
-          cd dist && tar -czf "$name.tar.gz" "$name"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: keylease-${{ matrix.target }}
-          path: dist/*.tar.gz
-          if-no-files-found: error
-
-  macos-app:
-    name: macOS app
-    needs: check
-    uses: ./.github/workflows/macos.yml
-    with:
-      ref: ${{ needs.check.outputs.tag }}
-      dmg: KeyLease-${{ needs.check.outputs.tag }}-macos-universal.dmg
-
   release:
     name: Publish the GitHub release
-    needs: [check, build, macos-app]
+    needs: check
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -142,15 +91,6 @@ jobs:
         with:
           ref: ${{ needs.check.outputs.tag }}
           fetch-depth: 0
-      - uses: actions/download-artifact@v8
-        with:
-          path: dist
-          merge-multiple: true
-      - name: Checksums
-        run: |
-          cd dist
-          sha256sum *.tar.gz *.dmg > SHA256SUMS
-          cat SHA256SUMS
       - name: Release notes (git-cliff)
         uses: orhun/git-cliff-action@v4
         with:
@@ -165,19 +105,11 @@ jobs:
           ## Install
 
           \`\`\`sh
-          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sh -s -- --version ${{ needs.check.outputs.tag }}
+          cargo install --locked keylease --version ${{ needs.check.outputs.version }}
           \`\`\`
 
-          Or \`cargo install --locked keylease\`. Every file is listed in \`SHA256SUMS\`.
-
-          ### macOS app
-
-          \`KeyLease-${{ needs.check.outputs.tag }}-macos-universal.dmg\` (macOS 14+, Apple silicon and Intel)
-          is signed ad-hoc, not with an Apple Developer ID, so macOS blocks it on first launch.
-          Drag KeyLease to Applications, then either open it once and allow it in
-          System Settings → Privacy & Security → **Open Anyway**, or run
-          \`xattr -dr com.apple.quarantine /Applications/KeyLease.app\`.
-          Check the DMG against \`SHA256SUMS\` first: \`shasum -a 256 -c SHA256SUMS --ignore-missing\`.
+          No prebuilt binaries or apps are attached. The macOS app is built from source with
+          \`scripts/package-macos-swift.sh\` (see the README).
           NOTES
           if [ "${{ needs.check.outputs.prerelease }}" = false ]; then
             cat >> NOTES.md <<NOTES
@@ -194,10 +126,6 @@ jobs:
           body_path: NOTES.md
           prerelease: ${{ needs.check.outputs.prerelease }}
           draft: ${{ github.event_name == 'workflow_dispatch' }}
-          files: |
-            dist/*.tar.gz
-            dist/*.dmg
-            dist/SHA256SUMS
 
   image:
     name: Image ${{ matrix.image }}
