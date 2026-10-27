@@ -13,16 +13,16 @@ axum.workspace = true
 base64.workspace = true
 chrono.workspace = true
 chacha20poly1305.workspace = true
-keylease-core = { path = "../keylease-core", version = "0.2.0" }
-keylease-service = { path = "../keylease-service", version = "0.2.0" }
-keylease-store = { path = "../keylease-store", version = "0.2.0" }
-leasegate-control = { path = "../leasegate-control", version = "0.2.0" }
-leasegate-connector-sdk = { path = "../leasegate-connector-sdk", version = "0.2.0" }
-leasegate-connectors = { path = "../leasegate-connectors", version = "0.2.0" }
-leasegate-credentials = { path = "../leasegate-credentials", version = "0.2.0" }
-leasegate-mcp = { path = "../leasegate-mcp", version = "0.2.0" }
-leasegate-policy = { path = "../leasegate-policy", version = "0.2.0" }
-leasegate-policy-bundle = { path = "../leasegate-policy-bundle", version = "0.2.0" }
+keylease-core = { path = "../keylease-core", version = "0.2.1" }
+keylease-service = { path = "../keylease-service", version = "0.2.1" }
+keylease-store = { path = "../keylease-store", version = "0.2.1" }
+leasegate-control = { path = "../leasegate-control", version = "0.2.1" }
+leasegate-connector-sdk = { path = "../leasegate-connector-sdk", version = "0.2.1" }
+leasegate-connectors = { path = "../leasegate-connectors", version = "0.2.1" }
+leasegate-credentials = { path = "../leasegate-credentials", version = "0.2.1" }
+leasegate-mcp = { path = "../leasegate-mcp", version = "0.2.1" }
+leasegate-policy = { path = "../leasegate-policy", version = "0.2.1" }
+leasegate-policy-bundle = { path = "../leasegate-policy-bundle", version = "0.2.1" }
 rand.workspace = true
 reqwest.workspace = true
 rusqlite.workspace = true

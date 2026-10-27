@@ -8,7 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 chrono.workspace = true
-keylease-core = { path = "../keylease-core", version = "0.2.0" }
+keylease-core = { path = "../keylease-core", version = "0.2.1" }
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
