@@ -3,14 +3,16 @@ name = "keylease-store"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
 rust-version.workspace = true
+description = "Encrypted SQLite store and journals for the KeyLease vault"
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 base64.workspace = true
 chrono.workspace = true
-keylease-core = { path = "../keylease-core" }
-keylease-crypto = { path = "../keylease-crypto" }
+keylease-core = { path = "../keylease-core", version = "0.1.0" }
+keylease-crypto = { path = "../keylease-crypto", version = "0.1.0" }
 rand.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

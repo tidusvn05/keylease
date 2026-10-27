@@ -8,8 +8,8 @@ rust-version.workspace = true
 
 [dependencies]
 axum.workspace = true
-keylease-core = { path = "../keylease-core" }
-keylease-service = { path = "../keylease-service" }
+keylease-core = { path = "../keylease-core", version = "0.1.0" }
+keylease-service = { path = "../keylease-service", version = "0.1.0" }
 rmcp = { version = "3.2.0", default-features = false, features = ["macros", "server", "transport-streamable-http-server"] }
 schemars.workspace = true
 serde.workspace = true

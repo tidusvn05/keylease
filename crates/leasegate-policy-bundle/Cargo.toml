@@ -10,8 +10,8 @@ rust-version.workspace = true
 base64.workspace = true
 chrono.workspace = true
 ed25519-dalek.workspace = true
-keylease-core = { path = "../keylease-core" }
-leasegate-control = { path = "../leasegate-control" }
+keylease-core = { path = "../keylease-core", version = "0.1.0" }
+leasegate-control = { path = "../leasegate-control", version = "0.1.0" }
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true

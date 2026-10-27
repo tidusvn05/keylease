@@ -3,19 +3,21 @@ name = "keylease-service"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
 rust-version.workspace = true
+description = "KeyLease vault service: policy, approvals, trust, SSH signing, SCRAM and secret injection"
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 base64.workspace = true
 chrono.workspace = true
 ed25519-dalek.workspace = true
-keylease-core = { path = "../keylease-core" }
-keylease-1pux = { path = "../keylease-1pux" }
-keylease-kdbx = { path = "../keylease-kdbx" }
-keylease-store = { path = "../keylease-store" }
-leasegate-connectors = { path = "../leasegate-connectors" }
-leasegate-policy = { path = "../leasegate-policy" }
+keylease-core = { path = "../keylease-core", version = "0.1.0" }
+keylease-1pux = { path = "../keylease-1pux", version = "0.1.0" }
+keylease-kdbx = { path = "../keylease-kdbx", version = "0.1.0" }
+keylease-store = { path = "../keylease-store", version = "0.1.0" }
+leasegate-connectors = { path = "../leasegate-connectors", version = "0.1.0" }
+leasegate-policy = { path = "../leasegate-policy", version = "0.1.0" }
 rand.workspace = true
 reqwest.workspace = true
 schemars.workspace = true

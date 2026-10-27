@@ -12,8 +12,8 @@ mkdir -p "$OUTPUT_DIR/Resources" "$OUTPUT_DIR/Library/LaunchAgents"
 
 if [[ "$CONFIGURATION" == "Release" || "$CONFIGURATION" == "Profile" ]]; then
   rustup target add x86_64-apple-darwin aarch64-apple-darwin
-  cargo build --locked --release -p keylease-cli --target x86_64-apple-darwin
-  cargo build --locked --release -p keylease-cli --target aarch64-apple-darwin
+  cargo build --locked --release -p keylease --target x86_64-apple-darwin
+  cargo build --locked --release -p keylease --target aarch64-apple-darwin
   lipo -create \
     "$REPO_DIR/target/x86_64-apple-darwin/release/keylease" \
     "$REPO_DIR/target/aarch64-apple-darwin/release/keylease" \
@@ -21,7 +21,7 @@ if [[ "$CONFIGURATION" == "Release" || "$CONFIGURATION" == "Profile" ]]; then
 else
   TARGET="${HOST_ARCH/arm64/aarch64}-apple-darwin"
   rustup target add "$TARGET"
-  cargo build --locked -p keylease-cli --target "$TARGET"
+  cargo build --locked -p keylease --target "$TARGET"
   cp "$REPO_DIR/target/$TARGET/debug/keylease" "$OUTPUT_DIR/Resources/keylease"
 fi
 

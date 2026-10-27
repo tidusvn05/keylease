@@ -1,0 +1,252 @@
+name: Release
+
+# Pushing a tag vX.Y.Z (or vX.Y.Z-rc.N) on main builds keylease for Linux and macOS, attaches the
+# archives with SHA256SUMS to a GitHub release with notes from git-cliff, and, for final versions
+# only, pushes the Cloud and Edge container images and publishes the crates to crates.io through
+# Trusted Publishing. The procedure is in docs/releasing.md.
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+", "v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v0.1.0 (the release is created as a draft)"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check the tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      KEYLEASE_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - id: tag
+        name: The tag is vX.Y.Z or vX.Y.Z-rc.N
+        shell: bash
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "::error::$tag is not vX.Y.Z or vX.Y.Z-rc.N"; exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          if [[ "$tag" == *-* ]]; then echo "prerelease=true" >> "$GITHUB_OUTPUT"; else echo "prerelease=false" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          fetch-depth: 0
+      - name: The tagged commit is on main
+        run: |
+          git fetch --quiet origin main
+          git merge-base --is-ancestor HEAD origin/main || { echo "::error::${{ steps.tag.outputs.tag }} is not on main"; exit 1; }
+      - name: The tag matches the workspace version
+        shell: bash
+        run: |
+          want="${{ steps.tag.outputs.version }}"
+          have="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)"
+          if [ "$want" != "$have" ]; then
+            echo "::error::tag ${{ steps.tag.outputs.tag }} but Cargo.toml says version $have (see docs/releasing.md)"
+            exit 1
+          fi
+      - name: CHANGELOG.md has this version
+        shell: bash
+        run: grep -q "^## \[${{ steps.tag.outputs.version }}\]" CHANGELOG.md || { echo "::error::CHANGELOG.md has no section for ${{ steps.tag.outputs.version }}"; exit 1; }
+      # rust-toolchain.toml pins the version and components.
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install --locked cargo-deny
+      - run: scripts/verify.sh
+      - name: Every crate packages for crates.io
+        run: scripts/release.py publish --dry-run
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Older Ubuntu images keep the glibc requirement low.
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
+          - { target: x86_64-apple-darwin, os: macos-14 }
+          - { target: aarch64-apple-darwin, os: macos-14 }
+    runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ needs.check.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.check.outputs.tag }}
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - run: cargo build --release --locked -p keylease --target ${{ matrix.target }}
+      - name: Third-party licenses
+        run: |
+          cargo install --locked cargo-about --features cli
+          cargo about generate --manifest-path crates/keylease-cli/Cargo.toml \
+            --target ${{ matrix.target }} packaging/about.hbs -o THIRD_PARTY_LICENSES.md
+      - name: Package
+        shell: bash
+        run: |
+          name="keylease-$TAG-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/keylease" "dist/$name/"
+          cp README.md LICENSE SECURITY.md CHANGELOG.md THIRD_PARTY_LICENSES.md "dist/$name/"
+          cd dist && tar -czf "$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: keylease-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish the GitHub release
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.check.outputs.tag }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+      - name: Release notes (git-cliff)
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: NOTES.md
+      - name: Install instructions
+        run: |
+          cat >> NOTES.md <<NOTES
+
+          ## Install
+
+          \`\`\`sh
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sh -s -- --version ${{ needs.check.outputs.tag }}
+          \`\`\`
+
+          Or \`cargo install --locked keylease\`. Every archive is listed in \`SHA256SUMS\`.
+          NOTES
+          if [ "${{ needs.check.outputs.prerelease }}" = false ]; then
+            cat >> NOTES.md <<NOTES
+          Container images for LeaseGate Cloud and Edge:
+          \`ghcr.io/${{ github.repository_owner }}/keylease-cloud:${{ needs.check.outputs.version }}\`,
+          \`ghcr.io/${{ github.repository_owner }}/leasegate-edge:${{ needs.check.outputs.version }}\`.
+          NOTES
+          fi
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.check.outputs.tag }}
+          name: KeyLease ${{ needs.check.outputs.tag }}
+          body_path: NOTES.md
+          prerelease: ${{ needs.check.outputs.prerelease }}
+          draft: ${{ github.event_name == 'workflow_dispatch' }}
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+
+  image:
+    name: Image ${{ matrix.image }}
+    needs: [check, release]
+    # Pre-releases (vX.Y.Z-rc.N) do not push images.
+    if: needs.check.outputs.prerelease == 'false'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: keylease-cloud, dockerfile: deploy/compose/Dockerfile.cloud }
+          - { image: leasegate-edge, dockerfile: deploy/compose/Dockerfile.edge }
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.check.outputs.tag }}
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.check.outputs.version }}
+            org.opencontainers.image.licenses=Apache-2.0
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ needs.check.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:latest
+
+  crates:
+    name: Publish to crates.io
+    needs: [check, release]
+    # Pre-releases (vX.Y.Z-rc.N) are not published to crates.io.
+    if: needs.check.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # crates.io Trusted Publishing: each crate trusts this repository, this workflow file and this
+    # environment (docs/releasing.md), so no API token is stored anywhere.
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.check.outputs.tag }}
+      - run: rustup show active-toolchain || rustup toolchain install
+      - name: Crates to publish
+        id: pending
+        run: scripts/release.py pending
+      - name: No new crates
+        if: steps.pending.outputs.new != ''
+        run: |
+          echo "::error::not on crates.io yet: ${{ steps.pending.outputs.new }}. Trusted Publishing cannot create a crate; publish it by hand first (docs/releasing.md, 'A new crate'), then re-run this job."
+          exit 1
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+        if: steps.pending.outputs.count != '0'
+      - run: scripts/release.py publish --no-new
+        if: steps.pending.outputs.count != '0'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

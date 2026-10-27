@@ -11,7 +11,7 @@ Recorded ids (vault/group/item) stay real because requests and responses
 within one file refer to each other.
 
 Usage: scripts/capture-rpc-golden.py [path-to-keylease-binary]
-       (defaults to target/debug/keylease; run `cargo build -p keylease-cli`
+       (defaults to target/debug/keylease; run `cargo build -p keylease`
        first)
 """
 

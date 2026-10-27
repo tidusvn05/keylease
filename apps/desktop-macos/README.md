@@ -36,7 +36,7 @@ against `test-vectors/rpc/commands.json`.
 ## Regenerating
 
 ```sh
-cargo run -p keylease-cli -- contracts > /tmp/contracts.json
+cargo run -p keylease -- contracts > /tmp/contracts.json
 ../../scripts/generate-swift-contracts.py /tmp/contracts.json \
     Sources/KeyLeaseCore/Generated/ContractModels.swift
 python3 ../../scripts/capture-rpc-golden.py   # only when wire behavior changes

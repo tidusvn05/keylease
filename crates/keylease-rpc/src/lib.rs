@@ -7,7 +7,7 @@
 //!
 //! Nothing here may touch the filesystem, the environment, stdout or a process.
 //! The database path, the transport and the framing all belong to the caller.
-//! `keylease-cli` owns `$HOME/.keylease`; this crate must stay unaware of it.
+//! The `keylease` CLI owns `$HOME/.keylease`; this crate must stay unaware of it.
 
 use chrono::Duration;
 use keylease_core::*;
@@ -32,7 +32,7 @@ pub mod provisioning;
 /// What a transport is allowed to dispatch.
 ///
 /// This is passed explicitly rather than being a cargo feature because cargo
-/// unifies features across a workspace build: `keylease-cli` needs
+/// unifies features across a workspace build: the `keylease` CLI needs
 /// `agent-handoff`, so a `--workspace` build compiles `keylease-rpc` once with
 /// it enabled and `keylease-mobile` links that. The feature still trims the
 /// code out of the shipped `.so` (which is built with `-p keylease-mobile`

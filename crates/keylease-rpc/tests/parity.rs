@@ -1,6 +1,6 @@
 //! The contract tests for the local RPC protocol.
 //!
-//! `keylease-cli` frames this protocol over a Unix socket and the mobile FFI
+//! The `keylease` CLI frames this protocol over a Unix socket and the mobile FFI
 //! layer calls it in process. Both go through `dispatch_line`, so these tests
 //! cover both transports at once. A Dart client reads the same wire format and
 //! cannot be type-checked against this crate, which is why the command names

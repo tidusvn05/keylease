@@ -30,6 +30,13 @@ The Flutter packages and the Swift apps are checked separately; see the
 Development section of the [README](README.md). CI runs only the Rust checks
 today, so say in the pull request how you tested app changes.
 
+## Commits and releases
+
+Write commit subjects as [Conventional Commits](https://www.conventionalcommits.org/)
+(`feat: …`, `fix: …`, `docs: …`); the changelog and release notes are generated
+from them. Releases are cut by the maintainer as described in
+[docs/releasing.md](docs/releasing.md).
+
 ## Rules for changes
 
 - Never log, return or store a secret value in plaintext outside the vault.

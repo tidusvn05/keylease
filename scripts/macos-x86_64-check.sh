@@ -42,7 +42,7 @@ cd "$REPO_DIR"
 cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo build --release -p keylease-cli
+cargo build --release -p keylease
 
 if ! lipo -archs "$REPO_DIR/target/release/keylease" | grep -qw x86_64; then
   echo "error: release CLI does not contain x86_64" >&2
