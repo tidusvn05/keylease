@@ -102,13 +102,13 @@ vault lives there too. Mode A of ADR 0005.
    keylease service status
    ```
 
-4. Register the agent with the approval baseline; the token goes straight into
-   a mode-0600 file:
+4. Register the agent. It gets the approval baseline, and its token goes
+   straight into `~/.keylease/clients/agent_claude.token` (mode 0600), where
+   the CLI finds it from the agent id alone:
 
    ```sh
-   keylease client register claude --baseline --token-file ~/.keylease/claude.token
+   keylease client register claude
    export KEYLEASE_AGENT_ID=agent_claude
-   export KEYLEASE_CLIENT_TOKEN_FILE=~/.keylease/claude.token
    ```
 
    With `--db` or `--socket` elsewhere than `~/.keylease`, pass the same
@@ -261,7 +261,7 @@ For CI or cron jobs with no human to approve, use an explicit allow grant
 instead of approvals, narrowed to the exact resource and with a short lease:
 
 ```sh
-keylease --db /var/lib/keylease/vault.sqlite client register ci
+keylease --db /var/lib/keylease/vault.sqlite client register ci --no-baseline
 keylease --db /var/lib/keylease/vault.sqlite grant create \
   --client agent_ci \
   --resource kl://VAULT_ID/ITEM_ID \

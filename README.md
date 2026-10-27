@@ -104,8 +104,8 @@ As the user the agents run as (not root), on Linux with systemd:
 cargo install --locked keylease
 keylease vault init
 keylease service install          # unlocks at boot from a host-sealed credential (asks for sudo)
-keylease client register claude --baseline --token-file ~/.keylease/claude.token
-export KEYLEASE_AGENT_ID=agent_claude KEYLEASE_CLIENT_TOKEN_FILE=~/.keylease/claude.token
+keylease client register claude     # token in ~/.keylease/clients/agent_claude.token
+export KEYLEASE_AGENT_ID=agent_claude
 ```
 
 Approve over SSH with `keylease approval list` and `keylease approval approve ID [--trust 1h]`

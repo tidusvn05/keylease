@@ -348,7 +348,7 @@ async fn install(
         "socket": socket,
         "locked": status.get("locked"),
         "idle_lock_seconds": idle_lock.num_seconds(),
-        "next": "Register an agent: keylease client register NAME --baseline --token-file ~/.keylease/NAME.token. \
+        "next": "Register an agent: keylease client register NAME, then export KEYLEASE_AGENT_ID=agent_NAME. \
                  The vault locks after the idle time; `sudo systemctl restart` unlocks it again. \
                  Anyone who is root on this host, or runs as this user, can use the vault while it runs.",
     }))

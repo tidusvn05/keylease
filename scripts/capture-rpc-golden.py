@@ -186,7 +186,8 @@ def main() -> int:
         vault_id = initialized["vault_id"]
 
         registered = run_tty(
-            [keylease, "--db", str(db), "client", "register", "golden-capture"],
+            [keylease, "--db", str(db), "client", "register", "golden-capture",
+             "--no-baseline", "--token-file", "-"],
             PASSWORD,
         )
         agent_id = registered["agent_id"]
@@ -388,6 +389,7 @@ def main() -> int:
                 [
                     keylease, "--db", str(db),
                     "client", "register", "golden-nogrants",
+                    "--no-baseline", "--token-file", "-",
                 ],
                 PASSWORD,
             )

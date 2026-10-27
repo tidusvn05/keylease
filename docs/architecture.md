@@ -42,7 +42,7 @@ flowchart LR
 - **Vault node** — the process holding the unlocked vault: the macOS app's
   background daemon, or `keylease serve` under systemd on a VPS.
 - **Agent** — any process with its own client identity
-  (`keylease agent enroll`, or `client register --baseline` on a headless host).
+  (`keylease agent enroll`, or `client register` on a headless host).
   It can search and read metadata; using a secret or changing the vault queues
   an approval.
 - **MCP surfaces** — `keylease mcp` (stdio, started by Claude Desktop, Cursor,

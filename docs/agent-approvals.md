@@ -125,11 +125,13 @@ Step 4 of the ADR. On a host with no desktop app, `keylease serve` is the vault
 node and agents on the same host use it over the Unix socket, exactly as on a
 Mac.
 
-Register agents with the baseline, or with narrow `grant create --effect allow`
-rules for unattended automation:
+Register agents; they get the baseline by default (`--no-baseline` and narrow
+`grant create --effect allow` rules for unattended automation). The token goes to
+`~/.keylease/clients/agent_NAME.token`, which the CLI finds from `KEYLEASE_AGENT_ID` alone:
 
 ```sh
-keylease --db /var/lib/keylease/vault.sqlite client register deployer --baseline
+keylease client register deployer
+export KEYLEASE_AGENT_ID=agent_deployer
 ```
 
 Approvals queued by a baseline agent are decided with the admin path, which

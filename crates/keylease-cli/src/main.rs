@@ -379,11 +379,17 @@ enum VaultCommand {
 enum ClientCommand {
     Register {
         name: String,
-        /// Install the enrolled-agent baseline: redacted reads are allowed,
-        /// secret reads and writes queue an approval (ADR 0005).
+        /// Register the agent without the enrolled-agent baseline (redacted reads allowed,
+        /// secret reads and writes queue an approval; ADR 0005): it can do nothing until you
+        /// add grants.
         #[arg(long)]
+        no_baseline: bool,
+        /// The baseline is the default; kept so older scripts still work.
+        #[arg(long, hide = true, conflicts_with = "no_baseline")]
         baseline: bool,
-        /// Write the token to this file (mode 0600, never overwritten) instead of printing it
+        /// Where to write the token (mode 0600, never overwritten); `-` prints it instead.
+        /// Default: ~/.keylease/clients/agent_NAME.token, which the CLI reads for
+        /// KEYLEASE_AGENT_ID=agent_NAME without KEYLEASE_CLIENT_TOKEN_FILE.
         #[arg(long)]
         token_file: Option<PathBuf>,
     },
@@ -1703,41 +1709,56 @@ fn client_command(db: &Path, command: ClientCommand) -> Result<()> {
     match command {
         ClientCommand::Register {
             name,
-            baseline,
+            no_baseline,
+            baseline: _,
             token_file,
         } => {
+            let token_file = match token_file {
+                Some(path) if path == Path::new("-") => None,
+                Some(path) => Some(path),
+                None if valid_client_name(&name) => Some(trust::agent_token_path(&name)?),
+                None => None,
+            };
+            // An existing token file is never replaced.
             if let Some(path) = &token_file
                 && fs::symlink_metadata(path).is_ok()
             {
                 return Err(KeyLeaseError::InvalidRequest {
-                    reason: "token file already exists; choose another --token-file".into(),
+                    reason: format!(
+                        "{} already exists: this agent is registered and that is its token. \
+                         To start over, revoke it (`keylease client revoke agent_NAME`) and \
+                         register another name",
+                        path.display()
+                    ),
                 });
             }
             let (agent_id, token) = service.register_client(&name)?;
-            let baseline_rule_ids = if baseline {
+            let baseline_rule_ids = if no_baseline {
+                None
+            } else {
                 let vault_id = service.current_vault_id()?;
                 Some(service.install_agent_baseline(&agent_id, &vault_id)?)
-            } else {
-                None
             };
-            if let Some(path) = token_file {
-                write_new_private_file(&path, token.as_bytes())?;
-                let path = fs::canonicalize(&path).unwrap_or(path);
+            let Some(path) = token_file else {
                 return print_json(&json!({
                     "agent_id":agent_id,
-                    "token_file":path,
+                    "client_token":token,
                     "baseline_rule_ids":baseline_rule_ids,
-                    "env": {
-                        "KEYLEASE_AGENT_ID": agent_id,
-                        "KEYLEASE_CLIENT_TOKEN_FILE": path,
-                    },
+                    "warning":"store this once in a mode-0600 file"
                 }));
-            }
+            };
+            write_new_private_file(&path, token.as_bytes())?;
+            let default = default_agent_token(&agent_id.0).is_some_and(|d| d == path);
+            let path = fs::canonicalize(&path).unwrap_or(path);
             print_json(&json!({
                 "agent_id":agent_id,
-                "client_token":token,
+                "token_file":path,
                 "baseline_rule_ids":baseline_rule_ids,
-                "warning":"store this once in a mode-0600 file"
+                "env": if default {
+                    json!({"KEYLEASE_AGENT_ID": agent_id})
+                } else {
+                    json!({"KEYLEASE_AGENT_ID": agent_id, "KEYLEASE_CLIENT_TOKEN_FILE": path})
+                },
             }))
         }
         ClientCommand::List => print_json(&service.list_clients()?),
@@ -2625,10 +2646,19 @@ fn auth(cli: &Cli) -> Result<RpcAuth> {
         .agent_id
         .clone()
         .unwrap_or_else(|| "agent_desktop".into());
-    let path = cli
-        .client_token_file
-        .clone()
-        .unwrap_or_else(default_client_token);
+    let path = match &cli.client_token_file {
+        Some(path) => path.clone(),
+        None => default_agent_token(&agent).unwrap_or_else(default_client_token),
+    };
+    if cli.client_token_file.is_none() && !path.exists() {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: format!(
+                "no token for {agent} at {}; register it (`keylease client register NAME`) or set \
+                 KEYLEASE_CLIENT_TOKEN_FILE",
+                path.display()
+            ),
+        });
+    }
     let token = read_secret_file(&path, "client token")?;
     Ok(RpcAuth {
         agent_id: AgentId(agent),
@@ -2874,6 +2904,25 @@ fn default_database() -> PathBuf {
         .and_then(|home| desktop_paths(Some(home)).ok().map(|paths| paths.database))
         .unwrap_or_else(|| PathBuf::from("keylease.sqlite"))
 }
+/// `client register` and `agent enroll` keep an agent's token at
+/// ~/.keylease/clients/AGENT_ID.token; used when no token file is given.
+fn default_agent_token(agent_id: &str) -> Option<PathBuf> {
+    let name = agent_id.strip_prefix("agent_")?;
+    if agent_id == "agent_desktop" || !valid_client_name(name) {
+        return None;
+    }
+    Some(
+        managed_home()?
+            .join("clients")
+            .join(format!("{agent_id}.token")),
+    )
+}
+fn valid_client_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
 fn default_client_token() -> PathBuf {
     managed_home()
         .and_then(|home| desktop_paths(Some(home)).ok().map(|paths| paths.token))
@@ -2904,6 +2953,15 @@ mod tests {
     use super::*;
     // These exercise dispatch directly, without the socket framing above.
     use keylease_rpc::{RpcCapabilities, handle_rpc};
+
+    #[test]
+    fn an_agent_token_defaults_to_its_file_in_clients() {
+        let path = default_agent_token("agent_claude").unwrap();
+        assert!(path.ends_with(".keylease/clients/agent_claude.token"));
+        assert!(default_agent_token("agent_desktop").is_none());
+        assert!(default_agent_token("agent_../x").is_none());
+        assert!(default_agent_token("claude").is_none());
+    }
 
     #[test]
     fn a_missing_vault_or_socket_directory_is_created_private() {
