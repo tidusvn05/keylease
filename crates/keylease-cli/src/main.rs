@@ -16,7 +16,7 @@ use std::{
     fs,
     io::{self, Read, Write},
     os::unix::fs::MetadataExt,
-    os::unix::fs::{FileTypeExt, PermissionsExt},
+    os::unix::fs::{DirBuilderExt, FileTypeExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -1580,6 +1580,9 @@ fn vault_command(db: &Path, command: VaultCommand) -> Result<()> {
                     reason: "password is shorter than 10 characters".into(),
                 });
             }
+            if let Some(parent) = db.parent() {
+                create_private_dir(parent)?;
+            }
             let service = service(db)?;
             let vault_id = service.initialize(first.trim().as_bytes(), Duration::minutes(5))?;
             print_json(&json!({"vault_id":vault_id,"initialized":true}))
@@ -2499,7 +2502,12 @@ async fn serve(
         });
     }
     cloud::spawn_sync_loop(service.clone());
-    let listener = UnixListener::bind(socket).map_err(|_| KeyLeaseError::Storage)?;
+    if let Some(parent) = socket.parent() {
+        create_private_dir(parent)?;
+    }
+    let listener = UnixListener::bind(socket).map_err(|_| KeyLeaseError::InvalidRequest {
+        reason: format!("cannot listen on {}", socket.display()),
+    })?;
     fs::set_permissions(socket, fs::Permissions::from_mode(0o600))
         .map_err(|_| KeyLeaseError::Storage)?;
     eprintln!("KeyLease listening on {}", socket.display());
@@ -2781,6 +2789,20 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         .map_err(|_| KeyLeaseError::Storage)?;
     Ok(())
 }
+/// Creates a missing directory (and its missing parents) with mode 0700, so that
+/// `vault init` and `serve` work on a fresh host. An existing directory is left as it is.
+fn create_private_dir(path: &Path) -> Result<()> {
+    if path.as_os_str().is_empty() || path.is_dir() {
+        return Ok(());
+    }
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)
+        .map_err(|_| KeyLeaseError::InvalidRequest {
+            reason: format!("cannot create the directory {}", path.display()),
+        })
+}
 fn default_socket() -> PathBuf {
     managed_home()
         .map(|home| home.join("run/keylease.sock"))
@@ -2826,6 +2848,25 @@ mod tests {
     use super::*;
     // These exercise dispatch directly, without the socket framing above.
     use keylease_rpc::{RpcCapabilities, handle_rpc};
+
+    #[test]
+    fn a_missing_vault_or_socket_directory_is_created_private() {
+        let root = tempfile::tempdir().unwrap();
+        let nested = root.path().join("var/lib/keylease");
+        create_private_dir(&nested).unwrap();
+        assert!(nested.is_dir());
+        assert_eq!(
+            fs::metadata(&nested).unwrap().permissions().mode() & 0o077,
+            0
+        );
+        fs::set_permissions(&nested, fs::Permissions::from_mode(0o750)).unwrap();
+        create_private_dir(&nested).unwrap();
+        assert_eq!(
+            fs::metadata(&nested).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
+        create_private_dir(Path::new("")).unwrap();
+    }
 
     #[test]
     fn rpc_capability_debug_output_is_redacted() {
