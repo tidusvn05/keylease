@@ -32,12 +32,17 @@ use tokio::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
+mod cloud;
 mod db;
 mod gateway;
 mod inject;
 mod remote;
 mod ssh;
 mod trust;
+pub use cloud::{
+    CloudLink, CloudNode, CloudRole, CloudShare, CloudShareRequest, CloudStatus, InboxOutcome,
+    InviteSetup, OwnerSetup, PendingBackup, RelaySignature, RequestStatus, ShareScope,
+};
 pub use db::{DbTarget, ScramClientFinal};
 pub use gateway::{
     ACCESS_TOKEN_TTL_SECONDS, ConnectCode, GatewayConnection, OAuthClient, OAuthError, OAuthTokens,

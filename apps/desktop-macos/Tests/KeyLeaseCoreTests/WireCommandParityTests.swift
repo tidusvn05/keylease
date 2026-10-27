@@ -122,6 +122,7 @@ final class WireCommandParityTests: XCTestCase {
                 serverFirst: "r=ab,s=c2FsdA==,i=4096"
             ),
             .sshSign(publicKeyBlob: "AAAA", data: "AAAA", flags: 0),
+            .cloudRequest(purpose: "deploy", hint: nil),
             .auditQuery(limit: 50),
             .leaseRequest(
                 request: ActionRequest(

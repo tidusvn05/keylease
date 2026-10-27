@@ -28,6 +28,7 @@ use zeroize::Zeroizing;
 
 mod approver;
 mod backend;
+mod cloud;
 mod db_proxy;
 mod gateway;
 mod mcp;
@@ -45,6 +46,7 @@ mod trust;
         \n  keylease ssh | db | run                     use a secret without revealing it\
         \n  keylease mcp setup claude-desktop --write   Claude Desktop, Cursor, Codex (MCP)\
         \n  keylease serve --gateway-url URL            ChatGPT / claude.ai via your HTTPS gateway\
+        \n  keylease cloud request PURPOSE              a node agent asks the owner for an item\
         \n\nDocs: docs/use-cases.md"
 )]
 struct Cli {
@@ -106,6 +108,12 @@ enum Command {
         /// PEM CA for database servers with a private certificate.
         #[arg(long, requires = "gateway_url")]
         gateway_db_tls_ca: Option<PathBuf>,
+    },
+    /// Link to a KeyLease Cloud, share items with nodes, back up and recover
+    /// (admin, master password; `cloud request` is for node agents).
+    Cloud {
+        #[command(subcommand)]
+        command: cloud::CloudCommand,
     },
     /// Connect web assistants to the MCP gateway (admin, master password).
     Gateway {
@@ -809,6 +817,7 @@ async fn run() -> Result<()> {
             .await
         }
         Command::Gateway { command } => gateway::gateway_command(&cli.db, command),
+        Command::Cloud { command } => cloud::cloud_command(&cli, &socket, command).await,
         Command::Status => print_rpc(&socket, RpcRequest::Status).await,
         Command::Unlock {
             session_ttl_seconds,
@@ -2489,6 +2498,7 @@ async fn serve(
             }
         });
     }
+    cloud::spawn_sync_loop(service.clone());
     let listener = UnixListener::bind(socket).map_err(|_| KeyLeaseError::Storage)?;
     fs::set_permissions(socket, fs::Permissions::from_mode(0o600))
         .map_err(|_| KeyLeaseError::Storage)?;

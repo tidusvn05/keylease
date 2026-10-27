@@ -53,6 +53,13 @@ flowchart LR
 - **Approver** — a human surface that decides approvals: the macOS app on the
   same Mac, the admin CLI on the node, or a paired remote device. An approver
   is never the agent that asked.
+- **Cloud member** — a vault linked to a KeyLease Cloud relay
+  ([ADR 0006](adr/0006-node-identity-cloud-relay-and-sharing.md),
+  [cloud sharing](cloud-sharing.md)): the **owner** (your device, holding the
+  owner keys) or a **node** (a VPS). Identity has two levels: what data a
+  member holds is decided by encryption to that member; what an agent on it
+  may use is decided by policy and approvals. The relay stores public keys,
+  sealed mailboxes and sealed backups only.
 
 ## How an agent uses a secret without seeing it
 
@@ -102,6 +109,7 @@ Details: [agent approvals and trust](agent-approvals.md).
 | VPS, self-trust (mode A) | `keylease serve` under systemd | Admin CLI on the VPS (`approval approve`), or pre-approved `grant`s | systemd credential, password file, or interactive |
 | VPS + paired approver (mode B) | `keylease serve --approver-listen` behind TLS | macOS app **Remote Vaults**, or `keylease remote` on a laptop | Same as mode A (remote unlock not implemented) |
 | VPS gateway for web assistants | `keylease serve --gateway-url` behind TLS | Same as mode A or B | Same as mode A |
+| VPS as a cloud node | any of the above, linked with `keylease cloud join` | Share requests decided on the owner device | Same as mode A; data beyond its own arrives only as approved shares |
 | LeaseGate Cloud + Edge | Edge's embedded `KeyLeaseService` | `approval-flutter` | Edge vault password file |
 
 ## Component map
@@ -113,7 +121,7 @@ Details: [agent approvals and trust](agent-approvals.md).
 | `crates/leasegate-policy` | Deny-by-default rules and approvals |
 | `crates/keylease-service` | The only orchestration layer: vault, policy, trust, SSH signing, SCRAM, injection, remote approvers |
 | `crates/keylease-rpc` | The local RPC contract (frozen by `test-vectors/rpc/commands.json`) |
-| `crates/keylease-cli` | `keylease` CLI, daemon, brokers (`ssh`, `db`, `run`), MCP server (`mcp.rs`), gateway HTTP + OAuth (`gateway.rs`), approver HTTP API |
+| `crates/keylease-cli` | `keylease` CLI, daemon, brokers (`ssh`, `db`, `run`), MCP server (`mcp.rs`), gateway HTTP + OAuth (`gateway.rs`), approver HTTP API, cloud commands and sync loop (`cloud.rs`) |
 | `crates/leasegate-mcp` | Streamable HTTP MCP adapter over the service (connector actions) |
 | `crates/leasegate-edge`, `keylease-cloud`, `leasegate-credentials` | LeaseGate Edge gateway, Cloud control plane, dynamic credentials |
 | `apps/desktop-macos`, `apps/desktop-macos-app` | Native Swift client core and SwiftUI app |

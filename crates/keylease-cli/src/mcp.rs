@@ -108,6 +108,21 @@ impl VaultMcp {
                 true,
             ),
             tool(
+                "vault_request_item",
+                "Ask the vault owner for an item this vault does not have (on a VPS \
+                 linked to the owner's KeyLease Cloud). The owner approves on their own \
+                 device; the item then appears in vault_search. Say what is needed and why.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "purpose": {"type": "string", "description": "Why it is needed, shown to the owner."},
+                        "hint": {"type": "string", "description": "What is needed, e.g. \"prod database\"."}
+                    },
+                    "required": ["purpose"]
+                }),
+                false,
+            ),
+            tool(
                 "ssh_exec",
                 "Run a command on a server over SSH using a key stored in KeyLease. The \
                  private key never leaves the vault; the user may be asked to approve the \
@@ -171,6 +186,7 @@ impl VaultMcp {
         let outcome = match name {
             "vault_search" => search(&backend, arguments).await,
             "vault_item" => item(&backend, arguments).await,
+            "vault_request_item" => request_item(&backend, arguments).await,
             "ssh_exec" => ssh_exec(&backend, arguments).await,
             "db_query" => db_query(&backend, arguments, &self.options).await,
             "run_with_secrets" if self.options.allow_run => {
@@ -381,6 +397,28 @@ async fn item(backend: &Backend, arguments: Value) -> ToolResult {
         })
         .await?;
     Ok(serde_json::to_string_pretty(&value).unwrap_or_default())
+}
+
+#[derive(Deserialize)]
+struct RequestArgs {
+    purpose: String,
+    hint: Option<String>,
+}
+
+async fn request_item(backend: &Backend, arguments: Value) -> ToolResult {
+    let args: RequestArgs = parse(arguments)?;
+    let value = backend
+        .call(|auth| RpcRequest::CloudRequest {
+            auth,
+            purpose: args.purpose.clone(),
+            hint: args.hint.clone(),
+        })
+        .await?;
+    Ok(format!(
+        "Request {} sent to the owner. When it is approved the item appears in \
+         vault_search (the vault syncs every minute); ask the user to approve it.",
+        value["request_id"].as_str().unwrap_or("?")
+    ))
 }
 
 #[derive(Deserialize)]

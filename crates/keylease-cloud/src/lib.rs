@@ -4,6 +4,7 @@ mod api;
 mod enterprise;
 mod enterprise_api;
 mod oidc;
+mod relay;
 mod siem;
 mod store;
 
