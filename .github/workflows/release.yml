@@ -1,7 +1,7 @@
 name: Release
 
-# Pushing a tag vX.Y.Z (or vX.Y.Z-rc.N) on main builds keylease for Linux and macOS, attaches the
-# archives with SHA256SUMS to a GitHub release with notes from git-cliff, and, for final versions
+# Pushing a tag vX.Y.Z (or vX.Y.Z-rc.N) on main builds keylease for Linux and macOS and the macOS
+# app (an ad-hoc signed DMG, macos.yml), attaches them with SHA256SUMS to a GitHub release with notes from git-cliff, and, for final versions
 # only, pushes the Cloud and Edge container images and publishes the crates to crates.io through
 # Trusted Publishing. The procedure is in docs/releasing.md.
 
@@ -123,9 +123,17 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
+  macos-app:
+    name: macOS app
+    needs: check
+    uses: ./.github/workflows/macos.yml
+    with:
+      ref: ${{ needs.check.outputs.tag }}
+      dmg: KeyLease-${{ needs.check.outputs.tag }}-macos-universal.dmg
+
   release:
     name: Publish the GitHub release
-    needs: [check, build]
+    needs: [check, build, macos-app]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -141,7 +149,7 @@ jobs:
       - name: Checksums
         run: |
           cd dist
-          sha256sum *.tar.gz > SHA256SUMS
+          sha256sum *.tar.gz *.dmg > SHA256SUMS
           cat SHA256SUMS
       - name: Release notes (git-cliff)
         uses: orhun/git-cliff-action@v4
@@ -160,7 +168,16 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sh -s -- --version ${{ needs.check.outputs.tag }}
           \`\`\`
 
-          Or \`cargo install --locked keylease\`. Every archive is listed in \`SHA256SUMS\`.
+          Or \`cargo install --locked keylease\`. Every file is listed in \`SHA256SUMS\`.
+
+          ### macOS app
+
+          \`KeyLease-${{ needs.check.outputs.tag }}-macos-universal.dmg\` (macOS 14+, Apple silicon and Intel)
+          is signed ad-hoc, not with an Apple Developer ID, so macOS blocks it on first launch.
+          Drag KeyLease to Applications, then either open it once and allow it in
+          System Settings → Privacy & Security → **Open Anyway**, or run
+          \`xattr -dr com.apple.quarantine /Applications/KeyLease.app\`.
+          Check the DMG against \`SHA256SUMS\` first: \`shasum -a 256 -c SHA256SUMS --ignore-missing\`.
           NOTES
           if [ "${{ needs.check.outputs.prerelease }}" = false ]; then
             cat >> NOTES.md <<NOTES
@@ -178,6 +195,7 @@ jobs:
           draft: ${{ github.event_name == 'workflow_dispatch' }}
           files: |
             dist/*.tar.gz
+            dist/*.dmg
             dist/SHA256SUMS
 
   image:

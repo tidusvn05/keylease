@@ -112,7 +112,13 @@ vault, it has the approval sheet with the trust picker, the Agents section
 (enroll agents, list and revoke trusts), Remote Vaults (approve for a VPS) and
 notifications with Touch ID. 🟡 It has not yet been built and tested on a Mac.
 
-Build and install it on a Mac (Xcode 16+):
+Each [GitHub release](https://github.com/tidusvn05/keylease/releases) has
+`KeyLease-vX.Y.Z-macos-universal.dmg`. It is signed ad-hoc (no Apple Developer
+ID), so macOS blocks the first launch: allow it in System Settings → Privacy &
+Security → **Open Anyway**, or run
+`xattr -dr com.apple.quarantine /Applications/KeyLease.app`.
+
+Or build and install it on a Mac (Xcode 16+):
 
 ```sh
 ./scripts/package-macos-swift.sh --install   # replaces /Applications/KeyLease.app

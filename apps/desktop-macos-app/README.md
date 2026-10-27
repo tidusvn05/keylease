@@ -17,7 +17,11 @@ swift run        # spawns `keylease desktop serve` detached if no daemon is up
 ```sh
 ../../scripts/package-macos-swift.sh            # Release universal2 → ../../build/macos-swift/KeyLease.app
 ../../scripts/package-macos-swift.sh --install  # also replace /Applications/KeyLease.app
+../../scripts/package-macos-swift.sh --dmg      # also ../../build/macos-swift/KeyLease-<version>.dmg
 ```
+
+The bundle's version comes from the workspace `Cargo.toml`, not from
+`Info.plist` (see [releasing](../../docs/releasing.md#the-macos-app)).
 
 The script embeds the `keylease` helper and the LaunchAgent plist via
 `../scripts/prepare-macos-runtime.sh`, then signs the bundle
