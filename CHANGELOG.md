@@ -5,6 +5,12 @@ All notable changes to KeyLease are listed here. The format follows
 [Semantic Versioning](https://semver.org/) (see docs/releasing.md). This file is
 generated from commit messages by git-cliff.
 
+## [0.2.1] - 2026-10-27
+
+### Bug fixes
+
+- **cli:** Create the vault and socket directories on a fresh host (#7) (abfc492)
+
 ## [0.2.0] - 2026-10-27
 
 ### Features

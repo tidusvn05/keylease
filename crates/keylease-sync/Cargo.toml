@@ -8,6 +8,6 @@ rust-version.workspace = true
 
 [dependencies]
 chrono.workspace = true
-keylease-core = { path = "../keylease-core", version = "0.2.0" }
+keylease-core = { path = "../keylease-core", version = "0.2.1" }
 serde.workspace = true
 sha2.workspace = true
