@@ -119,7 +119,7 @@ public func validateTypedField(_ valueType: String, text: String) -> String? {
     }
 }
 
-// MARK: - User-defined custom fields ("add field", 1Password-style)
+// MARK: - User-defined custom fields ("add field")
 
 /// One user-managed field row in the editor — unlike template fields,
 /// label, type, concealment and value are all chosen by the user.

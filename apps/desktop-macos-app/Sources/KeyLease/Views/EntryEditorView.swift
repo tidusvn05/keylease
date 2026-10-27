@@ -25,7 +25,7 @@ private struct EditorBody: View {
 
     /// Per-template-field text state — the Dart `_templateFields` map.
     @State private var edits: [String: TemplateFieldEdit] = [:]
-    /// User-added fields (1Password-style) — hydrated from `entries_view`
+    /// User-added fields — hydrated from `entries_view`
     /// plus rows created in this session.
     @State private var customFields: [CustomFieldEdit] = []
     @State private var errors: [String: String] = [:]
@@ -230,8 +230,8 @@ private struct EditorBody: View {
 
         dynamicTemplateFields
 
-        // Free-form fields the template does not define — the 1Password/
-        // Strongbox "add field" flow. The raw JSON editor stays as the
+        // Free-form fields the template does not define — the "add field"
+        // flow. The raw JSON editor stays as the
         // fallback for daemons without `templates_list`.
         if !draft.isAgentContent, !isDeveloperTemplate, template != nil {
             customFieldsSection
@@ -547,7 +547,7 @@ private struct EditorBody: View {
         }
     }
 
-    // MARK: Custom fields (user-added, 1Password-style)
+    // MARK: Custom fields (user-added)
 
     /// Stored fields no template definition claims — everything left after
     /// reserved keys and template fields are taken out.

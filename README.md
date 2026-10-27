@@ -318,3 +318,8 @@ The native Swift client is checked on a Mac:
 cd apps/desktop-macos     && swift test     # also runs on Linux
 cd apps/desktop-macos-app && swift build && swift test
 ```
+
+## Security and license
+
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+KeyLease and LeaseGate are licensed under the [Apache License 2.0](LICENSE).

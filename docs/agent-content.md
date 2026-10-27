@@ -55,7 +55,7 @@ keylease content review kl://vault_123/item_123 --if-revision 3 \
 ## Templates and imported items
 
 `keylease templates list` exposes the built-in schemas used by the desktop and
-importers. The registry includes the current common 1Password categories plus
+importers. The registry includes the common password-manager categories plus
 Prompt, Runbook, Note, and Generic Item. The 1PUX importer maps numeric category
 IDs to these canonical kinds. KDBX entries use their explicit KeyLease kind
 when present and otherwise apply conservative login, credit-card, SSH-key, and

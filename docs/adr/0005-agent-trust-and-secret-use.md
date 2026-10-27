@@ -31,11 +31,10 @@ Concretely, in the current code:
    certificate, PostgreSQL role password) to the agent once. It is short-lived
    and narrow, but it is still disclosed.
 
-Comparable products (for example 1Password for Agents, October 2026) converge on
-the same shape: the agent authenticates with its own key, the human approves a
-specific use on their own device, and the credential is delivered into the
-destination rather than to the model. This ADR adopts that shape on top of the
-existing KeyLease boundaries, for three deployments:
+The shape this ADR adopts: the agent authenticates with its own key, the human
+approves a specific use on their own device, and the credential is delivered
+into the destination rather than to the model. It is built on the existing
+KeyLease boundaries, for three deployments:
 
 - **Personal:** an agent CLI (Claude Code, Codex, …) plus the `keylease` CLI
   plus the macOS app on one machine.

@@ -740,7 +740,7 @@ Các nhóm secret có thể hỗ trợ:
 | Runtime | Environment Bundle, Service Credential, Webhook Secret, Signing Key |
 | Khác | Document, Crypto Wallet, Wireless Router, custom user-defined kind |
 
-Các password manager hiện đại cũng đi theo hướng typed items. 1Password có Login, Document, API Credential, Database, SSH Key, Server, Crypto Wallet và nhiều loại identity; Bitwarden có Login, Card, Identity, Secure Note và SSH Key. Tuy nhiên, typed item chủ yếu là schema và UX ở tầng ứng dụng, không nhất thiết phải là một file format riêng.
+Typed item chủ yếu là schema và UX ở tầng ứng dụng, không nhất thiết phải là một file format riêng.
 
 ### Data model cần thiết kế ngay
 
