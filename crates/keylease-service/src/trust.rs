@@ -558,6 +558,22 @@ impl KeyLeaseService {
         })
     }
 
+    /// The owner's actor for the admin path: whoever unlocked this process
+    /// with the master password may do what the desktop owner may. The rule
+    /// lives only in this process's policy engine, never in the store, so the
+    /// daemon and its agents never see it.
+    pub fn admin_owner(&self) -> Result<ActorContext> {
+        let actor = self.local_human()?;
+        let vault_id = self.current_vault_id()?;
+        let mut rule = desktop_owner_rule(actor.agent_id.clone(), &vault_id);
+        rule.id = "builtin_admin_owner".into();
+        let mut engine = self.policy.write().map_err(|_| KeyLeaseError::Storage)?;
+        let mut rules = engine.rules().to_vec();
+        rules.push(rule);
+        *engine = RulePolicyEngine::new(rules);
+        Ok(actor)
+    }
+
     /// The person at the terminal who unlocked the vault with the master password.
     fn local_human(&self) -> Result<ActorContext> {
         Ok(ActorContext {

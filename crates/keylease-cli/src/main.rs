@@ -189,6 +189,8 @@ enum Command {
     },
     /// Decide agent requests at the terminal as they arrive (master password once).
     Approve(approve::ApproveArgs),
+    /// Store a secret, typed hidden, in this directory's project (master password).
+    Add(project::AddArgs),
     /// Time-boxed trusts granted from approvals.
     Trust {
         #[command(subcommand)]
@@ -807,6 +809,7 @@ async fn run() -> Result<()> {
         cli.command,
         Command::Approval { .. }
             | Command::Approve(_)
+            | Command::Add(_)
             | Command::Trust { .. }
             | Command::Client { .. }
             | Command::Grant { .. }
@@ -1003,6 +1006,7 @@ async fn run() -> Result<()> {
             }
         },
         Command::Approve(args) => approve::approve(&cli.db, args),
+        Command::Add(args) => project::add(&cli.db, args),
         Command::Projects { command } => match command {
             ProjectCommand::Init(args) => project::init(&cli.db, args),
             ProjectCommand::List => {

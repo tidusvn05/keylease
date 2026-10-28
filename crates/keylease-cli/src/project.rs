@@ -147,6 +147,93 @@ pub(crate) fn init(db: &Path, args: InitArgs) -> Result<()> {
     }))
 }
 
+#[derive(Args)]
+pub(crate) struct AddArgs {
+    /// The item's title.
+    title: String,
+    /// The item's template (`keylease templates list`).
+    #[arg(long, default_value = "core.api_credential")]
+    kind: String,
+    #[arg(long)]
+    username: Option<String>,
+    #[arg(long)]
+    url: Option<String>,
+    /// The vault project; default: the one `.keylease.json` names here.
+    #[arg(long)]
+    project: Option<String>,
+    /// The group to file it in, created if missing; default: the project's slug.
+    #[arg(long)]
+    group: Option<String>,
+}
+
+/// `keylease add`: the owner stores a secret from the terminal, typed hidden,
+/// so it never passes through an agent. Inside a project directory it is filed
+/// in that project, where the project's agents can use it with approval.
+pub(crate) fn add(db: &Path, args: AddArgs) -> Result<()> {
+    let project = match args.project {
+        Some(project) => Some(project),
+        None => std::env::current_dir()
+            .ok()
+            .and_then(|cwd| find_project_file(&cwd))
+            .map(|(_, file)| file.project),
+    };
+    let service = admin_service(db)?;
+    let owner = service.admin_owner()?;
+    if let Some(project) = &project {
+        service.ensure_project_admin(project)?;
+    }
+    let group_name = args
+        .group
+        .or_else(|| project.clone())
+        .unwrap_or_else(|| "Default".into());
+    let group = match service
+        .list_groups()?
+        .into_iter()
+        .find(|group| group.name == group_name)
+    {
+        Some(group) => group,
+        None => service.create_group(&group_name, None)?,
+    };
+    let secret = prompt("Secret (hidden): ")?;
+    if secret.trim().is_empty() {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "the secret is empty".into(),
+        });
+    }
+    let item = service.create_entry(
+        &owner,
+        NewEntryInput {
+            favorite: false,
+            group_id: group.id,
+            kind: args.kind,
+            title: args.title,
+            project_slug: project.clone(),
+            username: args.username,
+            password: Some(secret.trim().to_owned()),
+            url: args.url,
+            notes: None,
+            custom_fields: vec![],
+            sections: vec![],
+            totp: None,
+            totp_uri: None,
+        },
+        &format!("add-{}", RequestId::new().0),
+        false,
+    )?;
+    let reference = format!(
+        "kl://{}/{}/password",
+        service.current_vault_id()?.0,
+        item.id.0
+    );
+    print_json(&json!({
+        "id": item.id,
+        "title": item.title,
+        "project": project,
+        "reference": reference,
+        "use": format!("keylease run --env API_KEY={reference} -- COMMAND"),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

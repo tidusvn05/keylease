@@ -105,6 +105,7 @@ cargo install --locked keylease
 keylease vault init
 keylease service install                 # unlocks at boot from a host-sealed credential (asks for sudo)
 cd /srv/shop && keylease projects init   # identity agent_shop for every agent in this tree
+keylease add "Stripe key"                # you type the secret (hidden); filed in project shop
 ```
 
 Start Claude Code, Codex or any agent CLI anywhere in `/srv/shop`; they need no environment

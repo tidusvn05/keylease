@@ -149,6 +149,17 @@ environment variables, one trust answers for all of them, and entries they creat
 are filed in the project, so a project trust covers them. The audit log names the
 project's identity, not the tool.
 
+Store the project's secrets yourself, so they never pass through an agent:
+
+```sh
+cd /srv/shop
+keylease add "Stripe key" --username ops     # master password, then the secret, typed hidden
+# {"reference": "kl://VAULT/ITEM/password", "use": "keylease run --env API_KEY=kl://… -- COMMAND"}
+```
+
+It files the item in the directory's project (group `shop`, created if missing);
+`--kind`, `--url`, `--project` and `--group` override the defaults.
+
 To tell tools apart in approvals and the audit, give one its own identity:
 `keylease projects init --agent claude` registers `agent_claude-shop` instead. A
 tree holds one `.keylease.json`, so its other tools then use
