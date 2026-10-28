@@ -57,6 +57,13 @@ pub(crate) async fn decide(cli: &Cli, socket: &Path, args: DecideArgs) -> Result
 
 pub(crate) async fn trust_command(cli: &Cli, socket: &Path, command: TrustCommand) -> Result<()> {
     match command {
+        TrustCommand::List if headless_owner(cli) => {
+            print_json(&admin_service(&cli.db)?.list_trusts_admin()?)
+        }
+        TrustCommand::Revoke { id } if headless_owner(cli) => {
+            admin_service(&cli.db)?.revoke_trust_admin(&id)?;
+            print_json(&json!({"revoked": id}))
+        }
         TrustCommand::List => print_rpc(socket, RpcRequest::TrustsList { auth: auth(cli)? }).await,
         TrustCommand::Revoke { id } => {
             print_rpc(

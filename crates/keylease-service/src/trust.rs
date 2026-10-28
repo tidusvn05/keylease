@@ -403,15 +403,42 @@ impl KeyLeaseService {
         approve: bool,
         trust: Option<TrustDecision>,
     ) -> Result<ApprovalDecisionOutcome> {
-        let actor = ActorContext {
+        let actor = self.local_human()?;
+        self.decide_approval_as(&actor, id, approve, trust)
+    }
+
+    pub fn list_trusts_admin(&self) -> Result<Vec<TrustRecord>> {
+        self.with_vault(|_| self.store.list_trusts(Utc::now()))
+    }
+
+    pub fn revoke_trust_admin(&self, id: &str) -> Result<()> {
+        let actor = self.local_human()?;
+        self.with_vault(|vault| {
+            let resource = format!("kl://{}/trust/{id}", vault.vault_id.0);
+            let event = self.vault_audit_event(
+                &actor,
+                "trust:revoke",
+                &resource,
+                "allow",
+                "revoked",
+                vec![],
+            );
+            self.store.revoke_trust(id, &event)
+        })?;
+        let stored = self.store.load_policy_rules()?;
+        self.install_policy(stored)
+    }
+
+    /// The person at the terminal who unlocked the vault with the master password.
+    fn local_human(&self) -> Result<ActorContext> {
+        Ok(ActorContext {
             agent_id: AgentId("local-human".into()),
             workload_id: None,
             human_principal: Some("local-human".into()),
             on_behalf_of: None,
             purpose: None,
             client_session_id: self.current_vault_session_id()?,
-        };
-        self.decide_approval_as(&actor, id, approve, trust)
+        })
     }
 
     pub(crate) fn decide_approval_as(

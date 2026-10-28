@@ -997,14 +997,7 @@ async fn run() -> Result<()> {
         Command::Connection { command } => connection_command(&cli, &socket, command).await,
         Command::Lease { command } => lease_command(&cli, &socket, command).await,
         Command::Approval { command } => match command {
-            // Without an agent or desktop credential (a headless host), list with the
-            // master password instead, like `approve` and `deny`. `agent_desktop` is
-            // the owner, so naming it without its token file means the same.
-            ApprovalCommand::List { limit }
-                if cli.agent_id.as_deref().is_none_or(|id| id == "agent_desktop")
-                    && cli.client_token_file.is_none()
-                    && !default_client_token().exists() =>
-            {
+            ApprovalCommand::List { limit } if headless_owner(&cli) => {
                 print_json(&admin_service(&cli.db)?.list_pending_approvals_admin(limit)?)
             }
             ApprovalCommand::List { limit } => {
@@ -2933,6 +2926,12 @@ fn valid_client_name(name: &str) -> bool {
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+/// Without the desktop credential (a headless host), owner commands that would go
+/// through the daemon use the master password instead, like `approval approve`. A
+/// KEYLEASE_AGENT_ID left in the shell does not matter: agents may not run them.
+fn headless_owner(cli: &Cli) -> bool {
+    cli.client_token_file.is_none() && !default_client_token().exists()
 }
 fn default_client_token() -> PathBuf {
     managed_home()

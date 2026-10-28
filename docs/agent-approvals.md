@@ -138,8 +138,14 @@ Approvals queued by a baseline agent are decided with the admin path, which
 asks for the master password:
 
 ```sh
-keylease --db /var/lib/keylease/vault.sqlite approval approve APPROVAL_ID
+keylease approval list
+keylease approval approve APPROVAL_ID
+keylease trust list
+keylease trust revoke TRUST_ID
 ```
+
+Without `~/.keylease/desktop.token`, all four use the master password, even with
+`KEYLEASE_AGENT_ID` still exported in the shell (agents may not run them).
 
 `approval approve` also takes `--trust 30m|1h|… --scope resource|item`, and
 `approval deny ID` refuses a request. The running daemon notices admin
