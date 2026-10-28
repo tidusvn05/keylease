@@ -998,9 +998,10 @@ async fn run() -> Result<()> {
         Command::Lease { command } => lease_command(&cli, &socket, command).await,
         Command::Approval { command } => match command {
             // Without an agent or desktop credential (a headless host), list with the
-            // master password instead, like `approve` and `deny`.
+            // master password instead, like `approve` and `deny`. `agent_desktop` is
+            // the owner, so naming it without its token file means the same.
             ApprovalCommand::List { limit }
-                if cli.agent_id.is_none()
+                if cli.agent_id.as_deref().is_none_or(|id| id == "agent_desktop")
                     && cli.client_token_file.is_none()
                     && !default_client_token().exists() =>
             {
