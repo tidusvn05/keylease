@@ -125,19 +125,27 @@ Step 4 of the ADR. On a host with no desktop app, `keylease serve` is the vault
 node and agents on the same host use it over the Unix socket, exactly as on a
 Mac.
 
-Register agents with the baseline, or with narrow `grant create --effect allow`
-rules for unattended automation:
+Register agents; they get the baseline by default (`--no-baseline` and narrow
+`grant create --effect allow` rules for unattended automation). The token goes to
+`~/.keylease/clients/agent_NAME.token`, which the CLI finds from `KEYLEASE_AGENT_ID` alone:
 
 ```sh
-keylease --db /var/lib/keylease/vault.sqlite client register deployer --baseline
+keylease client register deployer
+export KEYLEASE_AGENT_ID=agent_deployer
 ```
 
 Approvals queued by a baseline agent are decided with the admin path, which
 asks for the master password:
 
 ```sh
-keylease --db /var/lib/keylease/vault.sqlite approval approve APPROVAL_ID
+keylease approval list
+keylease approval approve APPROVAL_ID
+keylease trust list
+keylease trust revoke TRUST_ID
 ```
+
+Without `~/.keylease/desktop.token`, all four use the master password, even with
+`KEYLEASE_AGENT_ID` still exported in the shell (agents may not run them).
 
 `approval approve` also takes `--trust 30m|1h|… --scope resource|item`, and
 `approval deny ID` refuses a request. The running daemon notices admin
@@ -152,32 +160,41 @@ next request, so it never needs a restart for them.
 | systemd credential | `LoadCredentialEncrypted=keylease-master-password:…` | disk theft only; root on the running host wins |
 | Password file | `serve --password-file /path` (mode 0600, not a symlink) | little; prefer the systemd credential |
 
-With systemd, seal the password to the host (and TPM where present) once:
+On Linux with systemd, one command sets this up, as the user that owns the vault and runs
+the agents (not root):
 
 ```sh
-systemd-ask-password -n "Master password:" \
-  | sudo systemd-creds encrypt --name=keylease-master-password - \
-      /etc/credstore.encrypted/keylease-master-password
+keylease service install                 # --idle-lock 1d by default; --dry-run shows the unit
+keylease service status
+keylease service uninstall               # removes the unit and the credential, keeps the vault
 ```
 
-and reference it from the unit; `keylease serve` picks it up from
-`$CREDENTIALS_DIRECTORY` without any flag:
+It checks the master password against the vault, seals it to the host (and TPM where
+present) with `sudo systemd-creds encrypt` into
+`/etc/credstore.encrypted/keylease-master-password`, writes
+`/etc/systemd/system/keylease.service` with `User=` set to you, and starts it. Only those steps
+use `sudo`; the password reaches `systemd-creds` on stdin. The unit it writes:
 
 ```ini
 [Service]
 # The daemon accepts only its own Unix user: the user the agents run as.
 User=deployer
-LoadCredentialEncrypted=keylease-master-password
-ExecStart=/usr/local/bin/keylease --db /var/lib/keylease/vault.sqlite \
-  --socket /run/keylease/keylease.sock serve
-RuntimeDirectory=keylease
-RuntimeDirectoryMode=0700
+LoadCredentialEncrypted=keylease-master-password:/etc/credstore.encrypted/keylease-master-password
+ExecStart=/home/deployer/.cargo/bin/keylease --db /home/deployer/.keylease/keylease.sqlite \
+  --socket /home/deployer/.keylease/run/keylease.sock serve --session-ttl-seconds 86400
+Restart=on-failure
+NoNewPrivileges=yes
+ProtectSystem=full
 ```
 
-The vault locks after `--session-ttl-seconds` of inactivity (8 hours by
-default). An idle auto-unlocked daemon does not unlock itself again; restart
-the unit (`Restart=on-failure` plus a timer, or a longer TTL) if it must stay
-available.
+`keylease serve` picks the credential up from `$CREDENTIALS_DIRECTORY` without any flag. A
+systemd *user* service (`systemctl --user`) cannot decrypt a host-sealed credential, so the
+service is a system unit. Use `--name work` for a second vault (`work.service`).
+
+The vault locks after `--session-ttl-seconds` of inactivity (8 hours for `serve`, the
+`--idle-lock` of `service install`, 1 day by default). An idle auto-unlocked daemon does not
+unlock itself again; `sudo systemctl restart keylease` unlocks it, or install with a longer
+`--idle-lock`.
 
 An auto-unlocked host trusts itself: anything that becomes root while it runs
 can use the vault. Keep such a vault separate from your personal one and give

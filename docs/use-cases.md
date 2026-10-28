@@ -94,15 +94,21 @@ vault lives there too. Mode A of ADR 0005.
 
    Or share items from your laptop through a cloud ([cloud-sharing.md](cloud-sharing.md)).
 
-3. Run the daemon under systemd and unlock it with a host-sealed credential
-   ([unit and options](agent-approvals.md#unlocking-after-a-reboot)).
-4. Register the agent with the approval baseline and store its token:
+3. Run the daemon under systemd, unlocked at boot with a host-sealed credential
+   ([details](agent-approvals.md#unlocking-after-a-reboot)):
 
    ```sh
-   keylease client register claude --baseline
-   # save "client_token" to ~/.keylease/claude.token, chmod 600
+   keylease service install        # master password, then sudo
+   keylease service status
+   ```
+
+4. Register the agent. It gets the approval baseline, and its token goes
+   straight into `~/.keylease/clients/agent_claude.token` (mode 0600), where
+   the CLI finds it from the agent id alone:
+
+   ```sh
+   keylease client register claude
    export KEYLEASE_AGENT_ID=agent_claude
-   export KEYLEASE_CLIENT_TOKEN_FILE=~/.keylease/claude.token
    ```
 
    With `--db` or `--socket` elsewhere than `~/.keylease`, pass the same
@@ -112,6 +118,7 @@ vault lives there too. Mode A of ADR 0005.
    are decided over SSH with the master password:
 
    ```sh
+   keylease approval list                     # pending requests (master password)
    keylease approval approve APPROVAL_ID
    keylease approval approve APPROVAL_ID --trust 1h
    keylease approval deny APPROVAL_ID
@@ -255,7 +262,7 @@ For CI or cron jobs with no human to approve, use an explicit allow grant
 instead of approvals, narrowed to the exact resource and with a short lease:
 
 ```sh
-keylease --db /var/lib/keylease/vault.sqlite client register ci
+keylease --db /var/lib/keylease/vault.sqlite client register ci --no-baseline
 keylease --db /var/lib/keylease/vault.sqlite grant create \
   --client agent_ci \
   --resource kl://VAULT_ID/ITEM_ID \

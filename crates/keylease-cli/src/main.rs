@@ -16,7 +16,7 @@ use std::{
     fs,
     io::{self, Read, Write},
     os::unix::fs::MetadataExt,
-    os::unix::fs::{DirBuilderExt, FileTypeExt, PermissionsExt},
+    os::unix::fs::{DirBuilderExt, FileTypeExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -33,6 +33,7 @@ mod db_proxy;
 mod gateway;
 mod mcp;
 mod run;
+mod service;
 mod ssh_agent;
 mod trust;
 
@@ -114,6 +115,12 @@ enum Command {
     Cloud {
         #[command(subcommand)]
         command: cloud::CloudCommand,
+    },
+    /// Run the daemon as a systemd service that unlocks itself at boot (Linux; master password,
+    /// then sudo).
+    Service {
+        #[command(subcommand)]
+        command: service::ServiceCommand,
     },
     /// Connect web assistants to the MCP gateway (admin, master password).
     Gateway {
@@ -372,10 +379,19 @@ enum VaultCommand {
 enum ClientCommand {
     Register {
         name: String,
-        /// Install the enrolled-agent baseline: redacted reads are allowed,
-        /// secret reads and writes queue an approval (ADR 0005).
+        /// Register the agent without the enrolled-agent baseline (redacted reads allowed,
+        /// secret reads and writes queue an approval; ADR 0005): it can do nothing until you
+        /// add grants.
         #[arg(long)]
+        no_baseline: bool,
+        /// The baseline is the default; kept so older scripts still work.
+        #[arg(long, hide = true, conflicts_with = "no_baseline")]
         baseline: bool,
+        /// Where to write the token (mode 0600, never overwritten); `-` prints it instead.
+        /// Default: ~/.keylease/clients/agent_NAME.token, which the CLI reads for
+        /// KEYLEASE_AGENT_ID=agent_NAME without KEYLEASE_CLIENT_TOKEN_FILE.
+        #[arg(long)]
+        token_file: Option<PathBuf>,
     },
     List,
     Revoke {
@@ -724,7 +740,8 @@ enum ApprovalCommand {
     },
     /// Deny directly against the database (admin, master password).
     Deny { id: String },
-    /// List pending approvals through the running daemon.
+    /// List pending approvals through the running daemon; on a host without the desktop
+    /// credential, directly against the database (master password).
     List {
         #[arg(long, default_value_t = 50)]
         limit: u32,
@@ -818,6 +835,7 @@ async fn run() -> Result<()> {
         }
         Command::Gateway { command } => gateway::gateway_command(&cli.db, command),
         Command::Cloud { command } => cloud::cloud_command(&cli, &socket, command).await,
+        Command::Service { command } => service::service_command(&cli.db, &socket, command).await,
         Command::Status => print_rpc(&socket, RpcRequest::Status).await,
         Command::Unlock {
             session_ttl_seconds,
@@ -979,6 +997,9 @@ async fn run() -> Result<()> {
         Command::Connection { command } => connection_command(&cli, &socket, command).await,
         Command::Lease { command } => lease_command(&cli, &socket, command).await,
         Command::Approval { command } => match command {
+            ApprovalCommand::List { limit } if headless_owner(&cli) => {
+                print_json(&admin_service(&cli.db)?.list_pending_approvals_admin(limit)?)
+            }
             ApprovalCommand::List { limit } => {
                 print_rpc(
                     &socket,
@@ -1690,19 +1711,58 @@ fn vault_command(db: &Path, command: VaultCommand) -> Result<()> {
 fn client_command(db: &Path, command: ClientCommand) -> Result<()> {
     let service = admin_service(db)?;
     match command {
-        ClientCommand::Register { name, baseline } => {
+        ClientCommand::Register {
+            name,
+            no_baseline,
+            baseline: _,
+            token_file,
+        } => {
+            let token_file = match token_file {
+                Some(path) if path == Path::new("-") => None,
+                Some(path) => Some(path),
+                None if valid_client_name(&name) => Some(trust::agent_token_path(&name)?),
+                None => None,
+            };
+            // An existing token file is never replaced.
+            if let Some(path) = &token_file
+                && fs::symlink_metadata(path).is_ok()
+            {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: format!(
+                        "{} already exists: this agent is registered and that is its token. \
+                         To start over, revoke it (`keylease client revoke agent_NAME`) and \
+                         register another name",
+                        path.display()
+                    ),
+                });
+            }
             let (agent_id, token) = service.register_client(&name)?;
-            let baseline_rule_ids = if baseline {
+            let baseline_rule_ids = if no_baseline {
+                None
+            } else {
                 let vault_id = service.current_vault_id()?;
                 Some(service.install_agent_baseline(&agent_id, &vault_id)?)
-            } else {
-                None
             };
+            let Some(path) = token_file else {
+                return print_json(&json!({
+                    "agent_id":agent_id,
+                    "client_token":token,
+                    "baseline_rule_ids":baseline_rule_ids,
+                    "warning":"store this once in a mode-0600 file"
+                }));
+            };
+            write_new_private_file(&path, token.as_bytes())?;
+            let default = default_agent_token(&agent_id.0).is_some_and(|d| d == path);
+            let path = fs::canonicalize(&path).unwrap_or(path);
             print_json(&json!({
                 "agent_id":agent_id,
-                "client_token":token,
+                "token_file":path,
                 "baseline_rule_ids":baseline_rule_ids,
-                "warning":"store this once in a mode-0600 file"
+                "env": if default {
+                    json!({"KEYLEASE_AGENT_ID": agent_id})
+                } else {
+                    json!({"KEYLEASE_AGENT_ID": agent_id, "KEYLEASE_CLIENT_TOKEN_FILE": path})
+                },
             }))
         }
         ClientCommand::List => print_json(&service.list_clients()?),
@@ -2445,6 +2505,13 @@ fn systemd_password_credential() -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+/// systemd gives a system service its credentials mode 0440 in a directory only the service can
+/// read, so the group bit there does not expose them.
+fn is_systemd_credential(path: &Path) -> bool {
+    std::env::var_os("CREDENTIALS_DIRECTORY")
+        .is_some_and(|directory| path.parent() == Some(Path::new(&directory)))
+}
+
 async fn serve(
     db: &Path,
     socket: &Path,
@@ -2583,10 +2650,19 @@ fn auth(cli: &Cli) -> Result<RpcAuth> {
         .agent_id
         .clone()
         .unwrap_or_else(|| "agent_desktop".into());
-    let path = cli
-        .client_token_file
-        .clone()
-        .unwrap_or_else(default_client_token);
+    let path = match &cli.client_token_file {
+        Some(path) => path.clone(),
+        None => default_agent_token(&agent).unwrap_or_else(default_client_token),
+    };
+    if cli.client_token_file.is_none() && !path.exists() {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: format!(
+                "no token for {agent} at {}; register it (`keylease client register NAME`) or set \
+                 KEYLEASE_CLIENT_TOKEN_FILE",
+                path.display()
+            ),
+        });
+    }
     let token = read_secret_file(&path, "client token")?;
     Ok(RpcAuth {
         agent_id: AgentId(agent),
@@ -2630,7 +2706,7 @@ fn read_secret_file(path: &Path, label: &str) -> Result<Zeroizing<String>> {
             reason: format!("{label} path must be a regular non-symlink file"),
         });
     }
-    if metadata.permissions().mode() & 0o077 != 0 {
+    if metadata.permissions().mode() & 0o077 != 0 && !is_systemd_credential(path) {
         return Err(KeyLeaseError::Denied {
             reason: format!("{label} file must not be accessible by group or others"),
         });
@@ -2803,6 +2879,20 @@ fn create_private_dir(path: &Path) -> Result<()> {
             reason: format!("cannot create the directory {}", path.display()),
         })
 }
+/// Writes a new mode-0600 file; refuses to replace anything at `path`.
+fn write_new_private_file(path: &Path, contents: &[u8]) -> Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|_| KeyLeaseError::InvalidRequest {
+            reason: format!("cannot create {}", path.display()),
+        })?;
+    file.write_all(contents)
+        .and_then(|()| file.sync_all())
+        .map_err(|_| KeyLeaseError::Storage)
+}
 fn default_socket() -> PathBuf {
     managed_home()
         .map(|home| home.join("run/keylease.sock"))
@@ -2817,6 +2907,31 @@ fn default_database() -> PathBuf {
     managed_home()
         .and_then(|home| desktop_paths(Some(home)).ok().map(|paths| paths.database))
         .unwrap_or_else(|| PathBuf::from("keylease.sqlite"))
+}
+/// `client register` and `agent enroll` keep an agent's token at
+/// ~/.keylease/clients/AGENT_ID.token; used when no token file is given.
+fn default_agent_token(agent_id: &str) -> Option<PathBuf> {
+    let name = agent_id.strip_prefix("agent_")?;
+    if agent_id == "agent_desktop" || !valid_client_name(name) {
+        return None;
+    }
+    Some(
+        managed_home()?
+            .join("clients")
+            .join(format!("{agent_id}.token")),
+    )
+}
+fn valid_client_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+/// Without the desktop credential (a headless host), owner commands that would go
+/// through the daemon use the master password instead, like `approval approve`. A
+/// KEYLEASE_AGENT_ID left in the shell does not matter: agents may not run them.
+fn headless_owner(cli: &Cli) -> bool {
+    cli.client_token_file.is_none() && !default_client_token().exists()
 }
 fn default_client_token() -> PathBuf {
     managed_home()
@@ -2848,6 +2963,15 @@ mod tests {
     use super::*;
     // These exercise dispatch directly, without the socket framing above.
     use keylease_rpc::{RpcCapabilities, handle_rpc};
+
+    #[test]
+    fn an_agent_token_defaults_to_its_file_in_clients() {
+        let path = default_agent_token("agent_claude").unwrap();
+        assert!(path.ends_with(".keylease/clients/agent_claude.token"));
+        assert!(default_agent_token("agent_desktop").is_none());
+        assert!(default_agent_token("agent_../x").is_none());
+        assert!(default_agent_token("claude").is_none());
+    }
 
     #[test]
     fn a_missing_vault_or_socket_directory_is_created_private() {
