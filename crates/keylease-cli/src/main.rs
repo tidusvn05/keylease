@@ -2907,7 +2907,21 @@ async fn rpc_once(socket: &Path, encoded: &[u8]) -> Result<Value> {
             .get("error")
             .cloned()
             .ok_or(KeyLeaseError::Storage)?;
-        Err(serde_json::from_value(error).map_err(|_| KeyLeaseError::Storage)?)
+        let error: KeyLeaseError =
+            serde_json::from_value(error).map_err(|_| KeyLeaseError::Storage)?;
+        Err(match error {
+            // This CLI builds every request itself, so the service failing to
+            // parse one means it runs an older build that lacks the command.
+            KeyLeaseError::InvalidRequest { reason } if reason == "invalid JSON RPC request" => {
+                KeyLeaseError::InvalidRequest {
+                    reason: "the KeyLease service does not know this request: it runs an older \
+                             build than this CLI. Restart it (`sudo systemctl restart keylease`, \
+                             or restart `keylease serve`) and retry"
+                        .into(),
+                }
+            }
+            error => error,
+        })
     }
 }
 fn print_json<T: Serialize>(value: &T) -> Result<()> {

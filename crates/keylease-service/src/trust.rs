@@ -681,21 +681,31 @@ impl KeyLeaseService {
         if field == "password" {
             patch.password = Some(value.into());
         } else {
-            let mut existing = item
-                .fields
-                .iter()
-                .find(|existing| existing.key == field)
-                .cloned()
-                .ok_or_else(|| {
-                    invalid("the item has no such field; ask for `password` or an existing field")
-                })?;
-            existing.value =
-                if existing.protected || matches!(existing.value, FieldValue::Concealed(_)) {
-                    FieldValue::Concealed(value.into())
-                } else {
-                    FieldValue::Text(value.into())
-                };
-            patch.field_updates = vec![existing];
+            let updated = match item.fields.iter().find(|existing| existing.key == field) {
+                Some(existing) => {
+                    let mut existing = existing.clone();
+                    existing.value = if existing.protected
+                        || matches!(existing.value, FieldValue::Concealed(_))
+                    {
+                        FieldValue::Concealed(value.into())
+                    } else {
+                        FieldValue::Text(value.into())
+                    };
+                    existing
+                }
+                // An item created without its secret (an API credential's
+                // `credential`) has no such field yet: add it, hidden.
+                None => ItemField {
+                    id: FieldId::new(),
+                    key: field.into(),
+                    label: field.into(),
+                    value: FieldValue::Concealed(value.into()),
+                    sensitivity: Sensitivity::HighlySensitive,
+                    protected: true,
+                    semantic_role: None,
+                },
+            };
+            patch.field_updates = vec![updated];
         }
         self.update_entry(
             &owner,
@@ -1353,6 +1363,18 @@ mod tests {
                 .reveal_field_authorized(&f.owner, &item, "password")
                 .unwrap(),
             "typed-by-owner-1234"
+        );
+        // A field the item does not have yet is added, hidden.
+        let id = approval_id(
+            f.service
+                .request_secret_authorized(&f.agent, &item, "credential"),
+        );
+        f.service.supply_secret_admin(&id, "api-key-5678").unwrap();
+        assert_eq!(
+            f.service
+                .reveal_field_authorized(&f.owner, &item, "credential")
+                .unwrap(),
+            "api-key-5678"
         );
         // An approval without the value does not pass as filled.
         let id = approval_id(

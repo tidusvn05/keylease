@@ -30,8 +30,9 @@ from this directory: it uses this project's identity by itself.
 - Add: create the item without its secret (`keylease groups list`, `keylease templates list`):
   `echo '{{\"group_id\":\"...\",\"kind\":\"core.api_credential\",\"title\":\"...\"}}' |
   keylease entries create --input-json - --idempotency-key KEY`, then
-  `keylease entries ask-secret ITEM_ID --field password`: the user types the value into
-  KeyLease and the command returns once it is stored.
+  `keylease entries ask-secret ITEM_ID --field FIELD` (`password` for a login, `credential`
+  for an API credential): the user types the value into KeyLease and the command returns
+  once it is stored.
 - Change or remove: `keylease entries update ID --if-revision N --idempotency-key KEY
   --patch-json -`, `keylease entries delete ID --if-revision N --idempotency-key KEY`, where N
   is `metadata.revision` from `entries view`. Never put a secret in a patch; replace one with
