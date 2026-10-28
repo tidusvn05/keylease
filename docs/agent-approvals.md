@@ -105,10 +105,18 @@ A plain approval authorizes **one** use. `--trust` turns it into a window:
 
 `entry:read_secret` is R4, so a secret reveal is always approved per use.
 `entry:read_username` is R1, `ssh:sign` and ordinary entry writes are R2,
-protected-field/TOTP updates and deletes are R3.
+protected-field/TOTP updates, deletes and `entry:inject_secret` (`keylease run`) are R3.
 
-`--scope resource` (default) covers the approved action on that resource;
-`--scope item` covers the action on every field of the item.
+| Scope | Covers |
+|---|---|
+| `resource` (default) | the approved action on that resource |
+| `item` | the approved action on every field of the item |
+| `project` | the approved action and, on every item of the request's vault project: **every action up to R3** (create, update, move, delete, protected fields, `run`, SSH, DB) for 1h or less; every action up to R2 for longer, at most 1d |
+
+A project trust is the "let it work on this project" answer: with a one-hour
+project trust an agent can add, change, delete and use the project's items
+without asking again. It never covers a reveal (an agent reading a secret), a
+value request, or another project.
 
 ```sh
 keylease trust list
@@ -125,6 +133,63 @@ Step 4 of the ADR. On a host with no desktop app, `keylease serve` is the vault
 node and agents on the same host use it over the Unix socket, exactly as on a
 Mac.
 
+### One identity per project
+
+On a server where agents work on several projects, give each working tree one
+identity:
+
+```sh
+cd /srv/shop
+keylease projects init
+```
+
+It creates the vault project `shop` (from the directory name, or `--project`),
+registers `agent_shop` with the baseline, and writes `.keylease.json`
+(`{"agent": "agent_shop", "project": "shop"}`, no token). Every agent CLI started
+anywhere inside `/srv/shop` (Claude Code, Codex…) then uses that identity with no
+environment variables, one trust answers for all of them, and entries they create
+are filed in the project, so a project trust covers them. The audit log names the
+project's identity, not the tool.
+
+Store the project's secrets yourself, so they never pass through an agent:
+
+```sh
+cd /srv/shop
+keylease add "Stripe key" --username ops     # master password, then the secret, typed hidden
+# {"reference": "kl://VAULT/ITEM/password", "use": "keylease run --env API_KEY=kl://… -- COMMAND"}
+```
+
+It files the item in the directory's project (group `shop`, created if missing);
+`--kind`, `--url`, `--project` and `--group` override the defaults.
+
+`projects init` also adds a KeyLease section to the agents' instructions, telling
+them how to find, use, add, change and remove secrets without seeing them:
+
+```sh
+keylease projects instructions          # add or update it (init does this)
+keylease projects instructions --check  # exit 1 if missing or outdated
+keylease projects instructions --remove
+```
+
+It goes into one file. If `CLAUDE.md` imports `AGENTS.md` (`@AGENTS.md`), or
+`AGENTS.md` points to `CLAUDE.md`, only the referenced file gets it; with neither
+file, it writes `AGENTS.md` and a one-line `CLAUDE.md` (`@AGENTS.md`) for Claude Code;
+two files that do not reference each other both get it. The section sits between
+`<!-- keylease:begin … -->` and `<!-- keylease:end -->`: keylease replaces only that
+text, and a copy left in the other file is removed.
+
+To tell tools apart in approvals and the audit, give one its own identity:
+`keylease projects init --agent claude` registers `agent_claude-shop` instead. A
+tree holds one `.keylease.json`, so its other tools then use
+`KEYLEASE_AGENT_ID` to pick their identity.
+Owner commands (`approve`, `approval`, `trust`, `client`…) ignore the file.
+
+The identities share one Unix user, so an agent could read another's token file:
+this separates projects for an agent that follows its instructions, not against
+one that does not. A file can never select the owner (`agent_desktop`).
+
+### Registering by hand
+
 Register agents; they get the baseline by default (`--no-baseline` and narrow
 `grant create --effect allow` rules for unattended automation). The token goes to
 `~/.keylease/clients/agent_NAME.token`, which the CLI finds from `KEYLEASE_AGENT_ID` alone:
@@ -135,11 +200,36 @@ export KEYLEASE_AGENT_ID=agent_deployer
 ```
 
 Approvals queued by a baseline agent are decided with the admin path, which
-asks for the master password:
+asks for the master password. The easy way is to keep this running in a terminal
+while the agent works:
+
+```sh
+keylease approve
+```
+```
+claude-shop wants entry:create on "Shop DB" in shop  [R2]
+  purpose (from the agent): add the staging database
+  [Enter] trust everyday work in project shop for 1h  [o] once  [d] deny  [s] skip  [q] quit:
+  ✓ trusted until 15:42
+Waiting for agent requests… (Ctrl-C to stop)
+```
+
+It asks for the password once, shows each request as it arrives and suggests the
+widest one-hour trust the request allows (its project, else its item); a reveal is
+only ever approved once.
+
+When an agent needs a secret it does not have, it creates the item without the
+value and runs `keylease entries ask-secret ITEM_ID`. `keylease approve` then
+shows `wants entry:supply_secret` and Enter asks you to type the value, hidden; it
+goes from your terminal into the vault and the agent's command returns with
+`"filled": true`, never the value. (The macOS app does not take values yet:
+approving such a request there leaves the field empty and the agent is told so.)
+
+For scripts, or another duration:
 
 ```sh
 keylease approval list
-keylease approval approve APPROVAL_ID
+keylease approval approve APPROVAL_ID [--trust 30m|1h|… --scope resource|item|project]
 keylease trust list
 keylease trust revoke TRUST_ID
 ```
@@ -147,7 +237,7 @@ keylease trust revoke TRUST_ID
 Without `~/.keylease/desktop.token`, all four use the master password, even with
 `KEYLEASE_AGENT_ID` still exported in the shell (agents may not run them).
 
-`approval approve` also takes `--trust 30m|1h|… --scope resource|item`, and
+`approval approve` also takes `--trust 30m|1h|… --scope resource|item|project`, and
 `approval deny ID` refuses a request. The running daemon notices admin
 changes made from another process (decisions, grants, revocations) on its
 next request, so it never needs a restart for them.

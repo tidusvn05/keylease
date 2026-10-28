@@ -44,7 +44,12 @@ const BASELINE_APPROVAL_ACTIONS: &[&str] = &[
     "group:update",
     "ssh:sign",
     "db:connect",
+    "entry:supply_secret",
 ];
+
+/// An agent asking the owner to type a value into a field. Its approval is
+/// answered by the owner entering the value, so it is never trusted.
+pub(crate) const SUPPLY_SECRET_ACTION: &str = "entry:supply_secret";
 
 /// Risk of a vault command, which caps how long it may be trusted.
 pub(crate) fn vault_action_risk(action: &str) -> RiskTier {
@@ -58,9 +63,14 @@ pub(crate) fn vault_action_risk(action: &str) -> RiskTier {
         | "entry:move"
         | "ssh:sign"
         | "db:connect" => RiskTier::R2,
-        "entry:update_protected_fields" | "entry:update_totp" | "entry:delete" | "group:delete" => {
-            RiskTier::R3
-        }
+        // `keylease run` puts a secret in a child process and scrubs it from
+        // the output, so the agent never reads it: high impact, but trustable
+        // for up to an hour, unlike a reveal.
+        "entry:update_protected_fields"
+        | "entry:update_totp"
+        | "entry:delete"
+        | "group:delete"
+        | "entry:inject_secret" => RiskTier::R3,
         // Disclosing a secret to an agent is the tier that ADR 0005 never lets
         // an approver trust for a window. Unknown actions are treated alike.
         _ => RiskTier::R4,
@@ -143,6 +153,78 @@ fn item_prefix(resource: &str) -> Option<String> {
     Some(format!("kl://{vault}/{item}"))
 }
 
+fn risk_rank(risk: &RiskTier) -> u8 {
+    match risk {
+        RiskTier::R0 => 0,
+        RiskTier::R1 => 1,
+        RiskTier::R2 => 2,
+        RiskTier::R3 => 3,
+        RiskTier::R4 => 4,
+    }
+}
+
+/// Everyday actions: what a project trust longer than an hour covers besides
+/// the approved one.
+const PROJECT_TRUST_MAX_RISK: RiskTier = RiskTier::R2;
+
+/// The actions a project trust for `action` covers: the approved action and
+/// every action an agent may request up to R3 (deletes, protected fields,
+/// `run`) for an hour or less, up to R2 for longer. Never a reveal, and never
+/// a request for the owner to type a value.
+pub(crate) fn project_trust_actions(action: &str, duration: TrustDuration) -> Vec<String> {
+    let ceiling = if duration.seconds() <= TrustDuration::Hour1.seconds() {
+        RiskTier::R3
+    } else {
+        PROJECT_TRUST_MAX_RISK
+    };
+    let mut actions = vec![action.to_owned()];
+    actions.extend(
+        BASELINE_APPROVAL_ACTIONS
+            .iter()
+            .filter(|candidate| **candidate != action)
+            .filter(|candidate| risk_rank(&vault_action_risk(candidate)) <= risk_rank(&ceiling))
+            .map(|candidate| (*candidate).to_owned()),
+    );
+    actions
+}
+
+/// `kl://<vault>/project/<project>`: the prefix a project trust's rule matches.
+fn project_prefix(vault_id: &VaultId, project: &ProjectId) -> String {
+    format!("kl://{}/project/{}", vault_id.0, project.0)
+}
+
+/// A vault resource seen through its project, which only project trusts match:
+/// `kl://V/item_X/field` becomes `kl://V/project/P/item_X/field`.
+pub(crate) fn project_alias(vault_id: &VaultId, project: &ProjectId, resource: &str) -> String {
+    let vault_root = format!("kl://{}", vault_id.0);
+    let tail = resource.strip_prefix(&vault_root).unwrap_or_default();
+    format!("{}{tail}", project_prefix(vault_id, project))
+}
+
+/// Standing rules from the store, with every agent baseline brought up to
+/// this version's action lists. A baseline is stored when an agent registers;
+/// an agent registered before an action existed must still be able to ask for it.
+pub(crate) fn standing_rules(store: &NativeStore, now: DateTime<Utc>) -> Result<Vec<PolicyRule>> {
+    let mut rules = store.load_standing_rules(now)?;
+    for rule in &mut rules {
+        let actions = if rule
+            .id
+            .starts_with(&format!("{BASELINE_RULE_PREFIX}allow_"))
+        {
+            BASELINE_ALLOW_ACTIONS
+        } else if rule
+            .id
+            .starts_with(&format!("{BASELINE_RULE_PREFIX}approval_"))
+        {
+            BASELINE_APPROVAL_ACTIONS
+        } else {
+            continue;
+        };
+        rule.actions = actions.iter().map(|action| (*action).to_owned()).collect();
+    }
+    Ok(rules)
+}
+
 /// The two rules every enrolled agent starts with.
 pub(crate) fn agent_baseline_rules(agent_id: &AgentId, vault_id: &VaultId) -> Vec<PolicyRule> {
     let rule = |suffix: &str, effect: PolicyEffect, actions: &[&str]| PolicyRule {
@@ -192,7 +274,7 @@ impl KeyLeaseService {
     /// rules already active, so a policy change made inside the daemon never
     /// drops the authority of the unlocked owner.
     pub(crate) fn install_policy(&self, mut rules: Vec<PolicyRule>) -> Result<()> {
-        rules.extend(self.store.load_standing_rules(Utc::now())?);
+        rules.extend(standing_rules(&self.store, Utc::now())?);
         let mut engine = self.policy.write().map_err(|_| KeyLeaseError::Storage)?;
         rules.extend(
             engine
@@ -248,6 +330,36 @@ impl KeyLeaseService {
         Ok(())
     }
 
+    /// The vault project a vault command touches: its item's project, or for a
+    /// create, the project named in its arguments.
+    pub(crate) fn resource_project(
+        &self,
+        vault: &UnlockedVault,
+        resource: &str,
+        arguments: &Value,
+    ) -> Result<Option<ProjectId>> {
+        let Some(rest) = resource.strip_prefix(&format!("kl://{}/", vault.vault_id.0)) else {
+            return Ok(None);
+        };
+        let first = rest.split('/').next().unwrap_or_default();
+        if first.starts_with("item_") {
+            return Ok(self
+                .store
+                .get_item(vault, &ItemId(first.into()))
+                .ok()
+                .and_then(|item| item.project_id));
+        }
+        let Some(slug) = arguments.get("project_slug").and_then(Value::as_str) else {
+            return Ok(None);
+        };
+        Ok(self
+            .store
+            .list_projects(vault)?
+            .into_iter()
+            .find(|project| project.slug == slug)
+            .map(|project| project.id))
+    }
+
     /// Queues or consumes an approval for a vault command.
     ///
     /// The first call queues a pending approval and returns
@@ -262,6 +374,7 @@ impl KeyLeaseService {
         policy_version: u64,
         request_digest_hex: &str,
         risk: RiskTier,
+        project: Option<ProjectId>,
     ) -> Result<()> {
         if self.store.kill_switch_enabled()? {
             self.audit_vault(
@@ -342,6 +455,7 @@ impl KeyLeaseService {
             )),
             risk: Some(risk),
             purpose: actor.purpose.clone(),
+            project_id: project,
         };
         let mut event = self.vault_audit_event(
             actor,
@@ -374,6 +488,7 @@ impl KeyLeaseService {
         }
         self.with_vault(|vault| {
             self.authorize_vault(
+                vault,
                 actor,
                 "approval:decide",
                 &format!("kl://{}/approval/{id}", vault.vault_id.0),
@@ -427,6 +542,181 @@ impl KeyLeaseService {
         })?;
         let stored = self.store.load_policy_rules()?;
         self.install_policy(stored)
+    }
+
+    /// The project `slug`, created first if the vault has none by that slug
+    /// (admin path, master password).
+    pub fn ensure_project_admin(&self, slug: &str) -> Result<VaultProject> {
+        let existing = self.with_vault(|vault| {
+            Ok(self
+                .store
+                .list_projects(vault)?
+                .into_iter()
+                .find(|project| project.slug == slug))
+        })?;
+        match existing {
+            Some(project) => Ok(project),
+            None => self.create_project_agent(
+                &self.local_human()?,
+                slug,
+                None,
+                &format!("project-init-{slug}"),
+            ),
+        }
+    }
+
+    /// What an approver is shown for a pending approval: the item's title and
+    /// the project's slug, when the request names them (admin path).
+    pub fn approval_target_admin(
+        &self,
+        approval: &ApprovalRecord,
+    ) -> Result<(Option<String>, Option<String>)> {
+        self.with_vault(|vault| {
+            let item = approval
+                .resource
+                .as_deref()
+                .and_then(|resource| resource.strip_prefix(&format!("kl://{}/", vault.vault_id.0)))
+                .and_then(|rest| rest.split('/').next())
+                .filter(|first| first.starts_with("item_"))
+                .and_then(|id| self.store.get_item(vault, &ItemId(id.into())).ok())
+                .map(|item| item.title);
+            let project = match &approval.project_id {
+                Some(id) => self
+                    .store
+                    .list_projects(vault)?
+                    .into_iter()
+                    .find(|project| &project.id == id)
+                    .map(|project| project.slug),
+                None => None,
+            };
+            Ok((item, project))
+        })
+    }
+
+    /// The owner's actor for the admin path: whoever unlocked this process
+    /// with the master password may do what the desktop owner may. The rule
+    /// lives only in this process's policy engine, never in the store, so the
+    /// daemon and its agents never see it.
+    pub fn admin_owner(&self) -> Result<ActorContext> {
+        let actor = self.local_human()?;
+        let vault_id = self.current_vault_id()?;
+        let mut rule = desktop_owner_rule(actor.agent_id.clone(), &vault_id);
+        rule.id = "builtin_admin_owner".into();
+        let mut engine = self.policy.write().map_err(|_| KeyLeaseError::Storage)?;
+        if engine.rules().iter().all(|existing| existing.id != rule.id) {
+            let mut rules = engine.rules().to_vec();
+            rules.push(rule);
+            *engine = RulePolicyEngine::new(rules);
+        }
+        Ok(actor)
+    }
+
+    /// An agent asks the owner to type the value of `field` on an item. The
+    /// first call queues an approval; the owner answers it by entering the
+    /// value (`keylease approve`), which goes from the owner's terminal into
+    /// the vault. The retry then succeeds without returning the value.
+    pub fn request_secret_authorized(
+        &self,
+        actor: &ActorContext,
+        id: &ItemId,
+        field: &str,
+    ) -> Result<()> {
+        if field.is_empty() || field.len() > 128 || field.chars().any(char::is_control) {
+            return Err(KeyLeaseError::InvalidRequest {
+                reason: "invalid field".into(),
+            });
+        }
+        self.with_vault(|vault| {
+            self.store.get_item(vault, id)?;
+            self.authorize_vault(
+                vault,
+                actor,
+                SUPPLY_SECRET_ACTION,
+                &format!("kl://{}/{}/{field}", vault.vault_id.0, id.0),
+                serde_json::json!({"field": field}),
+            )?;
+            let item = self.store.get_item(vault, id)?;
+            let filled = item.fields.iter().any(|existing| {
+                existing.key == field && !field_value_string(&existing.value).is_empty()
+            });
+            if !filled {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: "the request was approved without a value; ask again and enter it \
+                             with `keylease approve`"
+                        .into(),
+                });
+            }
+            Ok(())
+        })
+    }
+
+    /// The owner's answer to a `request_secret_authorized` approval: stores
+    /// `value` in the requested field, then approves (admin path).
+    pub fn supply_secret_admin(&self, approval_id: &str, value: &str) -> Result<()> {
+        let owner = self.admin_owner()?;
+        let approval = self.store.get_approval(approval_id)?;
+        let invalid = |reason: &str| KeyLeaseError::InvalidRequest {
+            reason: reason.into(),
+        };
+        if approval.action.as_deref() != Some(SUPPLY_SECRET_ACTION)
+            || approval.state != ApprovalState::Pending
+        {
+            return Err(invalid("not a pending request for a value"));
+        }
+        if value.is_empty() {
+            return Err(invalid("the value is empty"));
+        }
+        let resource = approval.resource.clone().unwrap_or_default();
+        let mut parts = resource
+            .strip_prefix("kl://")
+            .unwrap_or_default()
+            .splitn(3, '/')
+            .skip(1);
+        let (Some(item_id), Some(field)) = (parts.next(), parts.next()) else {
+            return Err(invalid("the request names no field"));
+        };
+        let item_id = ItemId(item_id.into());
+        let item = self.with_vault(|vault| self.store.get_item(vault, &item_id))?;
+        let mut patch = EntryPatch::default();
+        if field == "password" {
+            patch.password = Some(value.into());
+        } else {
+            let updated = match item.fields.iter().find(|existing| existing.key == field) {
+                Some(existing) => {
+                    let mut existing = existing.clone();
+                    existing.value = if existing.protected
+                        || matches!(existing.value, FieldValue::Concealed(_))
+                    {
+                        FieldValue::Concealed(value.into())
+                    } else {
+                        FieldValue::Text(value.into())
+                    };
+                    existing
+                }
+                // An item created without its secret (an API credential's
+                // `credential`) has no such field yet: add it, hidden.
+                None => ItemField {
+                    id: FieldId::new(),
+                    key: field.into(),
+                    label: field.into(),
+                    value: FieldValue::Concealed(value.into()),
+                    sensitivity: Sensitivity::HighlySensitive,
+                    protected: true,
+                    semantic_role: None,
+                },
+            };
+            patch.field_updates = vec![updated];
+        }
+        self.update_entry(
+            &owner,
+            &item_id,
+            patch,
+            item.revision,
+            &format!("supply-{approval_id}"),
+            false,
+        )?;
+        self.decide_approval_admin(approval_id, true, None)?;
+        Ok(())
     }
 
     /// The person at the terminal who unlocked the vault with the master password.
@@ -510,6 +800,7 @@ impl KeyLeaseService {
         self.with_vault(|vault| {
             let resource = format!("kl://{}/trusts", vault.vault_id.0);
             self.authorize_vault(
+                vault,
                 actor,
                 "trust:list",
                 &resource,
@@ -523,6 +814,7 @@ impl KeyLeaseService {
         self.with_vault(|vault| {
             let resource = format!("kl://{}/trust/{id}", vault.vault_id.0);
             self.authorize_vault(
+                vault,
                 actor,
                 "trust:revoke",
                 &resource,
@@ -559,6 +851,7 @@ impl KeyLeaseService {
         }
         let vault_id = self.with_vault(|vault| {
             self.authorize_vault(
+                vault,
                 actor,
                 "client:enroll",
                 &format!("kl://{}/clients", vault.vault_id.0),
@@ -642,9 +935,13 @@ fn materialize_trust(
         });
     }
     let risk = approval.risk.clone().unwrap_or(RiskTier::R4);
-    let ceiling = max_trust_seconds(&risk).ok_or_else(|| KeyLeaseError::Denied {
+    let mut ceiling = max_trust_seconds(&risk).ok_or_else(|| KeyLeaseError::Denied {
         reason: "this risk tier may only be approved once".into(),
     })?;
+    if decision.scope == TrustScope::Project {
+        // It also covers the everyday actions, so it lasts no longer than they may.
+        ceiling = ceiling.min(max_trust_seconds(&PROJECT_TRUST_MAX_RISK).unwrap_or(0));
+    }
     if decision.duration.seconds() > ceiling {
         return Err(KeyLeaseError::Denied {
             reason: "trust duration exceeds the ceiling for this risk tier".into(),
@@ -654,6 +951,20 @@ fn materialize_trust(
         TrustScope::Resource => resource,
         TrustScope::Item => item_prefix(&resource)
             .ok_or_else(|| invalid("item scope needs a vault item resource"))?,
+        TrustScope::Project => {
+            let project = approval.project_id.as_ref().ok_or_else(|| {
+                invalid("this request is not in a project; trust the item or the resource")
+            })?;
+            let vault_id = resource
+                .strip_prefix("kl://")
+                .and_then(|rest| rest.split('/').next())
+                .ok_or_else(|| invalid("project scope needs a vault resource"))?;
+            project_prefix(&VaultId(vault_id.into()), project)
+        }
+    };
+    let actions = match decision.scope {
+        TrustScope::Project => project_trust_actions(&action, decision.duration),
+        TrustScope::Resource | TrustScope::Item => vec![],
     };
     let now = Utc::now();
     let expires_at = now + Duration::seconds(decision.duration.seconds() as i64);
@@ -666,7 +977,11 @@ fn materialize_trust(
         agent_id: Some(agent_id.clone()),
         connection_id: connection_id.clone(),
         resource_prefix: resource_prefix.clone(),
-        actions: vec![action.clone()],
+        actions: if actions.is_empty() {
+            vec![action.clone()]
+        } else {
+            actions.clone()
+        },
         argument_equals: Default::default(),
         not_before: None,
         expires_at: Some(expires_at),
@@ -681,6 +996,7 @@ fn materialize_trust(
         resource_prefix,
         connection_id,
         scope: decision.scope,
+        actions,
         duration: decision.duration,
         risk,
         approval_id: approval.id.clone(),
@@ -872,6 +1188,207 @@ mod tests {
                 .reveal_field_authorized(&f.agent, &f.item, "password"),
         );
         assert_ne!(next, id);
+    }
+
+    fn entry_in(group: GroupId, project: Option<&str>, title: &str) -> NewEntryInput {
+        NewEntryInput {
+            favorite: false,
+            group_id: group,
+            kind: "core.login".into(),
+            title: title.into(),
+            project_slug: project.map(Into::into),
+            username: Some("deploy".into()),
+            password: None,
+            url: None,
+            notes: None,
+            custom_fields: vec![],
+            sections: vec![],
+            totp: None,
+            totp_uri: None,
+        }
+    }
+
+    #[test]
+    fn project_trust_covers_everyday_work_in_the_project_only() {
+        let f = fixture();
+        let project = f
+            .service
+            .create_project_agent(&f.owner, "shop", None, "project-shop")
+            .unwrap();
+        let group = f.service.create_group("Shop", None).unwrap().id;
+        let mut items = vec![];
+        for title in ["Shop DB", "Shop API"] {
+            let mut input = entry_in(group.clone(), Some("shop"), title);
+            input.password = Some("shop-secret".into());
+            items.push(
+                f.service
+                    .create_entry(&f.owner, input, &format!("owner-{title}"), false)
+                    .unwrap()
+                    .id,
+            );
+        }
+
+        let id = approval_id(
+            f.service
+                .reveal_field_authorized(&f.agent, &items[0], "username"),
+        );
+        let pending = f
+            .service
+            .list_pending_approvals_authorized(&f.owner, 10)
+            .unwrap();
+        let record = pending.iter().find(|a| a.id.0 == id).unwrap();
+        assert_eq!(record.project_id.as_ref(), Some(&project.id));
+        let project_trust = |duration| {
+            Some(TrustDecision {
+                scope: TrustScope::Project,
+                duration,
+            })
+        };
+        // It covers R2 work too, so it lasts no longer than R2 may.
+        assert!(
+            f.service
+                .decide_approval_with_trust_authorized(
+                    &f.owner,
+                    &id,
+                    true,
+                    project_trust(TrustDuration::Days3)
+                )
+                .is_err()
+        );
+        let trust = f
+            .service
+            .decide_approval_with_trust_authorized(
+                &f.owner,
+                &id,
+                true,
+                project_trust(TrustDuration::Hour1),
+            )
+            .unwrap()
+            .trust
+            .unwrap();
+        assert!(trust.actions.iter().any(|action| action == "entry:create"));
+        assert!(
+            !trust
+                .actions
+                .iter()
+                .any(|action| action == "entry:read_secret")
+        );
+
+        // Every item of the project, and creating more in it, without asking.
+        for item in &items {
+            assert_eq!(
+                f.service
+                    .reveal_field_authorized(&f.agent, item, "username")
+                    .unwrap(),
+                "deploy"
+            );
+        }
+        f.service
+            .create_entry(
+                &f.agent,
+                entry_in(group.clone(), Some("shop"), "Shop cache"),
+                "agent-in-project",
+                false,
+            )
+            .unwrap();
+        // Not outside the project, and never a secret reveal.
+        approval_id(f.service.create_entry(
+            &f.agent,
+            entry_in(group, None, "Elsewhere"),
+            "agent-out",
+            false,
+        ));
+        let outside = approval_id(
+            f.service
+                .reveal_field_authorized(&f.agent, &f.item, "username"),
+        );
+        approval_id(
+            f.service
+                .reveal_field_authorized(&f.agent, &items[1], "password"),
+        );
+        assert!(matches!(
+            f.service.decide_approval_with_trust_authorized(
+                &f.owner,
+                &outside,
+                true,
+                project_trust(TrustDuration::Hour1)
+            ),
+            Err(KeyLeaseError::InvalidRequest { .. })
+        ));
+
+        f.service
+            .revoke_trust_authorized(&f.owner, &trust.id)
+            .unwrap();
+        approval_id(
+            f.service
+                .reveal_field_authorized(&f.agent, &items[1], "username"),
+        );
+    }
+
+    #[test]
+    fn an_agent_asks_and_the_owner_types_the_secret() {
+        let f = fixture();
+        let group = f.service.create_group("Bot", None).unwrap().id;
+        let item = f
+            .service
+            .create_entry(&f.owner, entry_in(group, None, "Bot token"), "bot", false)
+            .unwrap()
+            .id;
+        let id = approval_id(
+            f.service
+                .request_secret_authorized(&f.agent, &item, "password"),
+        );
+        // Typing a value is never a window.
+        assert!(
+            f.service
+                .decide_approval_with_trust_authorized(
+                    &f.owner,
+                    &id,
+                    true,
+                    Some(TrustDecision {
+                        scope: TrustScope::Item,
+                        duration: TrustDuration::Minutes30,
+                    }),
+                )
+                .is_err()
+        );
+        f.service
+            .supply_secret_admin(&id, "typed-by-owner-1234")
+            .unwrap();
+        f.service
+            .request_secret_authorized(&f.agent, &item, "password")
+            .unwrap();
+        assert_eq!(
+            f.service
+                .reveal_field_authorized(&f.owner, &item, "password")
+                .unwrap(),
+            "typed-by-owner-1234"
+        );
+        // A field the item does not have yet is added, hidden.
+        let id = approval_id(
+            f.service
+                .request_secret_authorized(&f.agent, &item, "credential"),
+        );
+        f.service.supply_secret_admin(&id, "api-key-5678").unwrap();
+        assert_eq!(
+            f.service
+                .reveal_field_authorized(&f.owner, &item, "credential")
+                .unwrap(),
+            "api-key-5678"
+        );
+        // An approval without the value does not pass as filled.
+        let id = approval_id(
+            f.service
+                .request_secret_authorized(&f.agent, &f.item, "token"),
+        );
+        f.service
+            .decide_approval_authorized(&f.owner, &id, true)
+            .unwrap();
+        assert!(
+            f.service
+                .request_secret_authorized(&f.agent, &f.item, "token")
+                .is_err()
+        );
     }
 
     #[test]

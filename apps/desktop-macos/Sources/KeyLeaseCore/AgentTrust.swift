@@ -4,11 +4,12 @@ import Foundation
 // enrollment result in `keylease-service/src/trust.rs` (ADR 0005). They are
 // not part of `keylease contracts`, like `PasswordRecipe`.
 
-/// What a trust covers: the exact resource approved, or every field of its
-/// item.
+/// What a trust covers: the exact resource approved, every field of its
+/// item, or everyday work (up to R2) on every item of its project.
 public enum TrustScope: String, Codable, CaseIterable, Equatable, Sendable {
     case resource
     case item
+    case project
 }
 
 /// How long an approval keeps answering for the same agent and action.
@@ -47,8 +48,9 @@ public enum TrustDuration: String, Codable, CaseIterable, Equatable, Sendable {
         }
     }
 
-    /// `max_trust_seconds`: the longest trust a risk tier admits. R4 (reveal,
-    /// inject) is approved once, every time. An unknown tier is treated as R4
+    /// `max_trust_seconds`: the longest trust a risk tier admits. R4 (reveal)
+    /// is approved once, every time; a project trust is further capped at 1d by
+    /// the daemon. An unknown tier is treated as R4
     /// so the UI never offers more than the daemon would grant.
     public static func ceilingSeconds(for risk: RiskTier?) -> Int {
         switch risk {

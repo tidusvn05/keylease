@@ -102,30 +102,31 @@ vault lives there too. Mode A of ADR 0005.
    keylease service status
    ```
 
-4. Register the agent. It gets the approval baseline, and its token goes
-   straight into `~/.keylease/clients/agent_claude.token` (mode 0600), where
-   the CLI finds it from the agent id alone:
+4. Give each working tree an identity, shared by every agent working in it.
+   It gets the approval baseline, its token goes into
+   `~/.keylease/clients/agent_shop.token` (mode 0600), and `.keylease.json`
+   lets the CLI find it from any directory inside:
 
    ```sh
-   keylease client register claude
-   export KEYLEASE_AGENT_ID=agent_claude
+   cd /srv/shop
+   keylease projects init              # --agent claude: an identity for one tool only
    ```
 
-   With `--db` or `--socket` elsewhere than `~/.keylease`, pass the same
-   values to the agent (`KEYLEASE_SOCKET`).
+   For one identity everywhere instead: `keylease client register claude` and
+   `export KEYLEASE_AGENT_ID=agent_claude`. With `--db` or `--socket` elsewhere
+   than `~/.keylease`, pass the same values to the agent (`KEYLEASE_SOCKET`).
 
-5. The agent uses the same brokers as on a Mac. Requests that need approval
-   are decided over SSH with the master password:
+5. The agent uses the same brokers as on a Mac. Keep this open in an SSH
+   session while it works; it asks for the master password once:
 
    ```sh
-   keylease approval list                     # pending requests (master password)
-   keylease approval approve APPROVAL_ID
-   keylease approval approve APPROVAL_ID --trust 1h
-   keylease approval deny APPROVAL_ID
+   keylease approve
    ```
 
-   Some actions are approved one use at a time: `--trust` is refused for
-   them, for example `run` putting a secret into a program's environment.
+   Enter trusts everyday work in the project for an hour; `o` approves once,
+   `d` denies. A reveal is always approved once. For scripts:
+   `keylease approval list`, `keylease approval approve ID [--trust 1h --scope project]`,
+   `keylease approval deny ID`.
 
    The running daemon sees admin decisions, grants and revocations at once; it
    never needs a restart for them.
@@ -192,17 +193,18 @@ What happens when an agent asks:
    | Approve once | This exact request runs once |
    | Trust 30m … 7d | The same agent may repeat this action on this resource for the window |
    | Scope: every field of this item | The trust covers the item, not just the one field |
+   | Scope: project | Everyday work (up to R2) and this action on every item of the project |
    | Deny | The agent's waiting command fails immediately |
 
 4. Windows are capped by risk: R0–R1 up to 7 days, R2 (SSH, DB, ordinary
    writes) up to 1 day, R3 (production items, deletes, protected fields) up to
-   1 hour, R4 (reveal, `run`) once only. Mark production items with environment
+   1 hour (`run` included), R4 (reveal) once only. Mark production items with environment
    `production` to get R3.
 5. Review and revoke: **Agents** in the app, or `keylease trust list` /
    `keylease trust revoke ID`. The kill switch revokes all trusts at once.
    Every use is in the audit log with its `trust_id`.
 
-Good habits: trust per task window (1h) rather than per week; keep R4 reveals
+Good habits: trust per task window (1h) rather than per week; keep reveals
 rare by using brokers; give database items a read-only role where possible —
 an approved connection can run any SQL that role allows.
 

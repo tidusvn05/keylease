@@ -88,6 +88,10 @@ pub struct ApprovalRecord {
     /// The requesting agent's stated purpose. Untrusted; display only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purpose: Option<String>,
+    /// The vault project of the item the request touches, which a project
+    /// trust would cover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<crate::ProjectId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]

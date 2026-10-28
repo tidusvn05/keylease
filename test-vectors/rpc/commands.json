@@ -32,6 +32,7 @@
     "entries_delete",
     "entries_reveal",
     "entries_reveal_by_id",
+    "entries_request_secret",
     "entries_reveal_many",
     "entries_totp",
     "entries_history",
