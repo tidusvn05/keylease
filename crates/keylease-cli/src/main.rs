@@ -32,6 +32,7 @@ mod backend;
 mod cloud;
 mod db_proxy;
 mod gateway;
+mod instructions;
 mod mcp;
 mod project;
 mod run;
@@ -544,6 +545,9 @@ enum ProjectCommand {
     /// Set up a working tree for agents: the vault project, the agents' identity for it
     /// and `.keylease.json`, which keylease finds from any directory inside (master password).
     Init(project::InitArgs),
+    /// Add or update the KeyLease section of the agent instructions (CLAUDE.md or AGENTS.md:
+    /// the one the other imports), or check or remove it.
+    Instructions(instructions::InstructionsArgs),
     List,
     Create {
         slug: String,
@@ -665,6 +669,13 @@ enum EntryCommand {
         idempotency_key: String,
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Ask the owner to type a field's value (an API key, a password) into an item.
+    /// You never see it: it goes from their terminal into the vault. Waits for them.
+    AskSecret {
+        id: String,
+        #[arg(long, default_value = "password")]
+        field: String,
     },
     Reveal {
         id: String,
@@ -799,6 +810,10 @@ async fn run() -> Result<()> {
             ssh_agent::DEFAULT_SIGN_WAIT_SECONDS
         }
         Command::Db { .. } if cli.wait_approval == 0 => db_proxy::DEFAULT_CONNECT_WAIT_SECONDS,
+        // The owner has to type the value: give them time.
+        Command::Entries {
+            command: EntryCommand::AskSecret { .. },
+        } if cli.wait_approval == 0 => 300,
         _ => cli.wait_approval,
     };
     let _ = APPROVAL_WAIT_SECONDS.set(wait.min(600));
@@ -1009,6 +1024,7 @@ async fn run() -> Result<()> {
         Command::Add(args) => project::add(&cli.db, args),
         Command::Projects { command } => match command {
             ProjectCommand::Init(args) => project::init(&cli.db, args),
+            ProjectCommand::Instructions(args) => instructions::instructions(args),
             ProjectCommand::List => {
                 print_rpc(&socket, RpcRequest::ProjectsList { auth: auth(&cli)? }).await
             }
@@ -2293,6 +2309,17 @@ async fn entry_command(cli: &Cli, socket: &Path, command: EntryCommand) -> Resul
                     if_revision,
                     idempotency_key,
                     dry_run,
+                },
+            )
+            .await
+        }
+        EntryCommand::AskSecret { id, field } => {
+            print_rpc(
+                socket,
+                RpcRequest::EntriesRequestSecret {
+                    auth: auth(cli)?,
+                    id: ItemId(id),
+                    field,
                 },
             )
             .await

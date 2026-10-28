@@ -63,6 +63,9 @@ pub(crate) struct InitArgs {
     /// The working tree; default: the current directory.
     #[arg(long)]
     dir: Option<PathBuf>,
+    /// Leave CLAUDE.md and AGENTS.md alone (see `keylease projects instructions`).
+    #[arg(long)]
+    no_instructions: bool,
 }
 
 /// `keylease projects init`: one command per working tree.
@@ -133,11 +136,17 @@ pub(crate) fn init(db: &Path, args: InitArgs) -> Result<()> {
         contents.push(b'\n');
         fs::write(&file_path, contents).map_err(|_| KeyLeaseError::Storage)?;
     }
+    let instructions = if args.no_instructions {
+        vec![]
+    } else {
+        instructions::apply(&dir, false, false)?
+    };
     print_json(&json!({
         "project": project.slug,
         "agent_id": agent_id,
         "registered": registered,
         "project_file": file_path,
+        "instructions": instructions,
         "next": format!(
             "Start {} anywhere in {}: keylease uses {agent_id} there, no environment \
              needed. Approve requests with `keylease approve`.",

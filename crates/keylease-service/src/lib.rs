@@ -493,7 +493,7 @@ pub enum LeaseRequestOutcome {
 impl KeyLeaseService {
     pub fn new(store: Arc<NativeStore>) -> Result<Self> {
         let mut rules = store.load_policy_rules()?;
-        rules.extend(store.load_standing_rules(Utc::now())?);
+        rules.extend(trust::standing_rules(&store, Utc::now())?);
         let mut connectors: HashMap<String, Arc<dyn Connector>> = HashMap::new();
         connectors.insert("fake".into(), Arc::new(FakeConnector::default()));
         connectors.insert(
@@ -4433,7 +4433,7 @@ impl KeyLeaseService {
         // baselines and trusts) survive, but every use still needs an unlocked
         // vault, so they authorize nothing until the next unlock.
         *self.policy.write().map_err(|_| KeyLeaseError::Storage)? =
-            RulePolicyEngine::new(self.store.load_standing_rules(Utc::now())?);
+            RulePolicyEngine::new(trust::standing_rules(&self.store, Utc::now())?);
         self.agent_handoffs
             .lock()
             .map_err(|_| KeyLeaseError::Storage)?
@@ -4461,7 +4461,7 @@ impl KeyLeaseService {
     }
     fn reload_policy_for_client(&self, agent_id: &AgentId, vault_id: &VaultId) -> Result<()> {
         let mut rules = self.store.load_policy_rules()?;
-        rules.extend(self.store.load_standing_rules(Utc::now())?);
+        rules.extend(trust::standing_rules(&self.store, Utc::now())?);
         match self.store.local_owner_role(agent_id)? {
             Some(LocalOwnerRole::DesktopOwner) => {
                 rules.push(desktop_owner_rule(agent_id.clone(), vault_id))

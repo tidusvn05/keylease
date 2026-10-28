@@ -116,6 +116,10 @@ pub(crate) fn approve(db: &Path, args: ApproveArgs) -> Result<()> {
             if let Some(purpose) = &approval.purpose {
                 eprintln!("  purpose (from the agent): {purpose}");
             }
+            if approval.action.as_deref() == Some("entry:supply_secret") {
+                supply(&service, &approval, &mut lines)?;
+                continue;
+            }
             let suggestion = suggested(&approval);
             loop {
                 eprint!(
@@ -163,6 +167,48 @@ pub(crate) fn approve(db: &Path, args: ApproveArgs) -> Result<()> {
                 break;
             }
         }
+    }
+}
+
+/// The agent asked for a value: the owner types it, hidden, into the vault.
+fn supply(
+    service: &KeyLeaseService,
+    approval: &ApprovalRecord,
+    lines: &mut impl Iterator<Item = std::io::Result<String>>,
+) -> Result<()> {
+    let field = approval
+        .resource
+        .as_deref()
+        .and_then(|resource| resource.rsplit('/').next())
+        .unwrap_or("password");
+    loop {
+        eprint!("  [Enter] type the {field} (hidden)  [d] deny  [s] skip  [q] quit: ");
+        let _ = std::io::stderr().flush();
+        let Some(Ok(answer)) = lines.next() else {
+            std::process::exit(0);
+        };
+        let result = match answer.trim() {
+            "" => {
+                let value = prompt(&format!("  {field} (hidden): "))?;
+                service
+                    .supply_secret_admin(&approval.id.0, value.trim())
+                    .map(|()| "stored; the agent continues")
+            }
+            "d" => service
+                .decide_approval_admin(&approval.id.0, false, None)
+                .map(|_| "denied"),
+            "s" => return Ok(()),
+            "q" => std::process::exit(0),
+            _ => continue,
+        };
+        match result {
+            Ok(done) => eprintln!("  ✓ {done}"),
+            Err(error) => eprintln!(
+                "  ! {}",
+                serde_json::to_string(&error).unwrap_or_else(|_| "failed".into())
+            ),
+        }
+        return Ok(());
     }
 }
 

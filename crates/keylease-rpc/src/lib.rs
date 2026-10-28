@@ -251,6 +251,12 @@ pub enum RpcRequest {
         id: ItemId,
         field_id: FieldId,
     },
+    /// An agent asks the owner to type a field's value; the reply never holds it.
+    EntriesRequestSecret {
+        auth: RpcAuth,
+        id: ItemId,
+        field: String,
+    },
     EntriesRevealMany {
         auth: RpcAuth,
         id: ItemId,
@@ -746,6 +752,11 @@ pub async fn handle_rpc(
                 "field":field,
                 "value":service.reveal_field_authorized(&actor, &id, &field)?,
             }))
+        }
+        RpcRequest::EntriesRequestSecret { auth, id, field } => {
+            let actor = actor(service, &auth)?;
+            service.request_secret_authorized(&actor, &id, &field)?;
+            Ok(json!({"item_id":id,"field":field,"filled":true}))
         }
         RpcRequest::EntriesRevealById { auth, id, field_id } => {
             let actor = actor(service, &auth)?;

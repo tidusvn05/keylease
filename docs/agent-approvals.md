@@ -111,10 +111,12 @@ protected-field/TOTP updates, deletes and `entry:inject_secret` (`keylease run`)
 |---|---|
 | `resource` (default) | the approved action on that resource |
 | `item` | the approved action on every field of the item |
-| `project` | the approved action **and every action up to R2** on every item of the item's vault project, for at most 1d (1h if the action is R3) |
+| `project` | the approved action and, on every item of the request's vault project: **every action up to R3** (create, update, move, delete, protected fields, `run`, SSH, DB) for 1h or less; every action up to R2 for longer, at most 1d |
 
-A project trust is the "let it work on this project for an hour" answer; it
-never covers a reveal, a delete or another project.
+A project trust is the "let it work on this project" answer: with a one-hour
+project trust an agent can add, change, delete and use the project's items
+without asking again. It never covers a reveal (an agent reading a secret), a
+value request, or another project.
 
 ```sh
 keylease trust list
@@ -160,6 +162,22 @@ keylease add "Stripe key" --username ops     # master password, then the secret,
 It files the item in the directory's project (group `shop`, created if missing);
 `--kind`, `--url`, `--project` and `--group` override the defaults.
 
+`projects init` also adds a KeyLease section to the agents' instructions, telling
+them how to find, use, add, change and remove secrets without seeing them:
+
+```sh
+keylease projects instructions          # add or update it (init does this)
+keylease projects instructions --check  # exit 1 if missing or outdated
+keylease projects instructions --remove
+```
+
+It goes into one file. If `CLAUDE.md` imports `AGENTS.md` (`@AGENTS.md`), or
+`AGENTS.md` points to `CLAUDE.md`, only the referenced file gets it; with neither
+file, it writes `AGENTS.md` and a one-line `CLAUDE.md` (`@AGENTS.md`) for Claude Code;
+two files that do not reference each other both get it. The section sits between
+`<!-- keylease:begin … -->` and `<!-- keylease:end -->`: keylease replaces only that
+text, and a copy left in the other file is removed.
+
 To tell tools apart in approvals and the audit, give one its own identity:
 `keylease projects init --agent claude` registers `agent_claude-shop` instead. A
 tree holds one `.keylease.json`, so its other tools then use
@@ -198,7 +216,16 @@ Waiting for agent requests… (Ctrl-C to stop)
 
 It asks for the password once, shows each request as it arrives and suggests the
 widest one-hour trust the request allows (its project, else its item); a reveal is
-only ever approved once. For scripts, or another duration:
+only ever approved once.
+
+When an agent needs a secret it does not have, it creates the item without the
+value and runs `keylease entries ask-secret ITEM_ID`. `keylease approve` then
+shows `wants entry:supply_secret` and Enter asks you to type the value, hidden; it
+goes from your terminal into the vault and the agent's command returns with
+`"filled": true`, never the value. (The macOS app does not take values yet:
+approving such a request there leaves the field empty and the agent is told so.)
+
+For scripts, or another duration:
 
 ```sh
 keylease approval list

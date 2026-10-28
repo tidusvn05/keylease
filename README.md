@@ -109,7 +109,8 @@ keylease add "Stripe key"                # you type the secret (hidden); filed i
 ```
 
 Start Claude Code, Codex or any agent CLI anywhere in `/srv/shop`; they need no environment
-variables. Keep
+variables, and `projects init` has added a KeyLease section to `CLAUDE.md`/`AGENTS.md` telling
+them how to use, add, change and remove secrets (an agent asks, you type the value). Keep
 `keylease approve` open in another SSH session to answer its requests (Enter trusts
 everyday work in the project for an hour; a reveal is approved once)
 ([use case 2](docs/use-cases.md#2-agents-on-a-vps-self-trust)).

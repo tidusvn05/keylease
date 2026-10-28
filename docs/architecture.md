@@ -98,9 +98,9 @@ sequenceDiagram
 - A trust lets the same agent repeat the same action on the same resource (or
   any field of the same item) for a window: 30m, 1h, 6h, 1d, 3d or 7d, capped
   by risk tier — R0–R1 up to 7d, R2 up to 1d, R3 up to 1h, R4 once only.
-- A **project** trust covers everyday work (the approved action and every
-  action up to R2) on every item of the vault project the request touches, for
-  at most 1d (1h when the approved action is R3). It is stored as a rule on
+- A **project** trust covers the approved action and, on every item of the
+  vault project the request touches, every action up to R3 for 1h or less
+  (up to R2 for longer, at most 1d). Never a reveal or a value request. It is stored as a rule on
   `kl://VAULT/project/PROJECT`, which the daemon checks only when a request
   would otherwise ask.
 - Trusts end at expiry, on revoke, when the client is revoked or when the kill
