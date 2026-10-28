@@ -103,12 +103,13 @@ As the user the agents run as (not root), on Linux with systemd:
 ```sh
 cargo install --locked keylease
 keylease vault init
-keylease service install          # unlocks at boot from a host-sealed credential (asks for sudo)
-keylease client register claude     # token in ~/.keylease/clients/agent_claude.token
-export KEYLEASE_AGENT_ID=agent_claude
+keylease service install                 # unlocks at boot from a host-sealed credential (asks for sudo)
+cd /srv/shop && keylease projects init --agent claude   # identity agent_claude-shop for this tree
 ```
 
-Approve over SSH with `keylease approval list` and `keylease approval approve ID [--trust 1h]`
+Start the agent anywhere in `/srv/shop`; it needs no environment variables. Keep
+`keylease approve` open in another SSH session to answer its requests (Enter trusts
+everyday work in the project for an hour; a reveal is approved once)
 ([use case 2](docs/use-cases.md#2-agents-on-a-vps-self-trust)).
 
 Guides: [agent approvals and trust](docs/agent-approvals.md) ·

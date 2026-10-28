@@ -73,7 +73,9 @@ From most to least preferred (ADR 0005 section 3):
 | T3 Inject | `keylease run --env NAME=ITEM/field -- cmd`, output scrubbed | **Yes** | Nothing directly; the child process gets the value |
 | T4 Reveal | `entries reveal`, `entries totp` | **Yes** | Plaintext |
 
-T3 and T4 are risk R4: approved once per use, never trusted for a window.
+T3 is risk R3: approved per run or trusted for up to an hour, since the agent never reads the
+value (within that hour it could run a program that prints the value encoded; see
+[run with secrets](run-with-secrets.md)). T4 is risk R4: approved once per use, never trusted.
 
 ## Approval and trust
 
@@ -96,6 +98,11 @@ sequenceDiagram
 - A trust lets the same agent repeat the same action on the same resource (or
   any field of the same item) for a window: 30m, 1h, 6h, 1d, 3d or 7d, capped
   by risk tier — R0–R1 up to 7d, R2 up to 1d, R3 up to 1h, R4 once only.
+- A **project** trust covers everyday work (the approved action and every
+  action up to R2) on every item of the vault project the request touches, for
+  at most 1d (1h when the approved action is R3). It is stored as a rule on
+  `kl://VAULT/project/PROJECT`, which the daemon checks only when a request
+  would otherwise ask.
 - Trusts end at expiry, on revoke, when the client is revoked or when the kill
   switch is turned on. Every use is audited with its `trust_id`.
 

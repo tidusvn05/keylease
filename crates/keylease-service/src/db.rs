@@ -174,6 +174,7 @@ impl KeyLeaseService {
         self.with_vault(|vault| {
             let resource = format!("kl://{}/{}", vault.vault_id.0, id.0);
             self.authorize_vault(
+                vault,
                 actor,
                 "entry:read_fields",
                 &resource,
@@ -219,6 +220,7 @@ impl KeyLeaseService {
             let target = db_target(&item)?;
             let resource = format!("kl://{}/{}", vault.vault_id.0, id.0);
             self.authorize_vault_at_risk(
+                vault,
                 actor,
                 "db:connect",
                 &resource,

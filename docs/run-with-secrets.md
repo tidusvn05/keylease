@@ -11,9 +11,11 @@ keylease run --env STRIPE_API_KEY=kl://VAULT_ID/ITEM_ID/password \
 ```
 
 - One approval per run covers every `--env` of the same item. It shows the
-  program's name and the field keys, and it is `entry:inject_secret`, risk R4,
-  so it can never be trusted for a window: the program receives the value
-  and could print it in an encoded form.
+  program's name and the field keys, and it is `entry:inject_secret`, risk R3:
+  approve it once, or trust it for up to an hour (on the item, or with its
+  project) so repeated deploys and test runs do not ask each time. During that
+  hour the agent may run any program with the value, and a program can print
+  it in an encoded form; trust only an agent you would let run commands.
 - The values are set only in the child's environment. Its stdout and stderr
   are scrubbed of each value, its base64 form and its percent-encoded form,
   replaced by `[REDACTED by keylease]`, including matches that span reads.

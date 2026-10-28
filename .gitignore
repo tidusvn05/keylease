@@ -17,3 +17,4 @@ deploy/compose/backups/
 deploy/compose/.state/
 deploy/releases/
 deploy/diagnostics/
+__pycache__/

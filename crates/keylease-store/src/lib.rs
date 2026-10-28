@@ -3317,6 +3317,7 @@ mod tests {
             risk: None,
             semantic_summary: None,
             purpose: None,
+            project_id: None,
         };
         store.save_approval(&approval).unwrap();
         store

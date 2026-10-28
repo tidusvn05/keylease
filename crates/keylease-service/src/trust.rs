@@ -58,9 +58,14 @@ pub(crate) fn vault_action_risk(action: &str) -> RiskTier {
         | "entry:move"
         | "ssh:sign"
         | "db:connect" => RiskTier::R2,
-        "entry:update_protected_fields" | "entry:update_totp" | "entry:delete" | "group:delete" => {
-            RiskTier::R3
-        }
+        // `keylease run` puts a secret in a child process and scrubs it from
+        // the output, so the agent never reads it: high impact, but trustable
+        // for up to an hour, unlike a reveal.
+        "entry:update_protected_fields"
+        | "entry:update_totp"
+        | "entry:delete"
+        | "group:delete"
+        | "entry:inject_secret" => RiskTier::R3,
         // Disclosing a secret to an agent is the tier that ADR 0005 never lets
         // an approver trust for a window. Unknown actions are treated alike.
         _ => RiskTier::R4,
@@ -141,6 +146,48 @@ fn item_prefix(resource: &str) -> Option<String> {
     let vault = parts.next().filter(|part| part.starts_with("vault_"))?;
     let item = parts.next().filter(|part| part.starts_with("item_"))?;
     Some(format!("kl://{vault}/{item}"))
+}
+
+fn risk_rank(risk: &RiskTier) -> u8 {
+    match risk {
+        RiskTier::R0 => 0,
+        RiskTier::R1 => 1,
+        RiskTier::R2 => 2,
+        RiskTier::R3 => 3,
+        RiskTier::R4 => 4,
+    }
+}
+
+/// Everyday actions: what a project trust covers besides the approved one.
+const PROJECT_TRUST_MAX_RISK: RiskTier = RiskTier::R2;
+
+/// The actions a project trust for `action` covers: the approved action and
+/// every action of at most R2 an agent may request.
+pub(crate) fn project_trust_actions(action: &str) -> Vec<String> {
+    let mut actions = vec![action.to_owned()];
+    actions.extend(
+        BASELINE_APPROVAL_ACTIONS
+            .iter()
+            .filter(|candidate| **candidate != action)
+            .filter(|candidate| {
+                risk_rank(&vault_action_risk(candidate)) <= risk_rank(&PROJECT_TRUST_MAX_RISK)
+            })
+            .map(|candidate| (*candidate).to_owned()),
+    );
+    actions
+}
+
+/// `kl://<vault>/project/<project>`: the prefix a project trust's rule matches.
+fn project_prefix(vault_id: &VaultId, project: &ProjectId) -> String {
+    format!("kl://{}/project/{}", vault_id.0, project.0)
+}
+
+/// A vault resource seen through its project, which only project trusts match:
+/// `kl://V/item_X/field` becomes `kl://V/project/P/item_X/field`.
+pub(crate) fn project_alias(vault_id: &VaultId, project: &ProjectId, resource: &str) -> String {
+    let vault_root = format!("kl://{}", vault_id.0);
+    let tail = resource.strip_prefix(&vault_root).unwrap_or_default();
+    format!("{}{tail}", project_prefix(vault_id, project))
 }
 
 /// The two rules every enrolled agent starts with.
@@ -248,6 +295,36 @@ impl KeyLeaseService {
         Ok(())
     }
 
+    /// The vault project a vault command touches: its item's project, or for a
+    /// create, the project named in its arguments.
+    pub(crate) fn resource_project(
+        &self,
+        vault: &UnlockedVault,
+        resource: &str,
+        arguments: &Value,
+    ) -> Result<Option<ProjectId>> {
+        let Some(rest) = resource.strip_prefix(&format!("kl://{}/", vault.vault_id.0)) else {
+            return Ok(None);
+        };
+        let first = rest.split('/').next().unwrap_or_default();
+        if first.starts_with("item_") {
+            return Ok(self
+                .store
+                .get_item(vault, &ItemId(first.into()))
+                .ok()
+                .and_then(|item| item.project_id));
+        }
+        let Some(slug) = arguments.get("project_slug").and_then(Value::as_str) else {
+            return Ok(None);
+        };
+        Ok(self
+            .store
+            .list_projects(vault)?
+            .into_iter()
+            .find(|project| project.slug == slug)
+            .map(|project| project.id))
+    }
+
     /// Queues or consumes an approval for a vault command.
     ///
     /// The first call queues a pending approval and returns
@@ -262,6 +339,7 @@ impl KeyLeaseService {
         policy_version: u64,
         request_digest_hex: &str,
         risk: RiskTier,
+        project: Option<ProjectId>,
     ) -> Result<()> {
         if self.store.kill_switch_enabled()? {
             self.audit_vault(
@@ -342,6 +420,7 @@ impl KeyLeaseService {
             )),
             risk: Some(risk),
             purpose: actor.purpose.clone(),
+            project_id: project,
         };
         let mut event = self.vault_audit_event(
             actor,
@@ -374,6 +453,7 @@ impl KeyLeaseService {
         }
         self.with_vault(|vault| {
             self.authorize_vault(
+                vault,
                 actor,
                 "approval:decide",
                 &format!("kl://{}/approval/{id}", vault.vault_id.0),
@@ -427,6 +507,55 @@ impl KeyLeaseService {
         })?;
         let stored = self.store.load_policy_rules()?;
         self.install_policy(stored)
+    }
+
+    /// The project `slug`, created first if the vault has none by that slug
+    /// (admin path, master password).
+    pub fn ensure_project_admin(&self, slug: &str) -> Result<VaultProject> {
+        let existing = self.with_vault(|vault| {
+            Ok(self
+                .store
+                .list_projects(vault)?
+                .into_iter()
+                .find(|project| project.slug == slug))
+        })?;
+        match existing {
+            Some(project) => Ok(project),
+            None => self.create_project_agent(
+                &self.local_human()?,
+                slug,
+                None,
+                &format!("project-init-{slug}"),
+            ),
+        }
+    }
+
+    /// What an approver is shown for a pending approval: the item's title and
+    /// the project's slug, when the request names them (admin path).
+    pub fn approval_target_admin(
+        &self,
+        approval: &ApprovalRecord,
+    ) -> Result<(Option<String>, Option<String>)> {
+        self.with_vault(|vault| {
+            let item = approval
+                .resource
+                .as_deref()
+                .and_then(|resource| resource.strip_prefix(&format!("kl://{}/", vault.vault_id.0)))
+                .and_then(|rest| rest.split('/').next())
+                .filter(|first| first.starts_with("item_"))
+                .and_then(|id| self.store.get_item(vault, &ItemId(id.into())).ok())
+                .map(|item| item.title);
+            let project = match &approval.project_id {
+                Some(id) => self
+                    .store
+                    .list_projects(vault)?
+                    .into_iter()
+                    .find(|project| &project.id == id)
+                    .map(|project| project.slug),
+                None => None,
+            };
+            Ok((item, project))
+        })
     }
 
     /// The person at the terminal who unlocked the vault with the master password.
@@ -510,6 +639,7 @@ impl KeyLeaseService {
         self.with_vault(|vault| {
             let resource = format!("kl://{}/trusts", vault.vault_id.0);
             self.authorize_vault(
+                vault,
                 actor,
                 "trust:list",
                 &resource,
@@ -523,6 +653,7 @@ impl KeyLeaseService {
         self.with_vault(|vault| {
             let resource = format!("kl://{}/trust/{id}", vault.vault_id.0);
             self.authorize_vault(
+                vault,
                 actor,
                 "trust:revoke",
                 &resource,
@@ -559,6 +690,7 @@ impl KeyLeaseService {
         }
         let vault_id = self.with_vault(|vault| {
             self.authorize_vault(
+                vault,
                 actor,
                 "client:enroll",
                 &format!("kl://{}/clients", vault.vault_id.0),
@@ -642,9 +774,13 @@ fn materialize_trust(
         });
     }
     let risk = approval.risk.clone().unwrap_or(RiskTier::R4);
-    let ceiling = max_trust_seconds(&risk).ok_or_else(|| KeyLeaseError::Denied {
+    let mut ceiling = max_trust_seconds(&risk).ok_or_else(|| KeyLeaseError::Denied {
         reason: "this risk tier may only be approved once".into(),
     })?;
+    if decision.scope == TrustScope::Project {
+        // It also covers the everyday actions, so it lasts no longer than they may.
+        ceiling = ceiling.min(max_trust_seconds(&PROJECT_TRUST_MAX_RISK).unwrap_or(0));
+    }
     if decision.duration.seconds() > ceiling {
         return Err(KeyLeaseError::Denied {
             reason: "trust duration exceeds the ceiling for this risk tier".into(),
@@ -654,6 +790,20 @@ fn materialize_trust(
         TrustScope::Resource => resource,
         TrustScope::Item => item_prefix(&resource)
             .ok_or_else(|| invalid("item scope needs a vault item resource"))?,
+        TrustScope::Project => {
+            let project = approval.project_id.as_ref().ok_or_else(|| {
+                invalid("this request is not in a project; trust the item or the resource")
+            })?;
+            let vault_id = resource
+                .strip_prefix("kl://")
+                .and_then(|rest| rest.split('/').next())
+                .ok_or_else(|| invalid("project scope needs a vault resource"))?;
+            project_prefix(&VaultId(vault_id.into()), project)
+        }
+    };
+    let actions = match decision.scope {
+        TrustScope::Project => project_trust_actions(&action),
+        TrustScope::Resource | TrustScope::Item => vec![],
     };
     let now = Utc::now();
     let expires_at = now + Duration::seconds(decision.duration.seconds() as i64);
@@ -666,7 +816,11 @@ fn materialize_trust(
         agent_id: Some(agent_id.clone()),
         connection_id: connection_id.clone(),
         resource_prefix: resource_prefix.clone(),
-        actions: vec![action.clone()],
+        actions: if actions.is_empty() {
+            vec![action.clone()]
+        } else {
+            actions.clone()
+        },
         argument_equals: Default::default(),
         not_before: None,
         expires_at: Some(expires_at),
@@ -681,6 +835,7 @@ fn materialize_trust(
         resource_prefix,
         connection_id,
         scope: decision.scope,
+        actions,
         duration: decision.duration,
         risk,
         approval_id: approval.id.clone(),
@@ -872,6 +1027,141 @@ mod tests {
                 .reveal_field_authorized(&f.agent, &f.item, "password"),
         );
         assert_ne!(next, id);
+    }
+
+    fn entry_in(group: GroupId, project: Option<&str>, title: &str) -> NewEntryInput {
+        NewEntryInput {
+            favorite: false,
+            group_id: group,
+            kind: "core.login".into(),
+            title: title.into(),
+            project_slug: project.map(Into::into),
+            username: Some("deploy".into()),
+            password: None,
+            url: None,
+            notes: None,
+            custom_fields: vec![],
+            sections: vec![],
+            totp: None,
+            totp_uri: None,
+        }
+    }
+
+    #[test]
+    fn project_trust_covers_everyday_work_in_the_project_only() {
+        let f = fixture();
+        let project = f
+            .service
+            .create_project_agent(&f.owner, "shop", None, "project-shop")
+            .unwrap();
+        let group = f.service.create_group("Shop", None).unwrap().id;
+        let mut items = vec![];
+        for title in ["Shop DB", "Shop API"] {
+            let mut input = entry_in(group.clone(), Some("shop"), title);
+            input.password = Some("shop-secret".into());
+            items.push(
+                f.service
+                    .create_entry(&f.owner, input, &format!("owner-{title}"), false)
+                    .unwrap()
+                    .id,
+            );
+        }
+
+        let id = approval_id(
+            f.service
+                .reveal_field_authorized(&f.agent, &items[0], "username"),
+        );
+        let pending = f
+            .service
+            .list_pending_approvals_authorized(&f.owner, 10)
+            .unwrap();
+        let record = pending.iter().find(|a| a.id.0 == id).unwrap();
+        assert_eq!(record.project_id.as_ref(), Some(&project.id));
+        let project_trust = |duration| {
+            Some(TrustDecision {
+                scope: TrustScope::Project,
+                duration,
+            })
+        };
+        // It covers R2 work too, so it lasts no longer than R2 may.
+        assert!(
+            f.service
+                .decide_approval_with_trust_authorized(
+                    &f.owner,
+                    &id,
+                    true,
+                    project_trust(TrustDuration::Days3)
+                )
+                .is_err()
+        );
+        let trust = f
+            .service
+            .decide_approval_with_trust_authorized(
+                &f.owner,
+                &id,
+                true,
+                project_trust(TrustDuration::Hour1),
+            )
+            .unwrap()
+            .trust
+            .unwrap();
+        assert!(trust.actions.iter().any(|action| action == "entry:create"));
+        assert!(
+            !trust
+                .actions
+                .iter()
+                .any(|action| action == "entry:read_secret")
+        );
+
+        // Every item of the project, and creating more in it, without asking.
+        for item in &items {
+            assert_eq!(
+                f.service
+                    .reveal_field_authorized(&f.agent, item, "username")
+                    .unwrap(),
+                "deploy"
+            );
+        }
+        f.service
+            .create_entry(
+                &f.agent,
+                entry_in(group.clone(), Some("shop"), "Shop cache"),
+                "agent-in-project",
+                false,
+            )
+            .unwrap();
+        // Not outside the project, and never a secret reveal.
+        approval_id(f.service.create_entry(
+            &f.agent,
+            entry_in(group, None, "Elsewhere"),
+            "agent-out",
+            false,
+        ));
+        let outside = approval_id(
+            f.service
+                .reveal_field_authorized(&f.agent, &f.item, "username"),
+        );
+        approval_id(
+            f.service
+                .reveal_field_authorized(&f.agent, &items[1], "password"),
+        );
+        assert!(matches!(
+            f.service.decide_approval_with_trust_authorized(
+                &f.owner,
+                &outside,
+                true,
+                project_trust(TrustDuration::Hour1)
+            ),
+            Err(KeyLeaseError::InvalidRequest { .. })
+        ));
+
+        f.service
+            .revoke_trust_authorized(&f.owner, &trust.id)
+            .unwrap();
+        approval_id(
+            f.service
+                .reveal_field_authorized(&f.agent, &items[1], "username"),
+        );
     }
 
     #[test]

@@ -241,7 +241,7 @@ pub(crate) enum RemoteCommand {
         deny: bool,
         #[arg(long, value_parser = ["once", "30m", "1h", "6h", "1d", "3d", "7d"], requires = "approve")]
         trust: Option<String>,
-        #[arg(long, default_value = "resource", value_parser = ["resource", "item"])]
+        #[arg(long, default_value = "resource", value_parser = ["resource", "item", "project"])]
         scope: String,
     },
     /// On the approver: list active trusts on a node.

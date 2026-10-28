@@ -26,12 +26,14 @@ use tokio::{
 };
 use zeroize::Zeroizing;
 
+mod approve;
 mod approver;
 mod backend;
 mod cloud;
 mod db_proxy;
 mod gateway;
 mod mcp;
+mod project;
 mod run;
 mod service;
 mod ssh_agent;
@@ -160,6 +162,7 @@ enum Command {
         #[command(subcommand)]
         command: MigrationCommand,
     },
+    #[command(alias = "project")]
     Projects {
         #[command(subcommand)]
         command: ProjectCommand,
@@ -184,6 +187,8 @@ enum Command {
         #[command(subcommand)]
         command: ApprovalCommand,
     },
+    /// Decide agent requests at the terminal as they arrive (master password once).
+    Approve(approve::ApproveArgs),
     /// Time-boxed trusts granted from approvals.
     Trust {
         #[command(subcommand)]
@@ -534,6 +539,9 @@ enum MigrationCommand {
 
 #[derive(Subcommand)]
 enum ProjectCommand {
+    /// Set up a working tree for an agent: the vault project, the agent's identity for it
+    /// and `.keylease.json`, which keylease finds from any directory inside (master password).
+    Init(project::InitArgs),
     List,
     Create {
         slug: String,
@@ -734,8 +742,9 @@ enum ApprovalCommand {
         /// Trust this agent for a window instead of one use.
         #[arg(long, value_parser = ["once", "30m", "1h", "6h", "1d", "3d", "7d"])]
         trust: Option<String>,
-        /// What the trust covers: the exact resource, or every field of its item.
-        #[arg(long, default_value = "resource", value_parser = ["resource", "item"])]
+        /// What the trust covers: the exact resource, every field of its item, or everyday work
+        /// (up to R2) on every item of its project.
+        #[arg(long, default_value = "resource", value_parser = ["resource", "item", "project"])]
         scope: String,
     },
     /// Deny directly against the database (admin, master password).
@@ -792,6 +801,28 @@ async fn run() -> Result<()> {
     };
     let _ = APPROVAL_WAIT_SECONDS.set(wait.min(600));
     let socket = cli.socket.clone().unwrap_or_else(default_socket);
+    // Inside a project directory, agent commands use the identity it names. Owner
+    // commands keep the owner's, so approving from there still works.
+    let owner_command = matches!(
+        cli.command,
+        Command::Approval { .. }
+            | Command::Approve(_)
+            | Command::Trust { .. }
+            | Command::Client { .. }
+            | Command::Grant { .. }
+            | Command::Service { .. }
+            | Command::Agent { .. }
+            | Command::Projects {
+                command: ProjectCommand::Init(_)
+            }
+    );
+    if cli.agent_id.is_none()
+        && cli.client_token_file.is_none()
+        && !owner_command
+        && let Ok(cwd) = std::env::current_dir()
+    {
+        cli.agent_id = project::project_agent(&cwd);
+    }
     let command = std::mem::replace(&mut cli.command, Command::Status);
     match command {
         Command::Serve {
@@ -971,7 +1002,9 @@ async fn run() -> Result<()> {
                 .await
             }
         },
+        Command::Approve(args) => approve::approve(&cli.db, args),
         Command::Projects { command } => match command {
+            ProjectCommand::Init(args) => project::init(&cli.db, args),
             ProjectCommand::List => {
                 print_rpc(&socket, RpcRequest::ProjectsList { auth: auth(&cli)? }).await
             }
@@ -2201,7 +2234,15 @@ async fn entry_command(cli: &Cli, socket: &Path, command: EntryCommand) -> Resul
             idempotency_key,
             dry_run,
         } => {
-            let input = read_json::<NewEntryInput>(&input_json)?;
+            let mut input = read_json::<NewEntryInput>(&input_json)?;
+            // An agent working in a project directory files new entries in its project.
+            if input.project_slug.is_none()
+                && let Ok(cwd) = std::env::current_dir()
+                && let Some((_, file)) = project::find_project_file(&cwd)
+                && cli.agent_id.as_deref() == Some(file.agent.as_str())
+            {
+                input.project_slug = Some(file.project);
+            }
             print_rpc(
                 socket,
                 RpcRequest::EntriesCreate {
@@ -3147,6 +3188,7 @@ mod tests {
             risk: None,
             semantic_summary: None,
             purpose: None,
+            project_id: None,
         };
         store.save_approval(&approval).unwrap();
         let auth = RpcAuth {
