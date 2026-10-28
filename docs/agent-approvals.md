@@ -133,19 +133,26 @@ Mac.
 
 ### One identity per project
 
-On a server where one agent CLI works on several projects, give it one identity per
-working tree:
+On a server where agents work on several projects, give each working tree one
+identity:
 
 ```sh
 cd /srv/shop
-keylease projects init --agent claude
+keylease projects init
 ```
 
 It creates the vault project `shop` (from the directory name, or `--project`),
-registers `agent_claude-shop` with the baseline, and writes `.keylease.json`
-(`{"agent": "agent_claude-shop", "project": "shop"}`, no token). An agent started
-anywhere inside `/srv/shop` then uses that identity with no environment variables,
-and entries it creates are filed in the project, so a project trust covers them.
+registers `agent_shop` with the baseline, and writes `.keylease.json`
+(`{"agent": "agent_shop", "project": "shop"}`, no token). Every agent CLI started
+anywhere inside `/srv/shop` (Claude Code, Codex…) then uses that identity with no
+environment variables, one trust answers for all of them, and entries they create
+are filed in the project, so a project trust covers them. The audit log names the
+project's identity, not the tool.
+
+To tell tools apart in approvals and the audit, give one its own identity:
+`keylease projects init --agent claude` registers `agent_claude-shop` instead. A
+tree holds one `.keylease.json`, so its other tools then use
+`KEYLEASE_AGENT_ID` to pick their identity.
 Owner commands (`approve`, `approval`, `trust`, `client`…) ignore the file.
 
 The identities share one Unix user, so an agent could read another's token file:

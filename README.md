@@ -104,10 +104,11 @@ As the user the agents run as (not root), on Linux with systemd:
 cargo install --locked keylease
 keylease vault init
 keylease service install                 # unlocks at boot from a host-sealed credential (asks for sudo)
-cd /srv/shop && keylease projects init --agent claude   # identity agent_claude-shop for this tree
+cd /srv/shop && keylease projects init   # identity agent_shop for every agent in this tree
 ```
 
-Start the agent anywhere in `/srv/shop`; it needs no environment variables. Keep
+Start Claude Code, Codex or any agent CLI anywhere in `/srv/shop`; they need no environment
+variables. Keep
 `keylease approve` open in another SSH session to answer its requests (Enter trusts
 everyday work in the project for an hour; a reveal is approved once)
 ([use case 2](docs/use-cases.md#2-agents-on-a-vps-self-trust)).

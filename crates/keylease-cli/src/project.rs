@@ -52,10 +52,11 @@ pub(crate) fn slug_from(name: &str) -> String {
 
 #[derive(Args)]
 pub(crate) struct InitArgs {
-    /// The agent CLI working here (claude, codex…). Its identity for this
-    /// project is `agent_<agent>-<project>`.
+    /// Give one agent CLI (claude, codex…) its own identity here,
+    /// `agent_<agent>-<project>`. Without it, every agent working in the tree
+    /// shares `agent_<project>`, so one trust answers for all of them.
     #[arg(long)]
-    agent: String,
+    agent: Option<String>,
     /// The vault project; default: the directory's name.
     #[arg(long)]
     project: Option<String>,
@@ -66,7 +67,7 @@ pub(crate) struct InitArgs {
 
 /// `keylease projects init`: one command per working tree.
 ///
-/// Creates the vault project if needed, registers the agent identity for it
+/// Creates the vault project if needed, registers the project's agent identity
 /// with the baseline (or reuses it), and writes `.keylease.json`.
 pub(crate) fn init(db: &Path, args: InitArgs) -> Result<()> {
     let invalid = |reason: String| KeyLeaseError::InvalidRequest { reason };
@@ -84,11 +85,17 @@ pub(crate) fn init(db: &Path, args: InitArgs) -> Result<()> {
                 .unwrap_or_default(),
         ),
     };
-    let tool = args.agent.trim().to_ascii_lowercase();
-    let name = format!("{tool}-{slug}");
-    if !valid_client_name(&tool) || tool == "desktop" || !valid_client_name(&name) {
+    let tool = args.agent.map(|tool| tool.trim().to_ascii_lowercase());
+    let name = match &tool {
+        Some(tool) => format!("{tool}-{slug}"),
+        None => slug.clone(),
+    };
+    if tool.as_deref().is_some_and(|tool| !valid_client_name(tool))
+        || !valid_client_name(&name)
+        || name == "desktop"
+    {
         return Err(invalid(format!(
-            "`{tool}` is not a usable agent name: letters, digits, - and _"
+            "`{name}` is not a usable agent name: letters, digits, - and _ (and not `desktop`)"
         )));
     }
     let agent_id = format!("agent_{name}");
@@ -132,8 +139,9 @@ pub(crate) fn init(db: &Path, args: InitArgs) -> Result<()> {
         "registered": registered,
         "project_file": file_path,
         "next": format!(
-            "Start {tool} anywhere in {}: keylease uses {agent_id} there, no environment \
-             needed. Approve its requests with `keylease approve`.",
+            "Start {} anywhere in {}: keylease uses {agent_id} there, no environment \
+             needed. Approve requests with `keylease approve`.",
+            tool.as_deref().unwrap_or("any agent"),
             dir.display()
         ),
     }))

@@ -539,7 +539,7 @@ enum MigrationCommand {
 
 #[derive(Subcommand)]
 enum ProjectCommand {
-    /// Set up a working tree for an agent: the vault project, the agent's identity for it
+    /// Set up a working tree for agents: the vault project, the agents' identity for it
     /// and `.keylease.json`, which keylease finds from any directory inside (master password).
     Init(project::InitArgs),
     List,

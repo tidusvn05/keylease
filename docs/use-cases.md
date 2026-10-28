@@ -102,13 +102,14 @@ vault lives there too. Mode A of ADR 0005.
    keylease service status
    ```
 
-4. Give the agent an identity per working tree. It gets the approval baseline,
-   its token goes into `~/.keylease/clients/agent_claude-shop.token` (mode
-   0600), and `.keylease.json` lets the CLI find it from any directory inside:
+4. Give each working tree an identity, shared by every agent working in it.
+   It gets the approval baseline, its token goes into
+   `~/.keylease/clients/agent_shop.token` (mode 0600), and `.keylease.json`
+   lets the CLI find it from any directory inside:
 
    ```sh
    cd /srv/shop
-   keylease projects init --agent claude
+   keylease projects init              # --agent claude: an identity for one tool only
    ```
 
    For one identity everywhere instead: `keylease client register claude` and
