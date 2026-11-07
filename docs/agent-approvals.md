@@ -104,7 +104,7 @@ A plain approval authorizes **one** use. `--trust` turns it into a window:
 | none (once) | everything, including R4 |
 
 `entry:read_secret` is R4, so a secret reveal is always approved per use.
-`entry:read_username` is R1, `ssh:sign` and ordinary entry writes are R2,
+`entry:read_username` is R1, `ssh:sign`, `ssh:issue_cert` (SSH certificates) and ordinary entry writes are R2,
 protected-field/TOTP updates, deletes and `entry:inject_secret` (`keylease run`) are R3.
 
 | Scope | Covers |

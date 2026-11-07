@@ -51,7 +51,10 @@ pub use gateway::{
 };
 pub use inject::InjectRequest;
 pub use remote::{APPROVER_SIGNATURE_CONTEXT, ApproverDevice, PairingCode, approver_signing_input};
-pub use ssh::{SSH_AGENT_RSA_SHA2_256, SSH_AGENT_RSA_SHA2_512, SshIdentity, SshSignature};
+pub use ssh::{
+    DEFAULT_CERT_TTL_SECONDS, MAX_CERT_TTL_SECONDS, MAX_SESSION_BINDS, SSH_AGENT_RSA_SHA2_256,
+    SSH_AGENT_RSA_SHA2_512, SshCertificate, SshIdentity, SshSessionBind, SshSignature,
+};
 pub use trust::{ApprovalDecisionOutcome, EnrolledAgent};
 use trust::{VAULT_CONNECTION_ID, project_alias, vault_action_risk};
 
@@ -4502,6 +4505,22 @@ impl KeyLeaseService {
         arguments: Value,
         risk: RiskTier,
     ) -> Result<()> {
+        self.authorize_vault_grant(vault, actor, action, resource, arguments, risk)
+            .map(drop)
+    }
+
+    /// Authorizes like `authorize_vault_at_risk` and returns what allowed the
+    /// request: the matched rule (a `trust_…` id for a trust) or the consumed
+    /// approval's id, for material that should name its grant.
+    fn authorize_vault_grant(
+        &self,
+        vault: &UnlockedVault,
+        actor: &ActorContext,
+        action: &str,
+        resource: &str,
+        arguments: Value,
+        risk: RiskTier,
+    ) -> Result<String> {
         self.sync_external_policy_changes()?;
         let request = ActionRequest {
             schema_version: CONTRACT_VERSION,
@@ -4559,10 +4578,10 @@ impl KeyLeaseService {
                         "trust_used",
                         vec![],
                     );
-                    event.trust_id = Some(matched_rule);
+                    event.trust_id = Some(matched_rule.clone());
                     self.store.append_audit(&event)?;
                 }
-                Ok(())
+                Ok(matched_rule)
             }
             PolicyDecision::RequireApproval {
                 policy_version,

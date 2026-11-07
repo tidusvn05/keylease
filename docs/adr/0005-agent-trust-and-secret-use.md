@@ -274,8 +274,15 @@ The node exposes pairing and approval endpoints on its existing HTTPS listener
    enrollment, trust list and notifications (driven by a passive
    `pending_approvals` count in `status`). Key-bound identity moved to step 6.
 2. SSH agent. **Implemented** (`keylease ssh`, `keylease ssh-agent`; see
-   `docs/ssh-agent.md`). Session-bind host binding and CA-issued ephemeral
-   certificates are not done.
+   `docs/ssh-agent.md`), with session-bind host binding (the service verifies
+   the host's signature and the session of the login, shows and binds the host
+   key in the approval, and enforces an item's `host_keys` pins, forwarding
+   hops included) and CA-issued certificates: an SSH key item with
+   `ca_principals` is a CA (`keylease ssh-ca init`) that only issues
+   five-minute user certificates (`ssh:issue_cert`) for a key `keylease ssh
+   --cert` generates per run. Host and user are not policy arguments of their
+   own: the host is the host key fingerprint, and the user is limited by the
+   certificate's principals.
 3. PostgreSQL proxy and `db query`. **Proxy implemented** (`keylease db
    psql|exec|proxy`; see `docs/db-proxy.md`) with a different split than
    section 3 describes: the proxy runs in the agent's process and the service

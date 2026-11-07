@@ -58,6 +58,7 @@
     "db_target",
     "db_scram",
     "ssh_sign",
+    "ssh_issue_cert",
     "audit_query",
     "lease_request",
     "gate_execute",
