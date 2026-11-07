@@ -43,9 +43,10 @@ the environment to copy:
 keylease agent enroll codex
 ```
 
-It writes the agent's token to `~/.keylease/clients/agent_codex.token`
-(mode 0600) and prints the environment for the agent. The token is never
-printed. Configure the agent CLI with:
+It writes the agent's credential, an Ed25519 signing key made on this machine, to
+`~/.keylease/clients/agent_codex.token` (mode 0600) and prints the environment for
+the agent. The key is never printed, and the vault keeps only its public half (see
+[Key-bound identity](#key-bound-identity)). Configure the agent CLI with:
 
 ```sh
 export KEYLEASE_AGENT_ID=agent_codex
@@ -184,7 +185,7 @@ tree holds one `.keylease.json`, so its other tools then use
 `KEYLEASE_AGENT_ID` to pick their identity.
 Owner commands (`approve`, `approval`, `trust`, `client`…) ignore the file.
 
-The identities share one Unix user, so an agent could read another's token file:
+The identities share one Unix user, so an agent could read another's key file:
 this separates projects for an agent that follows its instructions, not against
 one that does not. A file can never select the owner (`agent_desktop`).
 
@@ -198,6 +199,40 @@ Register agents; they get the baseline by default (`--no-baseline` and narrow
 keylease client register deployer
 export KEYLEASE_AGENT_ID=agent_deployer
 ```
+
+### Key-bound identity
+
+Agents registered by `client register`, `agent enroll`, `projects init` and
+`mcp setup` sign every request with their own Ed25519 key instead of sending a
+bearer token. The credential file holds the private key (`kl_ed25519_…`); the vault
+stores only the public key. Each request is signed over its whole content, a
+timestamp and a random nonce, so a request read off the socket or out of a log
+cannot be changed or replayed, and the vault never holds anything that would let
+it, or a copy of its database, act as the agent. The host's clock must be within
+two minutes of the daemon's (they are usually the same machine).
+
+```sh
+keylease client list                       # [{"agent_id":"agent_deployer","auth":"key"}, …]
+keylease client upgrade agent_old          # a token agent to a key: same id, trusts kept
+keylease client register ci --legacy-token # a bearer token, for a client that cannot sign
+```
+
+Clients registered before this release keep their bearer token and show
+`"auth": "legacy"` in `client list` and in each audit event (`client_auth`).
+`client upgrade` rewrites their credential file in place; restart any long-running
+`keylease mcp`, `ssh-agent` or `db proxy` of that agent afterwards. For a key made
+on another host:
+
+```sh
+# on the agent's host
+keylease client keygen ~/.keylease/clients/agent_ci.token   # prints the public key
+# on the vault host
+keylease client register ci --public-key ci.pub
+```
+
+A key binds requests to the key's holder; it does not stop another process of the
+same Unix user from reading the key file, exactly as with a token. Trust is still
+offered to legacy clients (see ADR 0005, section 6).
 
 Approvals queued by a baseline agent are decided with the admin path, which
 asks for the master password. The easy way is to keep this running in a terminal

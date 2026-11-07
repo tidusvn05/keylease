@@ -6,6 +6,7 @@ use keylease_service::{
     AgentNewItemGuide, AgentNewItemHandoffInput, AgentNewItemHandoffReceipt, ContentCreateInput,
     ContentDocument, ContentPatch, ContentSummary, EntryPatch, EntryView, FieldView,
     KeyLeaseService, MigrationApplyResult, MigrationPreview, MigrationStatus, NewEntryInput,
+    client_key,
 };
 use keylease_store::NativeStore;
 use leasegate_connectors::Connector;
@@ -413,15 +414,39 @@ enum ClientCommand {
         /// The baseline is the default; kept so older scripts still work.
         #[arg(long, hide = true, conflicts_with = "no_baseline")]
         baseline: bool,
-        /// Where to write the token (mode 0600, never overwritten); `-` prints it instead.
-        /// Default: ~/.keylease/clients/agent_NAME.token, which the CLI reads for
+        /// Where to write the credential (mode 0600, never overwritten); `-` prints it
+        /// instead. Default: ~/.keylease/clients/agent_NAME.token, which the CLI reads for
         /// KEYLEASE_AGENT_ID=agent_NAME without KEYLEASE_CLIENT_TOKEN_FILE.
         #[arg(long)]
         token_file: Option<PathBuf>,
+        /// Register a key made on the agent's host (`keylease client keygen FILE` there, or
+        /// an `ssh-ed25519` public key) instead of making one here; no file is written.
+        #[arg(long, conflicts_with_all = ["token_file", "legacy_token"])]
+        public_key: Option<PathBuf>,
+        /// Give the agent a bearer token instead of a signing key, for a client that cannot
+        /// sign its requests.
+        #[arg(long)]
+        legacy_token: bool,
     },
+    /// List clients and how each authenticates (`key`, `legacy` token, `owner`, `gateway`).
     List,
     Revoke {
         id: String,
+    },
+    /// Move a token-authenticated agent to a signing key in place: same agent id, so its
+    /// rules and trusts stay. Its old token stops working.
+    Upgrade {
+        /// The agent (`agent_NAME` or `NAME`).
+        id: String,
+        /// Its credential file, rewritten with the key; default:
+        /// ~/.keylease/clients/agent_NAME.token.
+        #[arg(long)]
+        token_file: Option<PathBuf>,
+    },
+    /// Make a signing key on an agent's host: writes the private key (mode 0600) and
+    /// prints the public key to register with `client register NAME --public-key`.
+    Keygen {
+        file: PathBuf,
     },
 }
 #[derive(Subcommand)]
@@ -1818,6 +1843,17 @@ fn vault_command(db: &Path, command: VaultCommand) -> Result<()> {
     }
 }
 fn client_command(db: &Path, command: ClientCommand) -> Result<()> {
+    // Making a key needs no vault: it never leaves this host.
+    if let ClientCommand::Keygen { file } = &command {
+        let (private, public) = client_key::generate();
+        write_new_private_file(file, private.as_bytes())?;
+        return print_json(&json!({
+            "private_key_file": fs::canonicalize(file).unwrap_or_else(|_| file.clone()),
+            "public_key": public,
+            "next": "On the vault host: keylease client register NAME --public-key FILE \
+                     (a file holding the public key above)",
+        }));
+    }
     let service = admin_service(db)?;
     match command {
         ClientCommand::Register {
@@ -1825,14 +1861,37 @@ fn client_command(db: &Path, command: ClientCommand) -> Result<()> {
             no_baseline,
             baseline: _,
             token_file,
+            public_key,
+            legacy_token,
         } => {
+            if let Some(public_key) = public_key {
+                let text = read_public_key_file(&public_key)?;
+                let agent_id = service.register_client_with_key(&name, &text)?;
+                let baseline_rule_ids = if no_baseline {
+                    None
+                } else {
+                    let vault_id = service.current_vault_id()?;
+                    Some(service.install_agent_baseline(&agent_id, &vault_id)?)
+                };
+                return print_json(&json!({
+                    "agent_id": agent_id,
+                    "auth": "key",
+                    "baseline_rule_ids": baseline_rule_ids,
+                    "next": format!(
+                        "On the agent's host, keep the private key at \
+                         ~/.keylease/clients/{}.token (or point KEYLEASE_CLIENT_TOKEN_FILE at \
+                         it) and set KEYLEASE_AGENT_ID={}",
+                        agent_id.0, agent_id.0
+                    ),
+                }));
+            }
             let token_file = match token_file {
                 Some(path) if path == Path::new("-") => None,
                 Some(path) => Some(path),
                 None if valid_client_name(&name) => Some(trust::agent_token_path(&name)?),
                 None => None,
             };
-            // An existing token file is never replaced.
+            // An existing credential file is never replaced.
             if let Some(path) = &token_file
                 && fs::symlink_metadata(path).is_ok()
             {
@@ -1845,7 +1904,17 @@ fn client_command(db: &Path, command: ClientCommand) -> Result<()> {
                     ),
                 });
             }
-            let (agent_id, token) = service.register_client(&name)?;
+            let (agent_id, credential, kind) = if legacy_token {
+                let (agent_id, token) = service.register_client(&name)?;
+                (agent_id, Zeroizing::new(token), "legacy")
+            } else {
+                let (private, public) = client_key::generate();
+                (
+                    service.register_client_with_key(&name, &public)?,
+                    private,
+                    "key",
+                )
+            };
             let baseline_rule_ids = if no_baseline {
                 None
             } else {
@@ -1855,16 +1924,18 @@ fn client_command(db: &Path, command: ClientCommand) -> Result<()> {
             let Some(path) = token_file else {
                 return print_json(&json!({
                     "agent_id":agent_id,
-                    "client_token":token,
+                    "auth":kind,
+                    "client_token":*credential,
                     "baseline_rule_ids":baseline_rule_ids,
                     "warning":"store this once in a mode-0600 file"
                 }));
             };
-            write_new_private_file(&path, token.as_bytes())?;
+            write_new_private_file(&path, credential.as_bytes())?;
             let default = default_agent_token(&agent_id.0).is_some_and(|d| d == path);
             let path = fs::canonicalize(&path).unwrap_or(path);
             print_json(&json!({
                 "agent_id":agent_id,
+                "auth":kind,
                 "token_file":path,
                 "baseline_rule_ids":baseline_rule_ids,
                 "env": if default {
@@ -1874,12 +1945,85 @@ fn client_command(db: &Path, command: ClientCommand) -> Result<()> {
                 },
             }))
         }
-        ClientCommand::List => print_json(&service.list_clients()?),
+        ClientCommand::List => print_json(
+            &service
+                .list_clients_with_auth()?
+                .into_iter()
+                .map(|(agent_id, auth)| json!({"agent_id": agent_id, "auth": auth}))
+                .collect::<Vec<_>>(),
+        ),
         ClientCommand::Revoke { id } => {
             service.revoke_client(&AgentId(id.clone()))?;
             print_json(&json!({"revoked":id}))
         }
+        ClientCommand::Upgrade { id, token_file } => {
+            let agent_id = AgentId(if id.starts_with("agent_") {
+                id
+            } else {
+                format!("agent_{id}")
+            });
+            let path = match token_file {
+                Some(path) => path,
+                None => default_agent_token(&agent_id.0).ok_or_else(|| {
+                    KeyLeaseError::InvalidRequest {
+                        reason: format!(
+                            "{} has no default credential file; pass --token-file",
+                            agent_id.0
+                        ),
+                    }
+                })?,
+            };
+            if let Ok(existing) = fs::read_to_string(&path)
+                && client_key::is_private_key(&existing)
+            {
+                return Err(KeyLeaseError::InvalidRequest {
+                    reason: format!("{} already holds a signing key", path.display()),
+                });
+            }
+            let (private, public) = client_key::generate();
+            // The new key is on disk before the service switches, so a failure
+            // in between never leaves the agent without a working credential.
+            let staged = path.with_extension("token.new");
+            let _ = fs::remove_file(&staged);
+            write_new_private_file(&staged, private.as_bytes())?;
+            if let Err(error) = service.bind_client_key(&agent_id, &public) {
+                let _ = fs::remove_file(&staged);
+                return Err(error);
+            }
+            fs::rename(&staged, &path).map_err(|_| KeyLeaseError::Storage)?;
+            print_json(&json!({
+                "agent_id": agent_id,
+                "auth": "key",
+                "token_file": fs::canonicalize(&path).unwrap_or(path),
+                "next": "Restart the agent's long-running KeyLease processes (keylease mcp, \
+                         ssh-agent, db proxy) so they read the key",
+            }))
+        }
+        ClientCommand::Keygen { .. } => unreachable!("handled before unlocking"),
     }
+}
+
+/// A public key file as `client register --public-key` reads it.
+fn read_public_key_file(path: &Path) -> Result<String> {
+    let metadata = fs::metadata(path).map_err(|_| KeyLeaseError::InvalidRequest {
+        reason: format!("cannot read {}", path.display()),
+    })?;
+    if !metadata.is_file() || metadata.len() > 4096 {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: format!("{} is not a public key file", path.display()),
+        });
+    }
+    let text = fs::read_to_string(path).map_err(|_| KeyLeaseError::InvalidRequest {
+        reason: format!("cannot read {}", path.display()),
+    })?;
+    if client_key::is_private_key(&text) {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "that is a private key; register its public key (`keylease client keygen` \
+                     prints it)"
+                .into(),
+        });
+    }
+    Ok(text)
 }
 fn grant_command(db: &Path, command: GrantCommand) -> Result<()> {
     let service = admin_service(db)?;
@@ -2844,13 +2988,43 @@ fn auth(cli: &Cli) -> Result<RpcAuth> {
             ),
         });
     }
-    let token = read_secret_file(&path, "client token")?;
+    let credential = read_secret_file(&path, "client token")?;
+    let token = if client_key::is_private_key(&credential) {
+        let key = client_key::decode_private(&credential)?;
+        *CLIENT_SIGNER.lock().map_err(|_| KeyLeaseError::Storage)? = Some((agent.clone(), key));
+        String::new()
+    } else {
+        credential.trim().to_owned()
+    };
     Ok(RpcAuth {
         agent_id: AgentId(agent),
-        token: SecretValue(token.trim().to_owned()),
+        token: SecretValue(token),
         session_id: cli.client_session.clone(),
         purpose: cli.purpose.clone(),
+        signature: None,
     })
+}
+
+/// The key of the key-bound client [`auth`] read, with its agent id: every
+/// request that agent sends is signed with it in [`rpc_once`].
+static CLIENT_SIGNER: std::sync::Mutex<Option<(String, ed25519_dalek::SigningKey)>> =
+    std::sync::Mutex::new(None);
+
+/// Signs `encoded` afresh (new timestamp and nonce, so a retry is not a
+/// replay) when it comes from the key-bound client this process holds.
+fn sign_for_send(encoded: &[u8]) -> Result<Option<Zeroizing<Vec<u8>>>> {
+    let signer = CLIENT_SIGNER.lock().map_err(|_| KeyLeaseError::Storage)?;
+    let Some((agent, key)) = signer.as_ref() else {
+        return Ok(None);
+    };
+    let mut request: Value = serde_json::from_slice(encoded).map_err(|_| KeyLeaseError::Storage)?;
+    if request.pointer("/auth/agent_id").and_then(Value::as_str) != Some(agent.as_str()) {
+        return Ok(None);
+    }
+    client_key::sign_request(&mut request, key, Utc::now().timestamp())?;
+    Ok(Some(Zeroizing::new(
+        serde_json::to_vec(&request).map_err(|_| KeyLeaseError::Storage)?,
+    )))
 }
 fn read_onepux_source(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
     let path_metadata = fs::symlink_metadata(path).map_err(|_| KeyLeaseError::InvalidRequest {
@@ -2988,6 +3162,8 @@ static APPROVAL_WAIT_SECONDS: std::sync::OnceLock<u64> = std::sync::OnceLock::ne
 const APPROVAL_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
 async fn rpc_once(socket: &Path, encoded: &[u8]) -> Result<Value> {
+    let signed = sign_for_send(encoded)?;
+    let encoded = signed.as_deref().map_or(encoded, Vec::as_slice);
     let mut stream = UnixStream::connect(socket)
         .await
         .map_err(|_| KeyLeaseError::ConnectorUnavailable { retryable: true })?;
@@ -3021,6 +3197,17 @@ async fn rpc_once(socket: &Path, encoded: &[u8]) -> Result<Value> {
         Err(match error {
             // This CLI builds every request itself, so the service failing to
             // parse one means it runs an older build that lacks the command.
+            // An older service ignores the signature and finds no token.
+            KeyLeaseError::Denied { reason }
+                if signed.is_some() && reason == "client authentication failed" =>
+            {
+                KeyLeaseError::Denied {
+                    reason: "client authentication failed (this agent signs its requests; if \
+                             the KeyLease service was started before this CLI was installed, \
+                             restart it: `sudo systemctl restart keylease`)"
+                        .into(),
+                }
+            }
             KeyLeaseError::InvalidRequest { reason } if reason == "invalid JSON RPC request" => {
                 KeyLeaseError::InvalidRequest {
                     reason: "the KeyLease service does not know this request: it runs an older \
@@ -3245,6 +3432,7 @@ mod tests {
             token: SecretValue("client-token-fixture".into()),
             session_id: "test-session".into(),
             purpose: None,
+            signature: None,
         };
         let debug = format!("{auth:?}");
         assert!(!debug.contains("client-token-fixture"));
@@ -3401,6 +3589,7 @@ mod tests {
             token: SecretValue(token),
             session_id: "desktop-test".into(),
             purpose: None,
+            signature: None,
         };
 
         let connections = handle_rpc(

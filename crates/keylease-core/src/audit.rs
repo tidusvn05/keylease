@@ -27,6 +27,11 @@ pub struct AuditEvent {
     /// The time-boxed trust that authorized this use, when one did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trust_id: Option<String>,
+    /// How the agent authenticated: `key` (signed requests) or `legacy` (a
+    /// bearer token). Absent for the owner, gateway connections and events
+    /// that predate key-bound identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_auth: Option<String>,
 }
 
 impl AuditEvent {

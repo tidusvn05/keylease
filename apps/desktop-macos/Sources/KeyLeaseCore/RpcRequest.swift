@@ -134,6 +134,7 @@ public enum RpcRequest: Encodable, Sendable {
     )
     /// `publicKeyBlob` and `data` are base64.
     case sshSign(publicKeyBlob: String, data: String, flags: UInt32)
+    case sshIssueCert(id: String, publicKey: String, principals: [String], ttlSeconds: UInt64?)
     case auditQuery(limit: UInt32)
     case leaseRequest(
         request: ActionRequest,
@@ -204,6 +205,7 @@ public enum RpcRequest: Encodable, Sendable {
         case .dbTarget: "db_target"
         case .dbScram: "db_scram"
         case .sshSign: "ssh_sign"
+        case .sshIssueCert: "ssh_issue_cert"
         case .cloudRequest: "cloud_request"
         case .auditQuery: "audit_query"
         case .leaseRequest: "lease_request"
@@ -399,6 +401,11 @@ public enum RpcRequest: Encodable, Sendable {
             try c.encode(publicKeyBlob, forKey: key("public_key_blob"))
             try c.encode(data, forKey: key("data"))
             try c.encode(flags, forKey: key("flags"))
+        case .sshIssueCert(let id, let publicKey, let principals, let ttlSeconds):
+            try c.encode(id, forKey: key("id"))
+            try c.encode(publicKey, forKey: key("public_key"))
+            try c.encode(principals, forKey: key("principals"))
+            try c.encodeIfPresent(ttlSeconds, forKey: key("ttl_seconds"))
         case .auditQuery(let limit):
             try c.encode(limit, forKey: key("limit"))
         case .leaseRequest(let request, let ttlSeconds, let maxUses, let approvalId):

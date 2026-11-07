@@ -333,6 +333,7 @@ async fn phase4_registry_proposal_connections_and_audit_are_tenant_scoped() {
         byte_count: Some(128),
         changed_fields: Vec::new(),
         trust_id: None,
+        client_auth: None,
     };
     repository
         .ingest_audit(

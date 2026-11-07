@@ -32,6 +32,7 @@ use tokio::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
+pub mod client_key;
 mod cloud;
 mod db;
 mod gateway;
@@ -77,6 +78,9 @@ pub struct KeyLeaseService {
     connectors: HashMap<String, Arc<dyn Connector>>,
     active_executions: Mutex<HashMap<String, u32>>,
     authentication_failures: Mutex<HashMap<String, VecDeque<Instant>>>,
+    /// Nonces of recent signed client requests (`agent\nnonce` → timestamp),
+    /// so a captured request cannot be replayed within its validity window.
+    signature_nonces: Mutex<HashMap<String, i64>>,
     agent_handoffs: Mutex<HashMap<String, AgentNewItemHandoff>>,
     google_oauth_flows: Arc<Mutex<HashMap<String, GoogleOAuthFlow>>>,
     /// SQLite `data_version` when the in-memory policy was last built; a
@@ -515,6 +519,7 @@ impl KeyLeaseService {
             connectors,
             active_executions: Mutex::new(HashMap::new()),
             authentication_failures: Mutex::new(HashMap::new()),
+            signature_nonces: Mutex::new(HashMap::new()),
             agent_handoffs: Mutex::new(HashMap::new()),
             google_oauth_flows: Arc::new(Mutex::new(HashMap::new())),
         })
@@ -635,17 +640,10 @@ impl KeyLeaseService {
         })
     }
 
+    /// Registers a legacy bearer-token client; see
+    /// [`Self::register_client_with_key`] for the signing kind.
     pub fn register_client(&self, name: &str) -> Result<(AgentId, String)> {
-        if name.is_empty()
-            || !name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        {
-            return Err(KeyLeaseError::InvalidRequest {
-                reason: "client name must be ASCII letters, digits, '-' or '_'".into(),
-            });
-        }
-        let id = AgentId(format!("agent_{name}"));
+        let id = client_key::client_agent_id(name)?;
         let token = self.store.register_client(&id)?;
         Ok((id, token))
     }
@@ -4704,6 +4702,7 @@ impl KeyLeaseService {
             byte_count: None,
             changed_fields,
             trust_id: None,
+            client_auth: self.audit_client_auth(&actor.agent_id),
         }
     }
     fn audit_action(
@@ -4753,6 +4752,7 @@ impl KeyLeaseService {
                 .and_then(|r| serde_json::to_vec(&r.body).ok().map(|v| v.len() as u64)),
             changed_fields: vec![],
             trust_id: None,
+            client_auth: self.audit_client_auth(&actor.agent_id),
         }
     }
 }

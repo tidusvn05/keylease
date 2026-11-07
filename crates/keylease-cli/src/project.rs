@@ -125,10 +125,11 @@ pub(crate) fn init(db: &Path, args: InitArgs) -> Result<()> {
     let registered = if fs::symlink_metadata(&token_path).is_ok() {
         false
     } else {
-        let (registered_id, token) = service.register_client(&name)?;
+        let (private, public) = client_key::generate();
+        let registered_id = service.register_client_with_key(&name, &public)?;
         let vault_id = service.current_vault_id()?;
         service.install_agent_baseline(&registered_id, &vault_id)?;
-        write_new_private_file(&token_path, token.as_bytes())?;
+        write_new_private_file(&token_path, private.as_bytes())?;
         true
     };
     if !file_path.exists() {
