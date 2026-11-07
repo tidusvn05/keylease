@@ -265,6 +265,8 @@ pub struct ApprovalDecisionOutcome {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnrolledAgent {
     pub agent_id: AgentId,
+    /// Empty for a key-bound agent.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub token: String,
     pub baseline_rule_ids: Vec<String>,
 }
@@ -844,6 +846,17 @@ impl KeyLeaseService {
         actor: &ActorContext,
         name: &str,
     ) -> Result<EnrolledAgent> {
+        self.enroll_agent_with_key_authorized(actor, name, None)
+    }
+
+    /// [`Self::enroll_agent_authorized`]; with `public_key` the agent is
+    /// key-bound and gets no token.
+    pub fn enroll_agent_with_key_authorized(
+        &self,
+        actor: &ActorContext,
+        name: &str,
+        public_key: Option<&str>,
+    ) -> Result<EnrolledAgent> {
         if !self.desktop_owner_only(&actor.agent_id)? {
             return Err(KeyLeaseError::Denied {
                 reason: "only the desktop owner can enroll an agent".into(),
@@ -859,7 +872,13 @@ impl KeyLeaseService {
             )?;
             Ok(vault.vault_id.clone())
         })?;
-        let (agent_id, token) = self.register_client(name)?;
+        let (agent_id, token) = match public_key {
+            Some(public_key) => (
+                self.register_client_with_key(name, public_key)?,
+                String::new(),
+            ),
+            None => self.register_client(name)?,
+        };
         let enrolled = self.install_agent_baseline(&agent_id, &vault_id);
         if let Err(error) = enrolled {
             // Never leave a client behind that has a token but no baseline.

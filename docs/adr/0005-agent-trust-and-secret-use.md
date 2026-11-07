@@ -198,9 +198,27 @@ store the private key mode 0600 under `~/.keylease/clients/`). Each request is
 signed over its canonical digest, a timestamp and a nonce; the node rejects
 stale or replayed signatures. Bearer tokens remain accepted for clients
 registered without a key and are marked `legacy` in the UI and audit.
-Time-boxed trust may only be granted to key-bound clients. *Not enforced yet:*
-until key-bound identity lands (rollout step 6), trust is granted to the
-registered client.
+Time-boxed trust may only be granted to key-bound clients.
+
+*As implemented:* every CLI registration path (`client register`, `agent
+enroll`, `projects init`, `mcp setup`) makes a key by default and writes the
+private key, `kl_ed25519_<base64 seed>`, to the client's usual credential file,
+so `KEYLEASE_AGENT_ID` and `KEYLEASE_CLIENT_TOKEN_FILE` work unchanged; the
+store keeps the public key in `client_keys` and an unusable token hash.
+`auth.signature` = `{timestamp, nonce, sig}`, where `sig` is Ed25519 over
+SHA-256 of a domain tag and the canonical (key-sorted) JSON request without
+`sig`. `keylease-rpc`'s `dispatch_value` verifies it on the raw request before
+parsing; the service rejects a skew over 120 s and a nonce seen in the window.
+The CLI re-signs every send, so `--wait-approval` retries are not replays.
+`--legacy-token` still issues a bearer token, `client upgrade` moves a token
+client to a key in place (same agent id, so rules and trusts survive), and
+`client list` and audit events (`client_auth`) mark `legacy` clients. The
+owner apps' credentials (`agent_desktop`, `agent_mobile`) and gateway
+connections are not agent clients and are unchanged. *Option not taken:*
+trust is not restricted to key-bound clients, so existing installs keep their
+trusts and approvals working without re-registering; a client's key, like a
+token, is readable by other processes of the same Unix user, so the
+restriction would mostly add friction. Binding trust to a host key is not done.
 
 ### 7. Standalone VPS (mode A: self-trust)
 
@@ -294,6 +312,9 @@ The node exposes pairing and approval endpoints on its existing HTTPS listener
    (key in the Keychain). The mobile approver, push delivery and remote unlock
    are not done.
 6. Signed client identity becomes required for new registrations.
+   **Implemented** as the default for new registrations, with bearer tokens
+   kept as `legacy` (`--legacy-token`, `client upgrade`); see section 6 and
+   `docs/agent-approvals.md`. Trust is not restricted to key-bound clients.
 7. `keylease run` with output scrubbing; then browser login fill. **`keylease
    run` implemented** (`docs/run-with-secrets.md`) as `entry:inject_secret`,
    R4, one approval per run naming the program. Browser login fill is not

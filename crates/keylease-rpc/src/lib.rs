@@ -84,6 +84,12 @@ pub struct RpcAuth {
     /// bound into the approval digest. Untrusted text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purpose: Option<String>,
+    /// A key-bound client's signature over the whole request; `token` is
+    /// then empty. Checked by [`dispatch_value`] on the raw JSON before
+    /// parsing (see `keylease_service::client_key`); kept here only so the
+    /// field round-trips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<Value>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
@@ -349,6 +355,10 @@ pub enum RpcRequest {
     AgentEnroll {
         auth: RpcAuth,
         name: String,
+        /// The new agent's public key (`kl_ed25519_pub_...` or `ssh-ed25519
+        /// ...`). With it the agent is key-bound and no token is returned.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        public_key: Option<String>,
     },
     SshIdentities {
         auth: RpcAuth,
@@ -407,6 +417,9 @@ tokio::task_local! {
     /// Set only by [`handle_rpc_as`]: an identity the transport verified
     /// itself (the HTTP gateway's OAuth token), used instead of a client token.
     static PREAUTHENTICATED: ActorContext;
+    /// Set only by [`dispatch_value`]: the agent whose signature over this
+    /// request verified.
+    static SIGNED: AgentId;
 }
 
 /// Runs `request` as an actor the caller has already authenticated. The
@@ -977,10 +990,18 @@ pub async fn handle_rpc(
             )?)
             .map_err(|_| KeyLeaseError::Storage)
         }
-        RpcRequest::AgentEnroll { auth, name } => {
+        RpcRequest::AgentEnroll {
+            auth,
+            name,
+            public_key,
+        } => {
             let actor = actor(service, &auth)?;
-            serde_json::to_value(service.enroll_agent_authorized(&actor, &name)?)
-                .map_err(|_| KeyLeaseError::Storage)
+            serde_json::to_value(service.enroll_agent_with_key_authorized(
+                &actor,
+                &name,
+                public_key.as_deref(),
+            )?)
+            .map_err(|_| KeyLeaseError::Storage)
         }
         RpcRequest::AuditQuery { auth, limit } => {
             let actor = actor(service, &auth)?;
@@ -1042,6 +1063,28 @@ fn actor(service: &KeyLeaseService, auth: &RpcAuth) -> Result<ActorContext> {
             ..verified
         });
     }
+    if let Ok(signed) = SIGNED.try_with(Clone::clone) {
+        if signed != auth.agent_id {
+            return Err(KeyLeaseError::Denied {
+                reason: "request names a different agent than its signature".into(),
+            });
+        }
+        return Ok(ActorContext {
+            agent_id: signed,
+            workload_id: None,
+            human_principal: None,
+            on_behalf_of: None,
+            client_session_id: auth.session_id.clone(),
+            purpose: auth.purpose.clone(),
+        });
+    }
+    if auth.signature.is_some() {
+        // Only `dispatch_value` verifies signatures; an in-process caller
+        // passing a signed request is not authenticated by it.
+        return Err(KeyLeaseError::Denied {
+            reason: "client authentication failed".into(),
+        });
+    }
     let mut actor = service.authenticate(&auth.agent_id, &auth.token.0, &auth.session_id)?;
     actor.purpose = auth.purpose.clone();
     Ok(actor)
@@ -1068,13 +1111,24 @@ pub async fn dispatch_value(
     capabilities: RpcCapabilities,
     request: Value,
 ) -> Value {
+    // The signature covers the request as sent, so it is checked before
+    // parsing can drop or reorder anything.
+    let signed = match service.verify_signed_request(&request) {
+        Ok(signed) => signed,
+        Err(error) => return encode_response(Err(error)),
+    };
     let parsed =
         serde_json::from_value::<RpcRequest>(request).map_err(|_| KeyLeaseError::InvalidRequest {
             reason: "invalid JSON RPC request".into(),
         });
-    match parsed {
-        Ok(request) => encode_response(handle_rpc(service, capabilities, request).await),
-        Err(error) => encode_response(Err(error)),
+    match (parsed, signed) {
+        (Ok(request), Some(agent)) => encode_response(
+            SIGNED
+                .scope(agent, handle_rpc(service, capabilities, request))
+                .await,
+        ),
+        (Ok(request), None) => encode_response(handle_rpc(service, capabilities, request).await),
+        (Err(error), _) => encode_response(Err(error)),
     }
 }
 

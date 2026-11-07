@@ -60,6 +60,7 @@ impl Backend {
             token: SecretValue(String::new()),
             session_id: actor.client_session_id.clone(),
             purpose: actor.purpose.clone(),
+            signature: None,
         };
         Self {
             target: Target::InProcess(service, actor),

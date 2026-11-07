@@ -610,6 +610,7 @@ impl CanonicalActionExecutor for EdgeEnforcedExecutor {
                             vec![]
                         },
                         trust_id: None,
+                        client_auth: None,
                     };
                     // Return success only after durable local append.
                     self.store.append_audit(&event)?;
@@ -1683,6 +1684,7 @@ mod tests {
             byte_count: Some(12),
             changed_fields: vec!["title".into()],
             trust_id: None,
+            client_auth: None,
         };
         assert_eq!(store.append_audit(&event).unwrap(), 1);
         assert_eq!(store.append_audit(&event).unwrap(), 2);

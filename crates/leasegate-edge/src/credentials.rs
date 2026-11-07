@@ -623,6 +623,7 @@ fn credential_audit(
         byte_count: None,
         changed_fields: Vec::new(),
         trust_id: None,
+        client_auth: None,
     }
 }
 
