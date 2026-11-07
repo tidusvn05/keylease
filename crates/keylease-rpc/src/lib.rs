@@ -388,6 +388,23 @@ pub enum RpcRequest {
         /// Base64 of the bytes the agent protocol asked to sign.
         data: String,
         flags: u32,
+        /// The connection's `session-bind@openssh.com` records, oldest first.
+        /// Older clients and ssh versions send none.
+        #[serde(default)]
+        session_binds: Vec<keylease_service::SshSessionBind>,
+    },
+    /// Issue a short-lived SSH user certificate from a CA item for a key the
+    /// client generated.
+    SshIssueCert {
+        auth: RpcAuth,
+        id: ItemId,
+        /// The client's public key in OpenSSH format.
+        public_key: String,
+        /// A subset of the CA's principals; empty for all of them.
+        #[serde(default)]
+        principals: Vec<String>,
+        #[serde(default)]
+        ttl_seconds: Option<u64>,
     },
     AuditQuery {
         auth: RpcAuth,
@@ -989,6 +1006,7 @@ pub async fn handle_rpc(
             public_key_blob,
             data,
             flags,
+            session_binds,
         } => {
             use base64::{Engine, engine::general_purpose::STANDARD};
             let actor = actor(service, &auth)?;
@@ -1004,6 +1022,24 @@ pub async fn handle_rpc(
                 &decode(&public_key_blob)?,
                 &decode(&data)?,
                 flags,
+                &session_binds,
+            )?)
+            .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::SshIssueCert {
+            auth,
+            id,
+            public_key,
+            principals,
+            ttl_seconds,
+        } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.ssh_issue_certificate_authorized(
+                &actor,
+                &id,
+                &public_key,
+                &principals,
+                ttl_seconds,
             )?)
             .map_err(|_| KeyLeaseError::Storage)
         }

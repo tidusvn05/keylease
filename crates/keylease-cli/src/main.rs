@@ -39,6 +39,7 @@ mod project;
 mod run;
 mod service;
 mod ssh_agent;
+mod ssh_ca;
 mod trust;
 
 #[derive(Parser)]
@@ -203,11 +204,20 @@ enum Command {
         #[command(subcommand)]
         command: trust::TrustCommand,
     },
+    /// SSH certificate authorities kept in the vault (master password).
+    SshCa {
+        #[command(subcommand)]
+        command: ssh_ca::SshCaCommand,
+    },
+    /// Pin an SSH key to the host keys it may sign logins for (master password).
+    SshPin(ssh_ca::PinArgs),
     /// Run an SSH agent whose private keys stay in the KeyLease service.
     SshAgent {
         /// Socket path; a private temporary one by default.
         #[arg(long)]
         agent_socket: Option<PathBuf>,
+        #[command(flatten)]
+        cert: ssh_agent::CertArgs,
     },
     /// Run a program with vault values in its environment, scrubbed from its output.
     #[command(trailing_var_arg = true)]
@@ -244,6 +254,8 @@ enum Command {
     /// Run OpenSSH with a private, single-use KeyLease agent.
     #[command(trailing_var_arg = true)]
     Ssh {
+        #[command(flatten)]
+        cert: ssh_agent::CertArgs,
         #[arg(allow_hyphen_values = true, required = true)]
         args: Vec<String>,
     },
@@ -861,6 +873,8 @@ async fn run() -> Result<()> {
         Command::Approval { .. }
             | Command::Approve(_)
             | Command::Add(_)
+            | Command::SshCa { .. }
+            | Command::SshPin(_)
             | Command::Trust { .. }
             | Command::Client { .. }
             | Command::Grant { .. }
@@ -1060,6 +1074,10 @@ async fn run() -> Result<()> {
         },
         Command::Approve(args) => approve::approve(&cli.db, args),
         Command::Add(args) => project::add(&cli.db, args),
+        Command::SshCa {
+            command: ssh_ca::SshCaCommand::Init(args),
+        } => ssh_ca::init(&cli.db, args),
+        Command::SshPin(args) => ssh_ca::pin(&cli.db, args),
         Command::Projects { command } => match command {
             ProjectCommand::Init(args) => project::init(&cli.db, args),
             ProjectCommand::Instructions(args) => instructions::instructions(args),
@@ -1105,10 +1123,10 @@ async fn run() -> Result<()> {
             command => approval_command(&cli.db, command),
         },
         Command::Trust { command } => trust::trust_command(&cli, &socket, command).await,
-        Command::SshAgent { agent_socket } => {
-            ssh_agent::run_agent(&cli, &socket, agent_socket).await
+        Command::SshAgent { agent_socket, cert } => {
+            ssh_agent::run_agent(&cli, &socket, agent_socket, cert).await
         }
-        Command::Ssh { args } => ssh_agent::run_ssh(&cli, &socket, args).await,
+        Command::Ssh { cert, args } => ssh_agent::run_ssh(&cli, &socket, args, cert).await,
         Command::Db { command } => db_proxy::db_command(&cli, &socket, command).await,
         Command::Remote { command } => approver::remote_command(&cli, command).await,
         Command::Mcp {

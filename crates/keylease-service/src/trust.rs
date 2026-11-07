@@ -43,6 +43,7 @@ const BASELINE_APPROVAL_ACTIONS: &[&str] = &[
     "group:create",
     "group:update",
     "ssh:sign",
+    "ssh:issue_cert",
     "db:connect",
     "entry:supply_secret",
     "entry:generate_secret",
@@ -74,6 +75,7 @@ pub(crate) fn vault_action_risk(action: &str) -> RiskTier {
         | "entry:move"
         | "entry:generate_secret"
         | "ssh:sign"
+        | "ssh:issue_cert"
         | "db:connect" => RiskTier::R2,
         // `keylease run` puts a secret in a child process and scrubs it from
         // the output, so the agent never reads it: high impact, but trustable
@@ -387,7 +389,7 @@ impl KeyLeaseService {
         request_digest_hex: &str,
         risk: RiskTier,
         project: Option<ProjectId>,
-    ) -> Result<()> {
+    ) -> Result<String> {
         if self.store.kill_switch_enabled()? {
             self.audit_vault(
                 actor,
@@ -443,7 +445,7 @@ impl KeyLeaseService {
                 now,
                 &event,
             )?;
-            return Ok(());
+            return Ok(open.id.0);
         }
         let approval = ApprovalRecord {
             id: ApprovalId::new(),
