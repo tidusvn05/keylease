@@ -226,6 +226,88 @@ impl KeyLeaseService {
     pub fn revoke_approver_device(&self, id: &str) -> Result<()> {
         self.store.revoke_approver_device(id)
     }
+
+    /// The owner (master password) lets a paired device set up remote unlock
+    /// within ten minutes. The slot itself is made by the running node when
+    /// the device asks, so its secret never passes through this process.
+    pub fn allow_remote_unlock(&self, device_id: &str) -> Result<DateTime<Utc>> {
+        self.with_vault(|_| {
+            self.store
+                .get_approver_device::<ApproverDevice>(device_id)?
+                .ok_or_else(|| KeyLeaseError::NotFound {
+                    resource: device_id.into(),
+                })?;
+            let expires_at = Utc::now() + Duration::minutes(PAIRING_CODE_TTL_MINUTES);
+            self.store.offer_device_unlock(device_id, expires_at)?;
+            Ok(expires_at)
+        })
+    }
+
+    /// A device the owner allowed fetches its unlock secret: 32 random bytes
+    /// that wrap the root key in a slot of their own. The device keeps it; the
+    /// node keeps only the slot. Needs the vault unlocked.
+    pub fn remote_unlock_setup(&self, device: &ApproverDevice) -> Result<Zeroizing<[u8; 32]>> {
+        let mut secret = Zeroizing::new([0_u8; 32]);
+        rand::rng().fill_bytes(secret.as_mut());
+        self.with_vault(|vault| {
+            self.store
+                .accept_device_unlock_offer(vault, &device.id, &secret, Utc::now())
+        })?;
+        self.append_remote_audit(device, "approver:unlock_setup", "remote unlock set up")?;
+        Ok(secret)
+    }
+
+    /// Unlocks a locked node with a paired device's secret, for `session_ttl`
+    /// of inactivity. Already unlocked is not an error.
+    pub fn remote_unlock(
+        &self,
+        device: &ApproverDevice,
+        secret: &[u8; 32],
+        session_ttl: Duration,
+    ) -> Result<bool> {
+        validate_session_timeout(session_ttl)?;
+        if self.current_vault_id().is_ok() {
+            return Ok(false);
+        }
+        let vault = self.store.unlock_with_device(&device.id, secret)?;
+        *self.session.lock().map_err(|_| KeyLeaseError::Storage)? = Some(Session {
+            vault,
+            idle_timeout: session_ttl,
+            last_activity: Utc::now(),
+        });
+        self.append_remote_audit(device, "vault:remote_unlock", "unlocked remotely")?;
+        Ok(true)
+    }
+
+    /// Stops a device from unlocking the vault (master password).
+    pub fn disable_remote_unlock(&self, device_id: &str) -> Result<bool> {
+        self.with_vault(|_| self.store.remove_device_unlock(device_id))
+    }
+
+    /// Devices that can unlock the vault.
+    pub fn remote_unlock_devices(&self) -> Result<Vec<String>> {
+        self.store.device_unlock_slots()
+    }
+
+    fn append_remote_audit(
+        &self,
+        device: &ApproverDevice,
+        action: &str,
+        reason: &str,
+    ) -> Result<()> {
+        let event = AuditEvent {
+            agent_id: AgentId(device.id.clone()),
+            ..self.vault_audit_event(
+                &self.remote_actor(device),
+                action,
+                "kl://approvers",
+                "allow",
+                reason,
+                vec![],
+            )
+        };
+        self.store.append_audit(&event)
+    }
 }
 
 /// RFC 4648 base32 without padding, upper case.
@@ -274,6 +356,69 @@ mod tests {
             key.sign(&approver_signing_input(method, path, timestamp, body))
                 .to_bytes(),
         )
+    }
+
+    #[test]
+    fn an_allowed_device_unlocks_the_vault_after_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.sqlite");
+        let store = Arc::new(NativeStore::open(&path).unwrap());
+        let service = KeyLeaseService::new(store).unwrap();
+        service.initialize(b"password", Duration::hours(1)).unwrap();
+        let key = SigningKey::from_bytes(&[9_u8; 32]);
+        let public =
+            base64::engine::general_purpose::STANDARD.encode(key.verifying_key().to_bytes());
+        let code = service.create_pairing_code().unwrap();
+        let device = service
+            .pair_approver(&code.code, "laptop", &public)
+            .unwrap();
+        // Not without the owner's consent.
+        assert!(service.remote_unlock_setup(&device).is_err());
+        service.allow_remote_unlock(&device.id).unwrap();
+        let secret = service.remote_unlock_setup(&device).unwrap();
+        // The offer is single-use.
+        assert!(service.remote_unlock_setup(&device).is_err());
+        assert_eq!(
+            service.remote_unlock_devices().unwrap(),
+            vec![device.id.clone()]
+        );
+        // A new master password keeps the device slot working: the root key is unchanged.
+        service
+            .change_master_password(b"password", b"another password")
+            .unwrap();
+        drop(service);
+
+        let service = KeyLeaseService::new(Arc::new(NativeStore::open(&path).unwrap())).unwrap();
+        assert!(
+            service.current_vault_id().is_err(),
+            "a restart starts locked"
+        );
+        assert!(
+            service
+                .remote_unlock(&device, &[1_u8; 32], Duration::hours(1))
+                .is_err()
+        );
+        assert!(service.current_vault_id().is_err());
+        assert!(
+            service
+                .remote_unlock(&device, &secret, Duration::hours(1))
+                .unwrap()
+        );
+        service.current_vault_id().unwrap();
+        assert!(
+            !service
+                .remote_unlock(&device, &secret, Duration::hours(1))
+                .unwrap(),
+            "already unlocked"
+        );
+        // Revoking the device ends its unlock.
+        service.revoke_approver_device(&device.id).unwrap();
+        let service = KeyLeaseService::new(Arc::new(NativeStore::open(&path).unwrap())).unwrap();
+        assert!(
+            service
+                .remote_unlock(&device, &secret, Duration::hours(1))
+                .is_err()
+        );
     }
 
     #[test]

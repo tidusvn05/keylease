@@ -294,8 +294,13 @@ The node exposes pairing and approval endpoints on its existing HTTPS listener
    `docs/remote-approval.md`) and in the macOS app's Remote Vaults section
    (key in the Keychain). **Push delivery implemented** through ntfy or any
    plain-text POST URL (`keylease notify set`), carrying only "requests wait on
-   HOST", never their content. The mobile approver and remote unlock are not
-   done.
+   HOST", never their content. **Remote unlock implemented** for the CLI
+   approver (`keylease remote allow-unlock` on the node, `remote unlock-setup`
+   and `remote unlock` on the device): a per-device key slot wraps the root
+   key under a key derived (HKDF-SHA256) from a 32-byte secret only the device
+   holds; the node makes the slot itself when the device asks within ten
+   minutes of the owner's consent. The Keychain/biometric variant in the macOS
+   app and the mobile approver are not done.
 6. Signed client identity becomes required for new registrations.
 7. `keylease run` with output scrubbing; then browser login fill. **`keylease
    run` implemented** (`docs/run-with-secrets.md`) as `entry:inject_secret`,

@@ -2366,8 +2366,143 @@ impl NativeStore {
             .collect()
     }
 
+    /// Lets a paired device fetch an unlock secret until `expires_at` (set by
+    /// the owner with the master password; the running node then makes the slot).
+    pub fn offer_device_unlock(&self, device_id: &str, expires_at: DateTime<Utc>) -> Result<()> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "INSERT INTO device_unlock_offers(device_id,expires_at) VALUES(?1,?2) \
+                 ON CONFLICT(device_id) DO UPDATE SET expires_at=excluded.expires_at",
+                params![device_id, expires_at.to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        Ok(())
+    }
+
+    /// Consumes a live offer and stores the device's unlock slot, atomically.
+    pub fn accept_device_unlock_offer(
+        &self,
+        unlocked: &UnlockedVault,
+        device_id: &str,
+        secret: &[u8; 32],
+        now: DateTime<Utc>,
+    ) -> Result<()> {
+        let slot = keylease_crypto::create_device_unlock_slot(
+            secret,
+            &unlocked.account_id,
+            device_id,
+            &unlocked.root_key,
+        )?;
+        let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let removed = transaction
+            .execute(
+                "DELETE FROM device_unlock_offers WHERE device_id=?1 AND expires_at>?2",
+                params![device_id, now.to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        if removed == 0 {
+            return Err(KeyLeaseError::Denied {
+                reason: "remote unlock is not offered to this device; run `keylease remote \
+                         allow-unlock DEVICE_ID` on the node first"
+                    .into(),
+            });
+        }
+        transaction
+            .execute(
+                "INSERT INTO device_unlock_slots(device_id,wrapped_root_key,created_at) \
+                 VALUES(?1,?2,?3) ON CONFLICT(device_id) DO UPDATE SET \
+                 wrapped_root_key=excluded.wrapped_root_key,created_at=excluded.created_at",
+                params![device_id, json(&slot)?, now.to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        transaction.commit().map_err(|_| KeyLeaseError::Storage)
+    }
+
+    /// Opens the vault with a paired device's unlock secret.
+    pub fn unlock_with_device(&self, device_id: &str, secret: &[u8; 32]) -> Result<UnlockedVault> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let denied = || KeyLeaseError::Denied {
+            reason: "this device cannot unlock the vault".into(),
+        };
+        let slot: String = connection
+            .query_row(
+                "SELECT s.wrapped_root_key FROM device_unlock_slots s JOIN approver_devices d \
+                 ON d.device_id=s.device_id WHERE s.device_id=?1 AND d.revoked=0",
+                [device_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|_| KeyLeaseError::Storage)?
+            .ok_or_else(denied)?;
+        let (account_id, vault_id, wrapped_vault): (String, String, String) = connection
+            .query_row(
+                "SELECT account_id,vault_id,wrapped_vault_key FROM vault_meta LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let account_id = AccountId(account_id);
+        let vault_id = VaultId(vault_id);
+        let root_key =
+            keylease_crypto::unlock_device_slot(secret, &account_id, device_id, &from_json(&slot)?)
+                .map_err(|_| denied())?;
+        let vault_key = unwrap_vault_key(
+            &account_id,
+            &vault_id,
+            &root_key,
+            &from_json(&wrapped_vault)?,
+        )?;
+        Ok(UnlockedVault {
+            account_id,
+            vault_id,
+            root_key,
+            vault_key,
+            session_id: random_session_id(),
+        })
+    }
+
+    /// Device ids that can unlock the vault.
+    pub fn device_unlock_slots(&self) -> Result<Vec<String>> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let mut stmt = connection
+            .prepare("SELECT device_id FROM device_unlock_slots ORDER BY device_id")
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|_| KeyLeaseError::Storage)?;
+        rows.map(|row| row.map_err(|_| KeyLeaseError::Storage))
+            .collect()
+    }
+
+    pub fn remove_device_unlock(&self, device_id: &str) -> Result<bool> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "DELETE FROM device_unlock_offers WHERE device_id=?1",
+                [device_id],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "DELETE FROM device_unlock_slots WHERE device_id=?1",
+                [device_id],
+            )
+            .map(|removed| removed > 0)
+            .map_err(|_| KeyLeaseError::Storage)
+    }
+
     pub fn revoke_approver_device(&self, device_id: &str) -> Result<()> {
         let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "DELETE FROM device_unlock_slots WHERE device_id=?1",
+                [device_id],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
         let changed = connection
             .execute(
                 "UPDATE approver_devices SET revoked=1 WHERE device_id=?1 AND revoked=0",
@@ -3032,6 +3167,8 @@ CREATE TABLE IF NOT EXISTS device_identity(device_id TEXT PRIMARY KEY,provenance
 CREATE TABLE IF NOT EXISTS agent_baseline_rules(rule_id TEXT PRIMARY KEY,agent_id TEXT NOT NULL,record_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pairing_codes(code_hash TEXT PRIMARY KEY,expires_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS approver_devices(device_id TEXT PRIMARY KEY,record_json TEXT NOT NULL,revoked INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS device_unlock_offers(device_id TEXT PRIMARY KEY,expires_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS device_unlock_slots(device_id TEXT PRIMARY KEY,wrapped_root_key TEXT NOT NULL,created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS trusts(trust_id TEXT PRIMARY KEY,agent_id TEXT NOT NULL,record_json TEXT NOT NULL,rule_json TEXT NOT NULL,expires_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS gateway_connect_codes(code_hash TEXT PRIMARY KEY,name TEXT NOT NULL,expires_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS gateway_connections(agent_id TEXT PRIMARY KEY,record_json TEXT NOT NULL,revoked INTEGER NOT NULL);

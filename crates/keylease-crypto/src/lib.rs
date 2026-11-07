@@ -127,6 +127,47 @@ pub fn unlock_password_slot(
     unwrap_key(&unlock_key, &slot.wrapped_root_key, aad.as_bytes())
 }
 
+/// Wraps the root key for a paired approver device that may unlock the vault
+/// remotely. `secret` is 32 random bytes the device keeps; no KDF stretching is
+/// needed because it is not a password.
+pub fn create_device_unlock_slot(
+    secret: &[u8; 32],
+    account_id: &AccountId,
+    device_id: &str,
+    root_key: &SecretKey,
+) -> Result<WrappedKey> {
+    let (key, aad) = device_unlock_key(secret, account_id, device_id)?;
+    wrap_key(&key, root_key, aad.as_bytes())
+}
+
+pub fn unlock_device_slot(
+    secret: &[u8; 32],
+    account_id: &AccountId,
+    device_id: &str,
+    slot: &WrappedKey,
+) -> Result<SecretKey> {
+    let (key, aad) = device_unlock_key(secret, account_id, device_id)?;
+    unwrap_key(&key, slot, aad.as_bytes())
+}
+
+fn device_unlock_key(
+    secret: &[u8; 32],
+    account_id: &AccountId,
+    device_id: &str,
+) -> Result<(SecretKey, String)> {
+    let hkdf = Hkdf::<Sha256>::new(Some(b"keylease-device-unlock-v1"), secret);
+    let mut output = [0_u8; 32];
+    hkdf.expand(device_id.as_bytes(), &mut output)
+        .map_err(|_| KeyLeaseError::Crypto)?;
+    Ok((
+        SecretKey(output),
+        format!(
+            "keylease:v1:device-unlock-slot:{}:{device_id}",
+            account_id.0
+        ),
+    ))
+}
+
 pub fn wrap_vault_key(
     account_id: &AccountId,
     vault_id: &VaultId,
@@ -327,6 +368,19 @@ fn payload_aad(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_unlock_slot_opens_only_with_its_secret_and_device() {
+        let account = AccountId::new();
+        let root = SecretKey::random();
+        let secret = [7_u8; 32];
+        let slot = create_device_unlock_slot(&secret, &account, "device_a", &root).unwrap();
+        let opened = unlock_device_slot(&secret, &account, "device_a", &slot).unwrap();
+        assert_eq!(opened.expose(), root.expose());
+        assert!(unlock_device_slot(&[8_u8; 32], &account, "device_a", &slot).is_err());
+        assert!(unlock_device_slot(&secret, &account, "device_b", &slot).is_err());
+        assert!(unlock_device_slot(&secret, &AccountId::new(), "device_a", &slot).is_err());
+    }
 
     #[test]
     fn password_slot_and_item_round_trip_and_aad_tamper() {
