@@ -179,7 +179,7 @@ option:
 | R4 | T4 reveal, DB migration/DDL role, root SSH to production | once only |
 
 *As implemented:* risk comes from the action plus the item's environment.
-Secret reveal and `keylease run` injection are R4. SSH signing and database
+Secret reveal is R4; `keylease run` injection is R3. SSH signing and database
 connections are R2, or R3 when the item's environment is `production`; the
 code cannot yet tell a migration role or a root login apart, so use separate
 items for those and approve them once.
@@ -281,7 +281,8 @@ The node exposes pairing and approval endpoints on its existing HTTPS listener
    section 3 describes: the proxy runs in the agent's process and the service
    answers only the SCRAM challenge, so the password stays in the service
    without the daemon holding network listeners. Production items are R3.
-   `db query` (T0) is not done.
+   `keylease db query ITEM "SQL"` (read-only unless `--write`) runs one
+   statement through the same proxy, like the MCP `db_query` tool.
 4. Standalone VPS mode A, with unlock options. **Implemented** as
    `serve --password-file` and automatic use of a systemd
    `keylease-master-password` credential. Instead of an
@@ -291,13 +292,17 @@ The node exposes pairing and approval endpoints on its existing HTTPS listener
    **Pairing and signed remote approvals implemented** with the CLI as the
    approver (`keylease serve --approver-listen`, `keylease remote`; see
    `docs/remote-approval.md`) and in the macOS app's Remote Vaults section
-   (key in the Keychain). The mobile approver, push delivery and remote unlock
-   are not done.
+   (key in the Keychain). **Push delivery implemented** through ntfy or any
+   plain-text POST URL (`keylease notify set`), carrying only "requests wait on
+   HOST", never their content. The mobile approver and remote unlock are not
+   done.
 6. Signed client identity becomes required for new registrations.
 7. `keylease run` with output scrubbing; then browser login fill. **`keylease
    run` implemented** (`docs/run-with-secrets.md`) as `entry:inject_secret`,
-   R4, one approval per run naming the program. Browser login fill is not
-   done.
+   R3 (approved per run naming the program, or trusted for up to an hour). Its
+   counterpart `entries generate-secret` (`entry:generate_secret`, R2 for an
+   empty field, a protected-field change R3 when it replaces one) lets an agent
+   create a credential it never sees. Browser login fill is not done.
 
 8. MCP surfaces. **Implemented**: `keylease mcp` (stdio, configured with
    `keylease mcp setup`) and the self-hosted gateway (`serve --gateway-url`,

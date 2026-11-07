@@ -431,7 +431,7 @@ struct SshArgs {
 }
 
 /// A PostgreSQL identifier-like name; never a connection string.
-fn valid_database_name(name: &str) -> bool {
+pub(crate) fn valid_database_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 63
         && name

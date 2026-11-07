@@ -95,6 +95,8 @@ public enum RpcRequest: Encodable, Sendable {
     )
     case entriesReveal(id: String, field: String)
     case entriesRevealById(id: String, fieldId: String)
+    case entriesRequestSecret(id: String, field: String)
+    case entriesGenerateSecret(id: String, field: String, recipe: PasswordRecipe?)
     case entriesRevealMany(id: String, fieldIds: [String])
     case entriesTotp(id: String)
     case entriesHistory(id: String)
@@ -176,6 +178,8 @@ public enum RpcRequest: Encodable, Sendable {
         case .entriesDelete: "entries_delete"
         case .entriesReveal: "entries_reveal"
         case .entriesRevealById: "entries_reveal_by_id"
+        case .entriesRequestSecret: "entries_request_secret"
+        case .entriesGenerateSecret: "entries_generate_secret"
         case .entriesRevealMany: "entries_reveal_many"
         case .entriesTotp: "entries_totp"
         case .entriesHistory: "entries_history"
@@ -337,6 +341,13 @@ public enum RpcRequest: Encodable, Sendable {
         case .entriesRevealById(let id, let fieldId):
             try c.encode(id, forKey: key("id"))
             try c.encode(fieldId, forKey: key("field_id"))
+        case .entriesRequestSecret(let id, let field):
+            try c.encode(id, forKey: key("id"))
+            try c.encode(field, forKey: key("field"))
+        case .entriesGenerateSecret(let id, let field, let recipe):
+            try c.encode(id, forKey: key("id"))
+            try c.encode(field, forKey: key("field"))
+            try c.encodeIfPresent(recipe, forKey: key("recipe"))
         case .entriesRevealMany(let id, let fieldIds):
             try c.encode(id, forKey: key("id"))
             try c.encode(fieldIds, forKey: key("field_ids"))

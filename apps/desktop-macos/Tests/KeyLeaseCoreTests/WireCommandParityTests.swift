@@ -89,6 +89,8 @@ final class WireCommandParityTests: XCTestCase {
             ),
             .entriesReveal(id: "i", field: "password"),
             .entriesRevealById(id: "i", fieldId: "f"),
+            .entriesRequestSecret(id: "i", field: "password"),
+            .entriesGenerateSecret(id: "i", field: "password", recipe: nil),
             .entriesRevealMany(id: "i", fieldIds: ["f"]),
             .entriesTotp(id: "i"),
             .entriesHistory(id: "i"),

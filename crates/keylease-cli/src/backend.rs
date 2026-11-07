@@ -71,6 +71,11 @@ impl Backend {
     }
 
     /// The same backend with another stated purpose for its approvals.
+    /// The purpose requests carry, as given with `--purpose`.
+    pub(crate) fn purpose(&self) -> Option<&str> {
+        self.auth.purpose.as_deref()
+    }
+
     pub(crate) fn with_purpose(&self, purpose: Option<String>) -> Self {
         let mut next = self.clone();
         next.auth.purpose = purpose.clone();

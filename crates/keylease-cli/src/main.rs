@@ -34,6 +34,7 @@ mod db_proxy;
 mod gateway;
 mod instructions;
 mod mcp;
+mod notify;
 mod project;
 mod run;
 mod service;
@@ -112,6 +113,11 @@ enum Command {
         /// PEM CA for database servers with a private certificate.
         #[arg(long, requires = "gateway_url")]
         gateway_db_tls_ca: Option<PathBuf>,
+    },
+    /// Push to your phone (ntfy) when an agent waits for approval.
+    Notify {
+        #[command(subcommand)]
+        command: notify::NotifyCommand,
     },
     /// Link to a KeyLease Cloud, share items with nodes, back up and recover
     /// (admin, master password; `cloud request` is for node agents).
@@ -642,9 +648,25 @@ enum EntryCommand {
     View {
         id: String,
     },
+    /// Create an entry from `--input-json` (default: stdin), or from flags:
+    /// `--title T --group-id G [--kind K] [--field host=db.internal ...]`.
+    /// Secrets never go here: add them after with `ask-secret` or `generate-secret`.
     Create {
-        #[arg(long, default_value = "-")]
-        input_json: String,
+        #[arg(long)]
+        input_json: Option<String>,
+        #[arg(long, conflicts_with = "input_json")]
+        title: Option<String>,
+        #[arg(long, requires = "title")]
+        group_id: Option<String>,
+        #[arg(long, default_value = "core.api_credential")]
+        kind: String,
+        #[arg(long)]
+        username: Option<String>,
+        #[arg(long)]
+        url: Option<String>,
+        /// A non-secret field, KEY=VALUE (repeatable): `--field host=db.internal`.
+        #[arg(long = "field", value_name = "KEY=VALUE")]
+        fields: Vec<String>,
         #[arg(long)]
         idempotency_key: String,
         #[arg(long)]
@@ -676,6 +698,20 @@ enum EntryCommand {
         id: String,
         #[arg(long, default_value = "password")]
         field: String,
+    },
+    /// Have the vault generate a new random value for a field and store it. You
+    /// never see it: use it through `keylease run` (for example to set it as a
+    /// database user's password). Replacing an existing value asks the owner.
+    GenerateSecret {
+        id: String,
+        #[arg(long, default_value = "password")]
+        field: String,
+        /// Length of the value.
+        #[arg(long, default_value_t = 32)]
+        length: usize,
+        /// Include symbols (off by default: safe in URLs and connection strings).
+        #[arg(long)]
+        symbols: bool,
     },
     Reveal {
         id: String,
@@ -829,6 +865,7 @@ async fn run() -> Result<()> {
             | Command::Client { .. }
             | Command::Grant { .. }
             | Command::Service { .. }
+            | Command::Notify { .. }
             | Command::Agent { .. }
             | Command::Projects {
                 command: ProjectCommand::Init(_)
@@ -883,6 +920,7 @@ async fn run() -> Result<()> {
             .await
         }
         Command::Gateway { command } => gateway::gateway_command(&cli.db, command),
+        Command::Notify { command } => notify::notify_command(&cli.db, command).await,
         Command::Cloud { command } => cloud::cloud_command(&cli, &socket, command).await,
         Command::Service { command } => service::service_command(&cli.db, &socket, command).await,
         Command::Status => print_rpc(&socket, RpcRequest::Status).await,
@@ -2251,10 +2289,38 @@ async fn entry_command(cli: &Cli, socket: &Path, command: EntryCommand) -> Resul
         }
         EntryCommand::Create {
             input_json,
+            title,
+            group_id,
+            kind,
+            username,
+            url,
+            fields,
             idempotency_key,
             dry_run,
         } => {
-            let mut input = read_json::<NewEntryInput>(&input_json)?;
+            let mut input = match title {
+                Some(title) => NewEntryInput {
+                    group_id: GroupId(group_id.ok_or(KeyLeaseError::InvalidRequest {
+                        reason: "--title needs --group-id (`keylease groups list`)".into(),
+                    })?),
+                    kind,
+                    title,
+                    project_slug: None,
+                    favorite: false,
+                    username,
+                    password: None,
+                    url,
+                    notes: None,
+                    custom_fields: vec![],
+                    sections: vec![],
+                    totp: None,
+                    totp_uri: None,
+                },
+                None => read_json::<NewEntryInput>(input_json.as_deref().unwrap_or("-"))?,
+            };
+            for field in &fields {
+                input.custom_fields.push(plain_field(&input.kind, field)?);
+            }
             // An agent working in a project directory files new entries in its project.
             if input.project_slug.is_none()
                 && let Ok(cwd) = std::env::current_dir()
@@ -2320,6 +2386,30 @@ async fn entry_command(cli: &Cli, socket: &Path, command: EntryCommand) -> Resul
                     auth: auth(cli)?,
                     id: ItemId(id),
                     field,
+                },
+            )
+            .await
+        }
+        EntryCommand::GenerateSecret {
+            id,
+            field,
+            length,
+            symbols,
+        } => {
+            print_rpc(
+                socket,
+                RpcRequest::EntriesGenerateSecret {
+                    auth: auth(cli)?,
+                    id: ItemId(id),
+                    field,
+                    recipe: Some(keylease_service::PasswordRecipe::Random {
+                        length,
+                        uppercase: true,
+                        lowercase: true,
+                        numbers: true,
+                        symbols,
+                        avoid_ambiguous: false,
+                    }),
                 },
             )
             .await
@@ -2641,6 +2731,7 @@ async fn serve(
         });
     }
     cloud::spawn_sync_loop(service.clone());
+    notify::spawn_notifier(service.clone(), db.to_path_buf());
     if let Some(parent) = socket.parent() {
         create_private_dir(parent)?;
     }
@@ -2924,6 +3015,46 @@ async fn rpc_once(socket: &Path, encoded: &[u8]) -> Result<Value> {
         })
     }
 }
+/// `KEY=VALUE` from `entries create --field` as a field of the item's template.
+/// A secret field is refused: its value would pass through the agent.
+fn plain_field(kind: &str, pair: &str) -> Result<ItemField> {
+    let invalid = |reason: String| KeyLeaseError::InvalidRequest { reason };
+    let (key, value) = pair
+        .split_once('=')
+        .filter(|(key, _)| !key.trim().is_empty())
+        .ok_or_else(|| invalid(format!("`{pair}` is not KEY=VALUE")))?;
+    let key = key.trim();
+    let definition = item_kind(kind)
+        .and_then(|template| template.fields.into_iter().find(|field| field.key == key));
+    if matches!(key, "password" | "otp")
+        || definition
+            .as_ref()
+            .is_some_and(|field| field.protected || field.value_type == "concealed")
+    {
+        return Err(invalid(format!(
+            "`{key}` holds a secret; create the entry without it, then use `entries \
+             ask-secret ID --field {key}` or `entries generate-secret ID --field {key}`"
+        )));
+    }
+    Ok(ItemField {
+        id: FieldId::new(),
+        key: key.into(),
+        label: definition
+            .as_ref()
+            .map_or_else(|| key.into(), |field| field.label.clone()),
+        value: match definition.as_ref().map(|field| field.value_type.as_str()) {
+            Some("url") => FieldValue::Url(value.into()),
+            _ => FieldValue::Text(value.into()),
+        },
+        sensitivity: definition
+            .as_ref()
+            .map_or(Sensitivity::PrivateMetadata, |field| {
+                field.sensitivity.clone()
+            }),
+        protected: false,
+        semantic_role: definition.map(|field| field.semantic_role),
+    })
+}
 fn print_json<T: Serialize>(value: &T) -> Result<()> {
     println!(
         "{}",
@@ -3047,6 +3178,17 @@ fn exit_code(error: &KeyLeaseError) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn entries_create_takes_plain_fields_but_never_a_secret() {
+        let host = plain_field("core.database", "host=db.internal").unwrap();
+        assert_eq!(host.key, "host");
+        assert!(!host.protected);
+        assert!(plain_field("core.database", "port=5432").is_ok());
+        assert!(plain_field("core.api_credential", "credential=sk-123").is_err());
+        assert!(plain_field("core.login", "password=hunter2").is_err());
+        assert!(plain_field("core.database", "novalue").is_err());
+    }
     // These exercise dispatch directly, without the socket framing above.
     use keylease_rpc::{RpcCapabilities, handle_rpc};
 

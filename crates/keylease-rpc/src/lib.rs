@@ -257,6 +257,13 @@ pub enum RpcRequest {
         id: ItemId,
         field: String,
     },
+    /// An agent has the vault generate and store a field's value; the reply never holds it.
+    EntriesGenerateSecret {
+        auth: RpcAuth,
+        id: ItemId,
+        field: String,
+        recipe: Option<keylease_service::PasswordRecipe>,
+    },
     EntriesRevealMany {
         auth: RpcAuth,
         id: ItemId,
@@ -757,6 +764,29 @@ pub async fn handle_rpc(
             let actor = actor(service, &auth)?;
             service.request_secret_authorized(&actor, &id, &field)?;
             Ok(json!({"item_id":id,"field":field,"filled":true}))
+        }
+        RpcRequest::EntriesGenerateSecret {
+            auth,
+            id,
+            field,
+            recipe,
+        } => {
+            let actor = actor(service, &auth)?;
+            let recipe = recipe.unwrap_or(keylease_service::PasswordRecipe::Random {
+                length: 32,
+                uppercase: true,
+                lowercase: true,
+                numbers: true,
+                symbols: false,
+                avoid_ambiguous: false,
+            });
+            let item = service.generate_secret_authorized(&actor, &id, &field, &recipe)?;
+            Ok(json!({
+                "item_id":id,
+                "field":field,
+                "generated":true,
+                "revision":item.revision,
+            }))
         }
         RpcRequest::EntriesRevealById { auth, id, field_id } => {
             let actor = actor(service, &auth)?;

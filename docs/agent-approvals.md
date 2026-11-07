@@ -225,6 +225,41 @@ goes from your terminal into the vault and the agent's command returns with
 `"filled": true`, never the value. (The macOS app does not take values yet:
 approving such a request there leaves the field empty and the agent is told so.)
 
+When the agent chooses the value itself, a new database user's password or a
+signing secret, it runs `keylease entries generate-secret ITEM_ID --field password`:
+the vault makes a random value (32 letters and digits; `--length`, `--symbols`)
+and stores it, and the agent sets it where it belongs with `keylease run --env
+PW=kl://VAULT/ITEM/password -- ...`, without ever seeing it. Filling an empty field
+is an everyday write (R2); replacing a value is a protected-field change (R3, so a
+one-hour project trust covers it).
+
+Agents add entries with flags and plain fields only; a secret field given as
+`--field` is refused with a pointer to `ask-secret` or `generate-secret`:
+
+```sh
+keylease entries create --title "Shop DB" --group-id G --kind core.database \
+  --username app --field host=db.internal --field port=5432 --idempotency-key k1
+```
+
+### Pushes to your phone
+
+A headless host can tell you when an agent is waiting, through
+[ntfy](https://ntfy.sh) (or any URL that takes a plain-text POST):
+
+```sh
+keylease notify set            # makes up a private ntfy.sh topic; subscribe to it in the ntfy app
+keylease notify set https://ntfy.example.com/my-topic
+keylease notify test
+keylease notify off
+```
+
+The daemon checks every few seconds and pushes "An agent is waiting for your
+approval on HOST" for new requests: never the agent, item, action or purpose, so
+the push service and anyone who learns the topic see nothing else. The topic name
+is what keeps others out, so keep it private (`notify set` without a URL makes a
+random one). The setting is `notify.json` next to the vault and is read on every
+check: no restart needed.
+
 For scripts, or another duration:
 
 ```sh
