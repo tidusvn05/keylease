@@ -80,6 +80,7 @@ async fn console_sign_in_by_device_link_and_passkey() {
                 maximum_body_bytes: 1024 * 1024,
                 operations_status_file: None,
                 public_url: Some(ORIGIN.into()),
+                kms_root_key: None,
             },
         )
         .unwrap(),

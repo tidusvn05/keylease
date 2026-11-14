@@ -23,6 +23,13 @@ write_random_text "$secret_dir/minio_password" "klminio_secret_"
 write_random_text "$secret_dir/siem_hmac_secret" "klsiem_"
 write_random_text "$secret_dir/vault_password" "klvault_"
 
+# KMS root key for Managed projects (ADR 0010). Back it up apart from the
+# database: without it, Managed secrets cannot be decrypted.
+if [ ! -e "$secret_dir/kms_root_key" ]; then
+  openssl rand -base64 32 | tr -d '\n=' > "$secret_dir/kms_root_key"
+  printf '\n' >> "$secret_dir/kms_root_key"
+fi
+
 if [ ! -e "$secret_dir/control_signing_key" ]; then
   openssl rand -base64 32 | tr -d '\n=' > "$secret_dir/control_signing_key"
   printf '\n' >> "$secret_dir/control_signing_key"

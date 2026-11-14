@@ -49,6 +49,7 @@ services:
       KEYLEASE_OPERATIONS_STATUS_FILE: /run/leasegate-ops/operations-status.json
       KEYLEASE_SERVER_LISTEN: 0.0.0.0:8080
       KEYLEASE_SERVER_PUBLIC_URL: https://${KEYLEASE_DOMAIN}
+      KEYLEASE_KMS_ROOT_KEY_FILE: /run/leasegate-secrets/kms_root_key
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       - ./secrets:/run/leasegate-secrets:ro

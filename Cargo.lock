@@ -2369,6 +2369,7 @@ dependencies = [
  "keylease-connectors",
  "keylease-core",
  "keylease-credentials",
+ "keylease-crypto",
  "keylease-policy",
  "keylease-protocol",
  "p256",

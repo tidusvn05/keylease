@@ -54,6 +54,18 @@ async fn main() -> Result<()> {
             public_url: env::var("KEYLEASE_SERVER_PUBLIC_URL")
                 .ok()
                 .filter(|value| !value.is_empty()),
+            kms_root_key: match env::var("KEYLEASE_KMS_ROOT_KEY_FILE") {
+                Ok(path) if !path.is_empty() => {
+                    let key =
+                        read_signing_key(Path::new(&path)).context("read the KMS root key")?;
+                    Some(
+                        key.as_slice()
+                            .try_into()
+                            .context("the KMS root key must be 32 bytes")?,
+                    )
+                }
+                _ => None,
+            },
         },
     )
     .map_err(|error| anyhow::anyhow!(error.to_string()))?;
