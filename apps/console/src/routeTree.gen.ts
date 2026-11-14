@@ -13,6 +13,8 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApprovalsRouteImport } from './routes/approvals'
 import { Route as AuditRouteImport } from './routes/audit'
 import { Route as DevicesRouteImport } from './routes/devices'
+import { Route as OrgRouteImport } from './routes/org'
+import { Route as OrgsRouteImport } from './routes/orgs'
 import { Route as PasskeysRouteImport } from './routes/passkeys'
 
 const IndexRoute = IndexRouteImport.update({
@@ -35,6 +37,16 @@ const DevicesRoute = DevicesRouteImport.update({
   path: '/devices',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OrgRoute = OrgRouteImport.update({
+  id: '/org',
+  path: '/org',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OrgsRoute = OrgsRouteImport.update({
+  id: '/orgs',
+  path: '/orgs',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PasskeysRoute = PasskeysRouteImport.update({
   id: '/passkeys',
   path: '/passkeys',
@@ -46,6 +58,8 @@ export interface FileRoutesByFullPath {
   '/approvals': typeof ApprovalsRoute
   '/audit': typeof AuditRoute
   '/devices': typeof DevicesRoute
+  '/org': typeof OrgRoute
+  '/orgs': typeof OrgsRoute
   '/passkeys': typeof PasskeysRoute
 }
 export interface FileRoutesByTo {
@@ -53,6 +67,8 @@ export interface FileRoutesByTo {
   '/approvals': typeof ApprovalsRoute
   '/audit': typeof AuditRoute
   '/devices': typeof DevicesRoute
+  '/org': typeof OrgRoute
+  '/orgs': typeof OrgsRoute
   '/passkeys': typeof PasskeysRoute
 }
 export interface FileRoutesById {
@@ -61,14 +77,26 @@ export interface FileRoutesById {
   '/approvals': typeof ApprovalsRoute
   '/audit': typeof AuditRoute
   '/devices': typeof DevicesRoute
+  '/org': typeof OrgRoute
+  '/orgs': typeof OrgsRoute
   '/passkeys': typeof PasskeysRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/approvals' | '/audit' | '/devices' | '/passkeys'
+  fullPaths:
+    '/' | '/approvals' | '/audit' | '/devices' | '/org' | '/orgs' | '/passkeys'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/approvals' | '/audit' | '/devices' | '/passkeys'
-  id: '__root__' | '/' | '/approvals' | '/audit' | '/devices' | '/passkeys'
+  to:
+    '/' | '/approvals' | '/audit' | '/devices' | '/org' | '/orgs' | '/passkeys'
+  id:
+    | '__root__'
+    | '/'
+    | '/approvals'
+    | '/audit'
+    | '/devices'
+    | '/org'
+    | '/orgs'
+    | '/passkeys'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -76,6 +104,8 @@ export interface RootRouteChildren {
   ApprovalsRoute: typeof ApprovalsRoute
   AuditRoute: typeof AuditRoute
   DevicesRoute: typeof DevicesRoute
+  OrgRoute: typeof OrgRoute
+  OrgsRoute: typeof OrgsRoute
   PasskeysRoute: typeof PasskeysRoute
 }
 
@@ -109,6 +139,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DevicesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/org': {
+      id: '/org'
+      path: '/org'
+      fullPath: '/org'
+      preLoaderRoute: typeof OrgRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/orgs': {
+      id: '/orgs'
+      path: '/orgs'
+      fullPath: '/orgs'
+      preLoaderRoute: typeof OrgsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/passkeys': {
       id: '/passkeys'
       path: '/passkeys'
@@ -124,6 +168,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApprovalsRoute: ApprovalsRoute,
   AuditRoute: AuditRoute,
   DevicesRoute: DevicesRoute,
+  OrgRoute: OrgRoute,
+  OrgsRoute: OrgsRoute,
   PasskeysRoute: PasskeysRoute,
 }
 export const routeTree = rootRouteImport

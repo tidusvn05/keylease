@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { History, KeyRound, LayoutDashboard, LogOut, MonitorSmartphone, ShieldCheck } from "lucide-react";
+import { Building2, History, KeyRound, LayoutDashboard, LogOut, MonitorSmartphone, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ServerStatus } from "@/components/server-status";
@@ -13,6 +13,7 @@ const nav = [
   { to: "/", key: "nav.overview", icon: LayoutDashboard },
   { to: "/devices", key: "nav.devices", icon: MonitorSmartphone },
   { to: "/passkeys", key: "nav.passkeys", icon: KeyRound },
+  { to: "/orgs", key: "nav.orgs", icon: Building2 },
   { to: "/approvals", key: "nav.approvals", icon: ShieldCheck },
   { to: "/audit", key: "nav.audit", icon: History },
 ] as const;

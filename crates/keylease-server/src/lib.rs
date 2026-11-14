@@ -9,6 +9,7 @@ mod oidc;
 mod relay;
 mod siem;
 mod store;
+mod teams;
 mod webauthn;
 
 pub use api::{CloudApiConfig, CloudApiState, router};

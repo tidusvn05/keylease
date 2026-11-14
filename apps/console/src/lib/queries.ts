@@ -42,3 +42,22 @@ export const passkeysQuery = queryOptions({
     return data.passkeys;
   },
 });
+
+export const orgsQuery = queryOptions({
+  queryKey: ["orgs"],
+  queryFn: async () => {
+    const { data } = await api.GET("/v1/orgs");
+    if (data === undefined) throw new Error("could not load organizations");
+    return data.orgs;
+  },
+});
+
+export const orgQuery = (id: string) =>
+  queryOptions({
+    queryKey: ["org", id],
+    queryFn: async () => {
+      const { data } = await api.GET("/v1/orgs/{org}", { params: { path: { org: id } } });
+      if (data === undefined) throw new Error("could not load the organization");
+      return data;
+    },
+  });
