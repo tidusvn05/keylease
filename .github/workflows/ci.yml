@@ -34,6 +34,29 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
+  console:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/console
+    steps:
+      - uses: actions/checkout@v7
+      # Reads the pnpm version from package.json "packageManager".
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: apps/console/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: apps/console/.nvmrc
+          cache: pnpm
+          cache-dependency-path: apps/console/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm e2e
+
   dependencies:
     runs-on: ubuntu-latest
     steps:

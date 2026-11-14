@@ -1,0 +1,38 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "KeyLease Server API",
+    "version": "0.0.0",
+    "description": "Hand-written placeholder. keylease-server will generate this file with utoipa; then run `pnpm api:types`."
+  },
+  "paths": {
+    "/healthz": {
+      "get": {
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "Server is up",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Health" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Health": {
+        "type": "object",
+        "required": ["ok", "service", "contract_version"],
+        "properties": {
+          "ok": { "type": "boolean" },
+          "service": { "type": "string" },
+          "contract_version": { "type": "string" }
+        }
+      }
+    }
+  }
+}
