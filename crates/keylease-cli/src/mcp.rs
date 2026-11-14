@@ -159,6 +159,27 @@ impl VaultMcp {
                 }),
                 false,
             ),
+            tool(
+                "http_request",
+                "Call an HTTP API with the credential of a KeyLease item that has an HTTP \
+                 binding (`keylease http bind`). KeyLease adds the credential and sends the \
+                 request; you never see it. The path is relative to the item's API base URL. \
+                 The user may be asked to approve. Returns the status, content type and body.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "item": {"type": "string", "description": "Item id (item_…) or name, kl://PROJECT/ENV/ITEM."},
+                        "method": {"type": "string", "default": "GET"},
+                        "path": {"type": "string", "description": "Path and query below the API base URL, e.g. /v1/charges?limit=3."},
+                        "headers": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Extra headers; the credential header is added by KeyLease."},
+                        "json": {"description": "A JSON body (sets content-type: application/json)."},
+                        "body": {"type": "string", "description": "A text body, instead of json."},
+                        "purpose": {"type": "string", "description": "Why, in a few words; shown to the user who approves."}
+                    },
+                    "required": ["item", "path"]
+                }),
+                false,
+            ),
         ];
         if self.options.allow_run {
             tools.push(tool(
@@ -189,6 +210,7 @@ impl VaultMcp {
             "vault_request_item" => request_item(&backend, arguments).await,
             "ssh_exec" => ssh_exec(&backend, arguments).await,
             "db_query" => db_query(&backend, arguments, &self.options).await,
+            "http_request" => http_request(&backend, arguments).await,
             "run_with_secrets" if self.options.allow_run => {
                 run_with_secrets(&backend, arguments).await
             }
@@ -574,6 +596,96 @@ async fn db_query(backend: &Backend, arguments: Value, options: &ToolOptions) ->
         return Err(ToolError::Message(approval_pending(&approval_id)));
     }
     output.map(|output| output.render())
+}
+
+#[derive(Deserialize)]
+struct HttpArgs {
+    item: String,
+    #[serde(default)]
+    method: Option<String>,
+    path: String,
+    #[serde(default)]
+    headers: BTreeMap<String, String>,
+    #[serde(default)]
+    json: Option<Value>,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    purpose: Option<String>,
+}
+
+/// Text returned to the model is capped so one call cannot flood the context.
+const MAX_HTTP_TOOL_TEXT: usize = 256 * 1024;
+
+async fn http_request(backend: &Backend, arguments: Value) -> ToolResult {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let args: HttpArgs = parse(arguments)?;
+    if args.json.is_some() && args.body.is_some() {
+        return Err(invalid("give json or body, not both"));
+    }
+    let mut headers: Vec<(String, String)> = args.headers.into_iter().collect();
+    let body = match (&args.json, &args.body) {
+        (Some(json), _) => {
+            if !headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+            {
+                headers.push(("content-type".into(), "application/json".into()));
+            }
+            Some(serde_json::to_vec(json).map_err(|_| invalid("json is not serializable"))?)
+        }
+        (None, Some(body)) => Some(body.as_bytes().to_vec()),
+        (None, None) => None,
+    };
+    let backend = purposed(backend, args.purpose)?;
+    let item = {
+        let path = args.item.strip_prefix("kl://").unwrap_or(&args.item);
+        if path.starts_with("item_") {
+            ItemId(path.to_owned())
+        } else {
+            ItemId(format!("ref:{path}"))
+        }
+    };
+    let request = keylease_service::HttpForwardRequest {
+        item_id: item,
+        method: args.method.unwrap_or_else(|| "GET".into()),
+        path: args.path,
+        headers,
+        body_b64: body.map(|body| STANDARD.encode(body)),
+    };
+    let value = backend
+        .call(|auth| RpcRequest::HttpForward {
+            auth,
+            request: request.clone(),
+        })
+        .await?;
+    let response: keylease_service::HttpForwardResponse =
+        serde_json::from_value(value).map_err(|_| KeyLeaseError::Storage)?;
+    let body = STANDARD.decode(&response.body_b64).unwrap_or_default();
+    let content_type = response
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        .map(|(_, value)| value.as_str())
+        .unwrap_or("");
+    let mut text = String::from_utf8_lossy(&body).into_owned();
+    let truncated = text.len() > MAX_HTTP_TOOL_TEXT;
+    if truncated {
+        let mut end = MAX_HTTP_TOOL_TEXT;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+    }
+    Ok(format!(
+        "HTTP {}\ncontent-type: {content_type}\n\n{text}{}",
+        response.status,
+        if truncated {
+            "\n[truncated by KeyLease]"
+        } else {
+            ""
+        }
+    ))
 }
 
 #[derive(Deserialize)]

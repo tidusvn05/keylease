@@ -384,6 +384,20 @@ pub enum RpcRequest {
         auth: RpcAuth,
         id: ItemId,
     },
+    /// Forward an HTTP request through an item's HTTP binding (ADR 0007).
+    HttpForward {
+        auth: RpcAuth,
+        request: keylease_service::HttpForwardRequest,
+    },
+    HttpBindingGet {
+        auth: RpcAuth,
+        id: ItemId,
+    },
+    HttpBindingSet {
+        auth: RpcAuth,
+        id: ItemId,
+        binding: Option<keylease_service::HttpBinding>,
+    },
     DbScram {
         auth: RpcAuth,
         id: ItemId,
@@ -986,6 +1000,21 @@ pub async fn handle_rpc(
                 service.inject_fields_authorized(&actor, &program, &argv, &fields)?,
             )
             .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::HttpForward { auth, request } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.http_forward_authorized(&actor, request).await?)
+                .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::HttpBindingGet { auth, id } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.http_binding_authorized(&actor, &id)?)
+                .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::HttpBindingSet { auth, id, binding } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.set_http_binding_authorized(&actor, &id, binding)?)
+                .map_err(|_| KeyLeaseError::Storage)
         }
         RpcRequest::DbTarget { auth, id } => {
             let actor = actor(service, &auth)?;

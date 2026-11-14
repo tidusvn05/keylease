@@ -67,8 +67,8 @@ From most to least preferred (ADR 0005 section 3):
 
 | Tier | Mechanism | Status | Agent receives |
 |---|---|---|---|
-| T0 Execute | Typed SaaS connectors (`leasegate.execute`); MCP `db_query` | **Yes** (PostgreSQL via `psql` through the proxy) | The result only |
-| T1 Proxy | `keylease ssh` / `ssh-agent` (signing in the service); `keylease db` (SCRAM answered by the service) | **Yes** (SSH, PostgreSQL). HTTP header proxy: **no** | A socket, never the secret |
+| T0 Execute | Typed SaaS connectors (`leasegate.execute`); MCP `db_query`, `http_request` | **Yes** (PostgreSQL via `psql` through the proxy) | The result only |
+| T1 Proxy | `keylease ssh` / `ssh-agent` (signing in the service); `keylease db` (SCRAM answered by the service) | **Yes** (SSH, PostgreSQL, HTTP APIs through `keylease http`, ADR 0007) | A socket, never the secret |
 | T2 Ephemeral | AWS STS, SSH certificates, PostgreSQL roles (Edge credential API) | In the Edge only, not wired to the vault node | Short-lived material |
 | T3 Inject | `keylease run --env NAME=ITEM/field -- cmd`, output scrubbed | **Yes** | Nothing directly; the child process gets the value |
 | T4 Reveal | `entries reveal`, `entries totp` | **Yes** | Plaintext |

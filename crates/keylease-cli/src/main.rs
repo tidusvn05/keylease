@@ -33,6 +33,7 @@ mod backend;
 mod bundle;
 mod cloud;
 mod db_proxy;
+mod http_proxy;
 mod instructions;
 mod mcp;
 mod notify;
@@ -243,8 +244,12 @@ enum Command {
     #[command(trailing_var_arg = true)]
     Run {
         /// NAME=kl://PROJECT[/ENV]/ITEM#FIELD or NAME=kl://VAULT/ITEM/FIELD (repeatable).
-        #[arg(long = "env", required_unless_present = "project")]
+        #[arg(long = "env", required_unless_present_any = ["project", "http"])]
         bindings: Vec<String>,
+        /// NAME=ITEM: set NAME to a local base URL that calls the item's bound
+        /// HTTP API with its credential (repeatable; `keylease http bind`).
+        #[arg(long = "http")]
+        http: Vec<String>,
         /// Inject every variable of the project's env items (`core.environment`).
         #[arg(long)]
         project: Option<String>,
@@ -271,6 +276,11 @@ enum Command {
     Remote {
         #[command(subcommand)]
         command: approver::RemoteCommand,
+    },
+    /// Call HTTP APIs with an item's credential without seeing it (ADR 0007).
+    Http {
+        #[command(subcommand)]
+        command: http_proxy::HttpCommand,
     },
     /// Reach PostgreSQL through a local proxy that never holds the password.
     Db {
@@ -1307,10 +1317,12 @@ async fn run() -> Result<()> {
         },
         Command::Run {
             bindings,
+            http,
             project,
             environment,
             command,
-        } => run::run(&cli, &socket, bindings, project, environment, command).await,
+        } => run::run(&cli, &socket, bindings, http, project, environment, command).await,
+        Command::Http { command } => http_proxy::http_command(&cli, &socket, command).await,
         Command::Gate { command } => gate_command(&cli, &socket, command).await,
         Command::Audit { command } => {
             let service = admin_service(&cli.db)?;
