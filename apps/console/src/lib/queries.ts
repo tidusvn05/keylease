@@ -61,3 +61,12 @@ export const orgQuery = (id: string) =>
       return data;
     },
   });
+
+export const ssoQuery = queryOptions({
+  queryKey: ["sso"],
+  queryFn: async () => {
+    const { data } = await api.GET("/v1/console/sso");
+    return data ?? { enabled: false };
+  },
+  retry: false,
+});

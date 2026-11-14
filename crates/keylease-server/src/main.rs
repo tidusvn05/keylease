@@ -66,6 +66,26 @@ async fn main() -> Result<()> {
                 }
                 _ => None,
             },
+            oidc: match env::var("KEYLEASE_OIDC_ISSUER") {
+                Ok(issuer) if !issuer.is_empty() => Some(keylease_server::ConsoleOidc {
+                    issuer,
+                    client_id: required_env("KEYLEASE_OIDC_CLIENT_ID")?,
+                    client_secret: match env::var("KEYLEASE_OIDC_CLIENT_SECRET_FILE") {
+                        Ok(path) if !path.is_empty() => {
+                            Some(read_secret_text(Path::new(&path), 4096)?.trim().to_owned())
+                        }
+                        _ => None,
+                    },
+                    allowed_email_domains: env::var("KEYLEASE_OIDC_ALLOWED_DOMAINS")
+                        .unwrap_or_default()
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|domain| !domain.is_empty())
+                        .map(str::to_owned)
+                        .collect(),
+                }),
+                _ => None,
+            },
         },
     )
     .map_err(|error| anyhow::anyhow!(error.to_string()))?;

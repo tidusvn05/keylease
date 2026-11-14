@@ -1185,6 +1185,117 @@
           }
         }
       }
+    },
+    "/v1/console/sso": {
+      "get": {
+        "operationId": "ssoStatus",
+        "summary": "Whether SSO is on",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "enabled"
+                  ],
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "issuer": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/console/sso/identities": {
+      "get": {
+        "operationId": "ssoIdentities",
+        "summary": "Linked identities",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "identities"
+                  ],
+                  "properties": {
+                    "identities": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "issuer",
+                          "subject",
+                          "linked_at"
+                        ],
+                        "properties": {
+                          "issuer": {
+                            "type": "string"
+                          },
+                          "subject": {
+                            "type": "string"
+                          },
+                          "email": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "linked_at": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/console/sso/identities/{subject}": {
+      "delete": {
+        "operationId": "ssoUnlink",
+        "summary": "Unlink",
+        "parameters": [
+          {
+            "name": "subject",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
