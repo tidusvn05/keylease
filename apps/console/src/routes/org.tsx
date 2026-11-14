@@ -3,6 +3,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
+import { GatewayClients } from "@/components/gateway-clients";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -221,6 +222,14 @@ function OrgPage() {
           )}
         </CardContent>
       </Card>
+      {manager && (
+        <GatewayClients
+          org={id}
+          environments={org.projects.flatMap((project) =>
+            project.environments.map((environment) => ({ project: project.slug, environment: environment.slug })),
+          )}
+        />
+      )}
     </div>
   );
 }
