@@ -5,6 +5,99 @@ All notable changes to KeyLease are listed here. The format follows
 [Semantic Versioning](https://semver.org/) (see docs/releasing.md). This file is
 generated from commit messages by git-cliff.
 
+## [0.3.0] - 2026-11-14
+
+### Features
+
+- **cli:** Keylease service install and client register --token-file (#10) (692c1e8)
+- Project trust, `keylease approve` and per-project agent identities (3960c67)
+- **cli:** One identity for every agent in a project tree by default (ea7337e)
+- **cli:** `keylease add` stores a secret typed hidden, in the directory's project (cb32078)
+- Agents add, change and remove secrets; instructions block in CLAUDE.md/AGENTS.md (be0b80c)
+- Generate-secret, db query, approval pushes, entries create with plain fields (c9b0245)
+- **remote:** Unlock a locked node from a paired approver (3aaf39e)
+- **ssh:** Bind signatures to the destination host; CA-issued certificates (dae0ff3)
+- Agents sign their requests with their own key (ADR 0005 step 6) (8f6b201)
+- Project environments, the Personal area and named references (1765200)
+- Age-encrypted bundles between nodes, and .env and CSV import (439e817)
+- HTTP credential broker (ADR 0007, phase 1: base-URL mode) (51177a2)
+- Intercepting HTTPS_PROXY mode for the HTTP credential broker (ceb55e4)
+- **server:** Console sign-in by device link and passkeys (ADR 0008) (01d5912)
+- Sync the owner's devices through the relay (ADR 0009) (57d9c44)
+- KeyLease Console v1, embedded in keylease-server (f954c02)
+- Organizations, roles and project access (P3) (59afc91)
+- Managed projects with server-side KMS encryption (ADR 0010) (b30e329)
+- Change requests for protected environments (e011dd9)
+- **server:** Console single sign-on with OpenID Connect (204f29c)
+- Machine identities for CI/CD (OIDC workload federation) (f28e5a4)
+- GitHub Action and External Secrets Operator support (6f20fce)
+- MCP Gateway on keylease-server (e9f88db)
+- Server-side brokers: gateway base-URL proxy, dynamic PostgreSQL logins (378a2e0)
+- KMS API, audit export for SIEM and SCIM deprovisioning (P6) (2f9772d)
+
+### Bug fixes
+
+- Ask-secret adds a missing field; say to restart an older service (0f3b974)
+- Keep the control-plane image and metric names that the rename changed by mistake (961b816)
+
+### Refactoring
+
+- Drop the LeaseGate name from crates and docs (a870e00)
+- **cli:** Call the gateway the remote MCP server (8a0e40b)
+- Keylease-cloud becomes keylease-server (d4a3263)
+- **service:** Split the service into modules (a4d746c)
+
+### Documentation
+
+- Platform v2 plan and the web console scaffold (452a776)
+
+### Continuous integration
+
+- **release:** Publish to crates.io only, without prebuilt binaries or the DMG (#9) (0981f9e)
+
+### Dependencies
+
+- **deps:** Update rmcp for RUSTSEC-2026-0462; document the SQLite advisory (db86f5e)
+
+### Other
+
+- Merge pull request #11 from tidusvn05/feat/project-trust (7ea5dc9)
+- Merge branch 'feat/ssh-certs' into feat/agent-next (ab82aae)
+- Merge branch 'feat/signed-client-identity' into feat/agent-next (a262cfb)
+- Merge pull request #12 from tidusvn05/feat/agent-next (a97e441)
+- Merge pull request #13 from tidusvn05/docs/platform-v2 (dac97ae)
+- Merge pull request #14 from tidusvn05/refactor/drop-leasegate (335a702)
+- Merge pull request #15 from tidusvn05/refactor/remote-mcp-names (5a798f6)
+- Merge pull request #16 from tidusvn05/refactor/keylease-server (40e3e56)
+- Merge pull request #17 from tidusvn05/refactor/service-modules (29d6055)
+- Merge pull request #18 from tidusvn05/feat/environments-and-secrets (b36be8c)
+- Merge pull request #19 from tidusvn05/feat/age-bundles (d259d33)
+- Merge pull request #20 from tidusvn05/chore/deps-advisories (f0efd0a)
+- Merge pull request #21 from tidusvn05/feat/http-proxy (1eb99fc)
+- Merge pull request #22 from tidusvn05/feat/http-proxy-mitm (0895a9b)
+- Merge pull request #23 from tidusvn05/feat/server-identity (c79c596)
+- Merge pull request #24 from tidusvn05/feat/server-sync (e8395af)
+- **console:** Mock the API in the Playwright smoke test (af40248)
+- Merge pull request #25 from tidusvn05/feat/console-v1 (d6e67de)
+- Merge branch 'feat/console-v1' into feat/orgs-rbac (4558d72)
+- Merge pull request #26 from tidusvn05/feat/orgs-rbac (2426ed9)
+- Merge branch 'feat/orgs-rbac' into feat/managed-projects-kms (9081e2c)
+- Merge pull request #27 from tidusvn05/feat/managed-projects-kms (548de01)
+- Merge branch 'feat/managed-projects-kms' into feat/change-requests (cf13c84)
+- Merge pull request #28 from tidusvn05/feat/change-requests (cf45860)
+- Merge branch 'feat/change-requests' into feat/console-sso (e28785d)
+- Merge pull request #29 from tidusvn05/feat/console-sso (67d86b7)
+- Merge branch 'feat/console-sso' into feat/machine-identity (c69efd0)
+- Merge pull request #30 from tidusvn05/feat/machine-identity (b2f314a)
+- Merge branch 'feat/machine-identity' into feat/ci-integrations (e55da23)
+- Merge pull request #31 from tidusvn05/feat/ci-integrations (075d37a)
+- Merge branch 'feat/ci-integrations' into feat/mcp-gateway (020764d)
+- Merge pull request #32 from tidusvn05/feat/mcp-gateway (dbb78f2)
+- Merge branch 'feat/mcp-gateway' into feat/server-brokers (2fd73aa)
+- Merge pull request #33 from tidusvn05/feat/server-brokers (207b484)
+- Merge branch 'feat/server-brokers' into feat/enterprise (2547620)
+- Merge pull request #34 from tidusvn05/feat/enterprise (851b7a7)
+
 ## [0.2.1] - 2026-10-27
 
 ### Bug fixes
