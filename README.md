@@ -300,7 +300,7 @@ machine-readable acceptance report. See
 - `keylease` (`crates/keylease-cli`): headless CLI and local Unix-socket daemon.
 - `keylease-cloud`: PostgreSQL-backed control API, connector registry, policy
   proposals, dynamic-credential metadata, posture, rotation and worker.
-- `keylease-protocol` / `keylease-protocol`: versioned Cloud/Edge wire
+- `keylease-protocol`: versioned Cloud/Edge wire
   contracts and Ed25519/JCS signatures.
 - `keylease-credentials`: self-hosted AWS STS, SSH certificate, PostgreSQL role
   and OAuth token-exchange credential broker/backends.

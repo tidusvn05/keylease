@@ -31,7 +31,7 @@ services:
     networks: [control]
 
   control-plane:
-    image: ${LEASEGATE_CONTROL_IMAGE:-keylease-protocol-plane:local}
+    image: ${LEASEGATE_CONTROL_IMAGE:-leasegate-control-plane:local}
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.cloud
@@ -63,7 +63,7 @@ services:
       start_period: 10s
 
   worker:
-    image: ${LEASEGATE_CONTROL_IMAGE:-keylease-protocol-plane:local}
+    image: ${LEASEGATE_CONTROL_IMAGE:-leasegate-control-plane:local}
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.cloud
