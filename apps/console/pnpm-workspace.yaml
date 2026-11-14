@@ -1,0 +1,38 @@
+# pnpm settings for the console (a single package, not a monorepo).
+# Supply-chain rules: see docs/design/platform-v2-plan-vi.md, section 11.
+
+# Never run install scripts from dependencies. Add a package here only after
+# reviewing what its script does.
+onlyBuiltDependencies: []
+strictDepBuilds: true
+
+# Only resolve versions published at least 7 days ago (minutes).
+minimumReleaseAge: 10080
+# Versions pinned when the console was scaffolded (2026-11-14) that were newer
+# than 7 days at the time. Remove this list after 2026-11-21.
+minimumReleaseAgeExclude:
+  - vite
+  - "@vitejs/plugin-react"
+  - rolldown
+  - "@rolldown/*"
+  - "@tanstack/router-plugin"
+  - "@tanstack/react-router-devtools"
+  - "@tanstack/router-devtools-core"
+  - "@tanstack/router-generator"
+  - "@tanstack/router-utils"
+  - lucide-react
+  - react-hook-form
+  - "@hookform/resolvers"
+  - i18next
+  - react-i18next
+  - "@playwright/test"
+  - playwright
+  - playwright-core
+  - eslint
+  - "@eslint/config-array"
+  - typescript-eslint
+  - "@typescript-eslint/*"
+  - "@testing-library/user-event"
+  - jsdom
+
+engineStrict: true
