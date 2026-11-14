@@ -112,6 +112,8 @@ export const vi: Messages = {
     subject: "Subject",
     addMachine: "Thêm",
     revoke: "Thu hồi",
+    newKey: "Access key",
+    keyOnce: "Access key cho External Secrets Operator (chỉ hiện một lần, dùng được 90 ngày):",
     readOnly: "Bạn được đọc nhưng không được sửa các secret này.",
   },
   approvals: {
