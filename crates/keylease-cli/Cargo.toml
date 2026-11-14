@@ -28,6 +28,10 @@ keylease-store = { path = "../keylease-store", version = "0.2.1" }
 keylease-connectors = { path = "../keylease-connectors", version = "0.2.1" }
 keylease-policy = { path = "../keylease-policy", version = "0.2.1" }
 rand.workspace = true
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "ring", "pem"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
 reqwest.workspace = true
 rmcp = { version = "3.9.0", default-features = false, features = ["server", "transport-io", "transport-streamable-http-server"] }
 rpassword.workspace = true

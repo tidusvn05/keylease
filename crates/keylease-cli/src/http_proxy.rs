@@ -56,6 +56,16 @@ pub(crate) enum HttpCommand {
     },
 }
 
+/// An item ID or named reference given on the command line.
+pub(crate) fn item_reference(reference: &str) -> Result<ItemId> {
+    if reference.is_empty() || reference.contains('#') {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "give an item ID or kl://PROJECT[/ENV]/ITEM".into(),
+        });
+    }
+    Ok(item_id(reference))
+}
+
 fn item_id(reference: &str) -> ItemId {
     let path = reference.strip_prefix("kl://").unwrap_or(reference);
     if path.starts_with("item_") {
@@ -240,6 +250,24 @@ async fn handle(
     let Some(item) = state.routes.get(&capability).cloned() else {
         return (StatusCode::NOT_FOUND, "unknown KeyLease proxy path\n").into_response();
     };
+    let mut target = format!("/{path}");
+    if let Some(query) = uri.query() {
+        target.push('?');
+        target.push_str(query);
+    }
+    forward_request(&state.backend, item, &method, target, &headers, body).await
+}
+
+/// Sends one request to the daemon for the item's binding and turns the
+/// outcome into the response the tool sees.
+pub(crate) async fn forward_request(
+    backend: &Backend,
+    item: ItemId,
+    method: &Method,
+    target: String,
+    headers: &HeaderMap,
+    body: Bytes,
+) -> Response {
     if body.len() > MAX_HTTP_BODY_BYTES {
         return keylease_error(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -247,11 +275,6 @@ async fn handle(
             &format!("KeyLease forwards bodies up to {MAX_HTTP_BODY_BYTES} bytes"),
             None,
         );
-    }
-    let mut target = format!("/{path}");
-    if let Some(query) = uri.query() {
-        target.push('?');
-        target.push_str(query);
     }
     let request = HttpForwardRequest {
         item_id: item,
@@ -268,8 +291,7 @@ async fn handle(
             .collect(),
         body_b64: (!body.is_empty()).then(|| STANDARD.encode(&body)),
     };
-    let outcome = state
-        .backend
+    let outcome = backend
         .call(|auth| RpcRequest::HttpForward {
             auth,
             request: request.clone(),
@@ -336,7 +358,7 @@ fn upstream_response(response: HttpForwardResponse) -> Response {
 
 /// A self-explanatory refusal: the agent reads the JSON and the
 /// `x-keylease-decision` header and knows what to do next.
-fn keylease_error(
+pub(crate) fn keylease_error(
     status: StatusCode,
     decision: &str,
     message: &str,

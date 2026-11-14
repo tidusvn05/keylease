@@ -33,6 +33,7 @@ mod backend;
 mod bundle;
 mod cloud;
 mod db_proxy;
+mod http_mitm;
 mod http_proxy;
 mod instructions;
 mod mcp;
@@ -244,12 +245,17 @@ enum Command {
     #[command(trailing_var_arg = true)]
     Run {
         /// NAME=kl://PROJECT[/ENV]/ITEM#FIELD or NAME=kl://VAULT/ITEM/FIELD (repeatable).
-        #[arg(long = "env", required_unless_present_any = ["project", "http"])]
+        #[arg(long = "env", required_unless_present_any = ["project", "http", "proxy"])]
         bindings: Vec<String>,
         /// NAME=ITEM: set NAME to a local base URL that calls the item's bound
         /// HTTP API with its credential (repeatable; `keylease http bind`).
         #[arg(long = "http")]
         http: Vec<String>,
+        /// ITEM: give the program HTTPS_PROXY and a CA bundle so requests to
+        /// the item's bound API get its credential, with the program's own URL
+        /// (repeatable; other hosts are tunneled untouched).
+        #[arg(long = "proxy")]
+        proxy: Vec<String>,
         /// Inject every variable of the project's env items (`core.environment`).
         #[arg(long)]
         project: Option<String>,
@@ -1318,10 +1324,25 @@ async fn run() -> Result<()> {
         Command::Run {
             bindings,
             http,
+            proxy,
             project,
             environment,
             command,
-        } => run::run(&cli, &socket, bindings, http, project, environment, command).await,
+        } => {
+            run::run(
+                &cli,
+                &socket,
+                run::RunOptions {
+                    bindings,
+                    http,
+                    proxy,
+                    project,
+                    environment,
+                },
+                command,
+            )
+            .await
+        }
         Command::Http { command } => http_proxy::http_command(&cli, &socket, command).await,
         Command::Gate { command } => gate_command(&cli, &socket, command).await,
         Command::Audit { command } => {

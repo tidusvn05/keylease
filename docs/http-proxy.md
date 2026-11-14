@@ -42,6 +42,28 @@ OPTIONS are R1, other methods R2, and R3 for an item in a protected
 environment. An enrolled agent asks once; approve it with a trust (for
 example an hour, or the whole project) so a session does not ask per request.
 
+### Tools that cannot change their base URL
+
+`--proxy ITEM` keeps the program's own API URL instead:
+
+```sh
+keylease run --proxy kl://shop/production/Stripe -- stripe charges list
+```
+
+The program gets `HTTPS_PROXY` (with a random password) and a CA bundle
+(`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`,
+`NODE_EXTRA_CA_CERTS`, `DENO_CERT`, `AWS_CA_BUNDLE`; `NODE_USE_ENV_PROXY=1`)
+that trusts the system's CAs plus one made for this run. HTTPS to the bound
+host is decrypted with a certificate from that CA and each request goes
+through the daemon as above, so the program may send a placeholder credential;
+paths outside the binding's base path get a 403. Every other host is tunneled
+without decryption. The CA's key exists only in memory and its files are
+deleted when the program exits.
+
+A program that ignores these variables, pins certificates, or reads the
+system keychain only (Go programs on macOS use the keychain, not
+`SSL_CERT_FILE`) will not use the proxy; use `--http` and a base URL for it.
+
 MCP clients get the same broker as the `http_request` tool:
 `{"item": "kl://shop/production/Stripe", "method": "GET", "path": "/v1/charges?limit=3"}`.
 
@@ -53,7 +75,7 @@ MCP clients get the same broker as the `http_request` tool:
 - Responses are the API's, except that the secret and the header value are
   replaced by `[REDACTED by keylease]` wherever they appear.
 
-## Limits (phase 1)
+## Limits
 
 - Requests only go below the binding's base URL; redirects are not followed.
 - Bodies are limited to 2 MiB each way and responses are buffered, so

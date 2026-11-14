@@ -257,15 +257,31 @@ async fn pump<R: AsyncRead + Unpin, W: std::io::Write>(
     }
 }
 
+pub(crate) struct RunOptions {
+    pub(crate) bindings: Vec<String>,
+    pub(crate) http: Vec<String>,
+    pub(crate) proxy: Vec<String>,
+    pub(crate) project: Option<String>,
+    pub(crate) environment: Option<String>,
+}
+
 pub(crate) async fn run(
     cli: &Cli,
     daemon: &Path,
-    bindings: Vec<String>,
-    http: Vec<String>,
-    project: Option<String>,
-    environment: Option<String>,
+    options: RunOptions,
     command: Vec<String>,
 ) -> Result<()> {
+    let RunOptions {
+        bindings,
+        http,
+        proxy,
+        project,
+        environment,
+    } = options;
+    let proxy_items: Vec<ItemId> = proxy
+        .iter()
+        .map(|reference| crate::http_proxy::item_reference(reference))
+        .collect::<Result<_>>()?;
     let http = http
         .iter()
         .map(|binding| crate::http_proxy::parse_http_binding(binding))
@@ -348,6 +364,17 @@ pub(crate) async fn run(
     for (name, url) in &http_env {
         child.env(name, url);
     }
+    // Intercepting proxy: HTTPS_PROXY plus a CA made for this run.
+    let mut proxy_guard = None;
+    if !proxy_items.is_empty() {
+        let backend = crate::backend::Backend::for_cli(cli, daemon)?
+            .with_purpose(Some(run_purpose(&command, cli.purpose.as_deref())?));
+        let mitm = crate::http_mitm::MitmProxy::bind(backend, proxy_items).await?;
+        for (name, value) in mitm.environment()?.variables {
+            child.env(name, value);
+        }
+        proxy_guard = Some(mitm.spawn());
+    }
     let mut child = child.spawn().map_err(|_| KeyLeaseError::InvalidRequest {
         reason: format!("cannot run {program}"),
     })?;
@@ -359,6 +386,11 @@ pub(crate) async fn run(
     let status = child.wait().await.map_err(|_| KeyLeaseError::Storage)?;
     let _ = out.await;
     let _ = err.await;
+    // `exit` skips destructors: stop the proxy and remove its CA files first.
+    if let Some((task, directory)) = proxy_guard.take() {
+        task.abort();
+        drop(directory);
+    }
     std::process::exit(status.code().unwrap_or(1));
 }
 

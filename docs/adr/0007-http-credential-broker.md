@@ -1,6 +1,6 @@
 # ADR 0007: The HTTP credential broker
 
-Status: accepted (phase 1: base-URL mode)
+Status: accepted (phases 1 and 2: base-URL and intercepting modes)
 
 ## Context
 
@@ -71,11 +71,25 @@ the secret may go and how to attach it.
   the credential allows on that API, as a person with the token could. Scope
   the token at the provider.
 
+## Intercepting mode (phase 2)
+
+`keylease run --proxy ITEM -- CMD` serves `HTTPS_PROXY` (with a random
+password in the URL) for tools that cannot change their base URL. A
+certificate authority is generated for the run (ECDSA P-256, valid for a week,
+key only in memory); the child gets a bundle with the system roots plus that
+CA through the usual variables (`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, …).
+`CONNECT` to a bound host and port is terminated with a host certificate from
+that CA and each request inside goes through the same daemon forwarder; paths
+outside the binding's base path are refused. `CONNECT` to any other host is
+tunneled without decryption. Plain HTTP is not proxied (only `HTTPS_PROXY` is
+set), and the files are removed when the child exits.
+
+Programs that ignore the proxy variables, pin certificates or trust only the
+platform keychain (Go on macOS) cannot use this mode; the base-URL mode covers
+them.
+
 ## Later phases
 
-1. An intercepting `HTTPS_PROXY` mode with a per-run certificate authority, for
-   tools that cannot change their base URL: requests to bound hosts are handled
-   as above, others are tunneled untouched.
-2. Streaming between the proxy and the daemon; WebSocket.
-3. Placeholder substitution in bodies, OAuth 2 refresh, provider presets.
-4. The same forwarder in `keylease-server` for Managed projects (MCP Gateway).
+1. Streaming between the proxy and the daemon; WebSocket.
+2. Placeholder substitution in bodies, OAuth 2 refresh, provider presets.
+3. The same forwarder in `keylease-server` for Managed projects (MCP Gateway).
