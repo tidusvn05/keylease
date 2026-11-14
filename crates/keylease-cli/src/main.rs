@@ -30,6 +30,7 @@ use zeroize::Zeroizing;
 mod approve;
 mod approver;
 mod backend;
+mod bundle;
 mod cloud;
 mod db_proxy;
 mod instructions;
@@ -146,6 +147,16 @@ enum Command {
         #[command(subcommand)]
         command: remote_mcp::ConnectionCommand,
     },
+    /// This node's ID for receiving bundles from other nodes (master password).
+    Node {
+        #[command(subcommand)]
+        command: bundle::NodeCommand,
+    },
+    /// Encrypt items (or a project) to another node, as text to paste there
+    /// with `keylease import` (master password).
+    Export(bundle::ExportArgs),
+    /// Store a bundle from `keylease export` on another node (master password).
+    Import(bundle::ImportArgs),
     Status,
     Unlock {
         #[arg(long, default_value_t = 28800)]
@@ -414,6 +425,29 @@ enum VaultCommand {
     },
     Restore {
         path: PathBuf,
+    },
+    /// Store a `.env` file as an env-file item of a project; every value is
+    /// kept as a secret.
+    ImportEnv {
+        path: PathBuf,
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        environment: Option<String>,
+        /// Item title (default: the file name).
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        acknowledge_plaintext: bool,
+    },
+    /// Import logins from a CSV export (browser or password manager) into the
+    /// Personal area.
+    ImportCsv {
+        path: PathBuf,
+        #[arg(long, default_value = "Imported")]
+        group: String,
+        #[arg(long)]
+        acknowledge_plaintext: bool,
     },
 }
 #[derive(Subcommand)]
@@ -1026,6 +1060,9 @@ async fn run() -> Result<()> {
         Command::Notify { command } => notify::notify_command(&cli.db, command).await,
         Command::Cloud { command } => cloud::cloud_command(&cli, &socket, command).await,
         Command::Service { command } => service::service_command(&cli.db, &socket, command).await,
+        Command::Node { command } => bundle::node_command(&cli.db, command),
+        Command::Export(args) => bundle::export(&cli.db, args),
+        Command::Import(args) => bundle::import(&cli.db, args),
         Command::Status => print_rpc(&socket, RpcRequest::Status).await,
         Command::Unlock {
             session_ttl_seconds,
@@ -1861,6 +1898,37 @@ fn vault_command(db: &Path, command: VaultCommand) -> Result<()> {
             } else {
                 print_json(&json!({"preview":preview.report,"commit_required":true}))
             }
+        }
+        VaultCommand::ImportEnv {
+            path,
+            project,
+            environment,
+            title,
+            acknowledge_plaintext,
+        } => {
+            let content = bundle::read_plaintext_source(&path, acknowledge_plaintext, ".env")?;
+            let title = title.unwrap_or_else(|| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| ".env".into())
+            });
+            let service = admin_service(db)?;
+            print_json(&service.import_env_file(
+                &content,
+                &project,
+                environment.as_deref(),
+                &title,
+                &path.display().to_string(),
+            )?)
+        }
+        VaultCommand::ImportCsv {
+            path,
+            group,
+            acknowledge_plaintext,
+        } => {
+            let content = bundle::read_plaintext_source(&path, acknowledge_plaintext, "CSV")?;
+            let service = admin_service(db)?;
+            print_json(&service.import_logins_csv(&content, &group)?)
         }
         VaultCommand::ImportOnepux {
             path,

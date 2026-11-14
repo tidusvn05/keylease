@@ -152,7 +152,7 @@ pub(crate) fn scram_client_final(
     let mut salted = Zeroizing::new([0_u8; 32]);
     pbkdf2::pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, iterations, salted.as_mut());
     let client_key = Zeroizing::new(hmac(salted.as_ref(), b"Client Key"));
-    let stored_key = Sha256::digest(client_key.as_ref());
+    let stored_key = Sha256::digest(&client_key[..]);
     let without_proof = format!("c=biws,r={nonce}");
     let auth_message = format!("{client_first_bare},{server_first},{without_proof}");
     let signature = hmac(&stored_key, auth_message.as_bytes());
