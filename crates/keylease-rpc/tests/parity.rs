@@ -432,3 +432,54 @@ fn no_provisioning_operation_is_reachable_as_an_rpc_command() {
         );
     }
 }
+
+#[tokio::test]
+async fn a_key_bound_agent_signs_every_request_and_a_legacy_token_still_works() {
+    use keylease_service::client_key;
+    let (_dir, service, _owner) = service_with_owner();
+    let vault_id = service.current_vault_id().unwrap();
+    let (private, public) = client_key::generate();
+    let agent = service.register_client_with_key("signer", &public).unwrap();
+    service.install_agent_baseline(&agent, &vault_id).unwrap();
+    let key = client_key::decode_private(&private).unwrap();
+    let request = || {
+        json!({
+            "command": "entries_search",
+            "auth": {"agent_id": "agent_signer", "token": "", "session_id": "parity"},
+            "query": "anything",
+        })
+    };
+
+    let mut signed = request();
+    client_key::sign_request(&mut signed, &key, chrono::Utc::now().timestamp()).unwrap();
+    let response = call(&service, signed.clone()).await;
+    assert_eq!(response["ok"], json!(true), "{response}");
+    let replayed = call(&service, signed).await;
+    assert_eq!(replayed["ok"], json!(false), "a replay is refused");
+
+    let unsigned = call(&service, request()).await;
+    assert_eq!(
+        unsigned["ok"],
+        json!(false),
+        "no signature, no token: denied"
+    );
+
+    // A signature does not lend its agent's identity to another name.
+    let mut other_agent = request();
+    other_agent["auth"]["agent_id"] = json!("agent_desktop");
+    client_key::sign_request(&mut other_agent, &key, chrono::Utc::now().timestamp()).unwrap();
+    assert_eq!(call(&service, other_agent).await["ok"], json!(false));
+
+    let (legacy, token) = service.register_client("legacy").unwrap();
+    service.install_agent_baseline(&legacy, &vault_id).unwrap();
+    let response = call(
+        &service,
+        json!({
+            "command": "entries_search",
+            "auth": {"agent_id": legacy, "token": token, "session_id": "parity"},
+            "query": "anything",
+        }),
+    )
+    .await;
+    assert_eq!(response["ok"], json!(true), "{response}");
+}

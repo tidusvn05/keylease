@@ -112,11 +112,15 @@ pub(crate) async fn enroll_agent(
             reason: "token file already exists; choose another --token-file".into(),
         });
     }
+    // The agent signs its requests with a key made here; the service only
+    // ever sees the public half.
+    let (private, public) = keylease_service::client_key::generate();
     let value = rpc(
         socket,
         RpcRequest::AgentEnroll {
             auth: auth(cli)?,
             name: name.into(),
+            public_key: Some(public),
         },
     )
     .await?;
@@ -125,13 +129,12 @@ pub(crate) async fn enroll_agent(
         .and_then(Value::as_str)
         .ok_or(KeyLeaseError::Storage)?
         .to_owned();
-    let token = Zeroizing::new(
-        value
-            .get("token")
-            .and_then(Value::as_str)
-            .ok_or(KeyLeaseError::Storage)?
-            .to_owned(),
-    );
+    // A service older than key-bound identity ignores the key and answers
+    // with a token: keep that instead.
+    let token = match value.get("token").and_then(Value::as_str) {
+        Some(token) if !token.is_empty() => Zeroizing::new(token.to_owned()),
+        _ => private,
+    };
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)

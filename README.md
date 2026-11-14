@@ -106,11 +106,13 @@ keylease vault init
 keylease service install                 # unlocks at boot from a host-sealed credential (asks for sudo)
 cd /srv/shop && keylease projects init   # identity agent_shop for every agent in this tree
 keylease add "Stripe key"                # you type the secret (hidden); filed in project shop
+keylease notify set                      # optional: a push to your phone (ntfy) when an agent waits
 ```
 
 Start Claude Code, Codex or any agent CLI anywhere in `/srv/shop`; they need no environment
 variables, and `projects init` has added a KeyLease section to `CLAUDE.md`/`AGENTS.md` telling
-them how to use, add, change and remove secrets (an agent asks, you type the value). Keep
+them how to use, add, change and remove secrets (an agent asks and you type the value, or
+the vault generates it; the agent never sees it). Keep
 `keylease approve` open in another SSH session to answer its requests (Enter trusts
 everyday work in the project for an hour; a reveal is approved once)
 ([use case 2](docs/use-cases.md#2-agents-on-a-vps-self-trust)).

@@ -1832,6 +1832,101 @@ impl NativeStore {
         }
         Ok(())
     }
+    /// Registers a key-bound client: it signs each request with the private
+    /// half of `public_key` (see `keylease_service::client_key`) and has no
+    /// bearer token. Its `clients` row gets the hash of a random value no one
+    /// holds, so token authentication can never succeed for it.
+    pub fn register_client_key(&self, agent_id: &AgentId, public_key: &str) -> Result<()> {
+        let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        transaction
+            .execute(
+                "INSERT INTO clients(agent_id,token_hash,revoked) VALUES(?1,?2,0)",
+                params![agent_id.0, unusable_token_hash()],
+            )
+            .map_err(|_| KeyLeaseError::InvalidRequest {
+                reason: "client already registered".into(),
+            })?;
+        transaction
+            .execute(
+                "INSERT OR REPLACE INTO client_keys(agent_id,public_key,created_at) VALUES(?1,?2,?3)",
+                params![agent_id.0, public_key, Utc::now().to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        transaction.commit().map_err(|_| KeyLeaseError::Storage)
+    }
+
+    /// Moves an active client to a key in place: same agent id, so its rules
+    /// and trusts stay; its bearer token (if any) stops working.
+    pub fn bind_client_key(&self, agent_id: &AgentId, public_key: &str) -> Result<()> {
+        let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let changed = transaction
+            .execute(
+                "UPDATE clients SET token_hash=?2 WHERE agent_id=?1 AND revoked=0",
+                params![agent_id.0, unusable_token_hash()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        if changed == 0 {
+            return Err(KeyLeaseError::NotFound {
+                resource: agent_id.0.clone(),
+            });
+        }
+        transaction
+            .execute(
+                "INSERT OR REPLACE INTO client_keys(agent_id,public_key,created_at) VALUES(?1,?2,?3)",
+                params![agent_id.0, public_key, Utc::now().to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        transaction.commit().map_err(|_| KeyLeaseError::Storage)
+    }
+
+    /// The public key of an active key-bound client.
+    pub fn client_public_key(&self, agent_id: &AgentId) -> Result<Option<String>> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .query_row(
+                "SELECT k.public_key FROM client_keys k JOIN clients c ON c.agent_id=k.agent_id \
+                 WHERE k.agent_id=?1 AND c.revoked=0",
+                [&agent_id.0],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| KeyLeaseError::Storage)
+    }
+
+    /// How a client authenticates: `key` (signed requests), `owner` (a local
+    /// owner app), `gateway` (an OAuth connection) or `legacy` (a bearer
+    /// token). `None` for an unknown or revoked client.
+    pub fn client_auth_kind(&self, agent_id: &AgentId) -> Result<Option<&'static str>> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        client_auth_kind_in(&connection, &agent_id.0)
+    }
+
+    /// Every active client and how it authenticates.
+    pub fn list_clients_with_auth(&self) -> Result<Vec<(AgentId, &'static str)>> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let ids: Vec<String> = {
+            let mut statement = connection
+                .prepare("SELECT agent_id FROM clients WHERE revoked=0 ORDER BY agent_id")
+                .map_err(|_| KeyLeaseError::Storage)?;
+            statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|_| KeyLeaseError::Storage)?
+                .collect::<std::result::Result<_, _>>()
+                .map_err(|_| KeyLeaseError::Storage)?
+        };
+        ids.into_iter()
+            .map(|id| {
+                let kind = client_auth_kind_in(&connection, &id)?.unwrap_or("legacy");
+                Ok((AgentId(id), kind))
+            })
+            .collect()
+    }
     pub fn list_clients(&self) -> Result<Vec<AgentId>> {
         let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
         let mut statement = connection
@@ -2366,8 +2461,143 @@ impl NativeStore {
             .collect()
     }
 
+    /// Lets a paired device fetch an unlock secret until `expires_at` (set by
+    /// the owner with the master password; the running node then makes the slot).
+    pub fn offer_device_unlock(&self, device_id: &str, expires_at: DateTime<Utc>) -> Result<()> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "INSERT INTO device_unlock_offers(device_id,expires_at) VALUES(?1,?2) \
+                 ON CONFLICT(device_id) DO UPDATE SET expires_at=excluded.expires_at",
+                params![device_id, expires_at.to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        Ok(())
+    }
+
+    /// Consumes a live offer and stores the device's unlock slot, atomically.
+    pub fn accept_device_unlock_offer(
+        &self,
+        unlocked: &UnlockedVault,
+        device_id: &str,
+        secret: &[u8; 32],
+        now: DateTime<Utc>,
+    ) -> Result<()> {
+        let slot = keylease_crypto::create_device_unlock_slot(
+            secret,
+            &unlocked.account_id,
+            device_id,
+            &unlocked.root_key,
+        )?;
+        let mut connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let removed = transaction
+            .execute(
+                "DELETE FROM device_unlock_offers WHERE device_id=?1 AND expires_at>?2",
+                params![device_id, now.to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        if removed == 0 {
+            return Err(KeyLeaseError::Denied {
+                reason: "remote unlock is not offered to this device; run `keylease remote \
+                         allow-unlock DEVICE_ID` on the node first"
+                    .into(),
+            });
+        }
+        transaction
+            .execute(
+                "INSERT INTO device_unlock_slots(device_id,wrapped_root_key,created_at) \
+                 VALUES(?1,?2,?3) ON CONFLICT(device_id) DO UPDATE SET \
+                 wrapped_root_key=excluded.wrapped_root_key,created_at=excluded.created_at",
+                params![device_id, json(&slot)?, now.to_rfc3339()],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        transaction.commit().map_err(|_| KeyLeaseError::Storage)
+    }
+
+    /// Opens the vault with a paired device's unlock secret.
+    pub fn unlock_with_device(&self, device_id: &str, secret: &[u8; 32]) -> Result<UnlockedVault> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let denied = || KeyLeaseError::Denied {
+            reason: "this device cannot unlock the vault".into(),
+        };
+        let slot: String = connection
+            .query_row(
+                "SELECT s.wrapped_root_key FROM device_unlock_slots s JOIN approver_devices d \
+                 ON d.device_id=s.device_id WHERE s.device_id=?1 AND d.revoked=0",
+                [device_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|_| KeyLeaseError::Storage)?
+            .ok_or_else(denied)?;
+        let (account_id, vault_id, wrapped_vault): (String, String, String) = connection
+            .query_row(
+                "SELECT account_id,vault_id,wrapped_vault_key FROM vault_meta LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let account_id = AccountId(account_id);
+        let vault_id = VaultId(vault_id);
+        let root_key =
+            keylease_crypto::unlock_device_slot(secret, &account_id, device_id, &from_json(&slot)?)
+                .map_err(|_| denied())?;
+        let vault_key = unwrap_vault_key(
+            &account_id,
+            &vault_id,
+            &root_key,
+            &from_json(&wrapped_vault)?,
+        )?;
+        Ok(UnlockedVault {
+            account_id,
+            vault_id,
+            root_key,
+            vault_key,
+            session_id: random_session_id(),
+        })
+    }
+
+    /// Device ids that can unlock the vault.
+    pub fn device_unlock_slots(&self) -> Result<Vec<String>> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let mut stmt = connection
+            .prepare("SELECT device_id FROM device_unlock_slots ORDER BY device_id")
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|_| KeyLeaseError::Storage)?;
+        rows.map(|row| row.map_err(|_| KeyLeaseError::Storage))
+            .collect()
+    }
+
+    pub fn remove_device_unlock(&self, device_id: &str) -> Result<bool> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "DELETE FROM device_unlock_offers WHERE device_id=?1",
+                [device_id],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "DELETE FROM device_unlock_slots WHERE device_id=?1",
+                [device_id],
+            )
+            .map(|removed| removed > 0)
+            .map_err(|_| KeyLeaseError::Storage)
+    }
+
     pub fn revoke_approver_device(&self, device_id: &str) -> Result<()> {
         let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        connection
+            .execute(
+                "DELETE FROM device_unlock_slots WHERE device_id=?1",
+                [device_id],
+            )
+            .map_err(|_| KeyLeaseError::Storage)?;
         let changed = connection
             .execute(
                 "UPDATE approver_devices SET revoked=1 WHERE device_id=?1 AND revoked=0",
@@ -2944,6 +3174,41 @@ fn from_json<T: serde::de::DeserializeOwned>(value: &str) -> Result<T> {
 fn hex_lower(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
+/// The hash stored for a client that has no bearer token: of a random value
+/// that is dropped at once, so no token can match it.
+fn unusable_token_hash() -> String {
+    let mut raw = [0_u8; 32];
+    rand::rng().fill_bytes(&mut raw);
+    hex_digest(format!("kl_keybound_{}", STANDARD_NO_PAD.encode(raw)).as_bytes())
+}
+
+fn client_auth_kind_in(connection: &Connection, agent_id: &str) -> Result<Option<&'static str>> {
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM client_keys WHERE agent_id=?1), \
+                    EXISTS(SELECT 1 FROM local_client_roles WHERE agent_id=?1), \
+                    EXISTS(SELECT 1 FROM gateway_connections WHERE agent_id=?1) \
+             FROM clients WHERE agent_id=?1 AND revoked=0",
+            [agent_id],
+            |row| {
+                Ok(
+                    match (
+                        row.get::<_, bool>(0)?,
+                        row.get::<_, bool>(1)?,
+                        row.get::<_, bool>(2)?,
+                    ) {
+                        (true, _, _) => "key",
+                        (_, true, _) => "owner",
+                        (_, _, true) => "gateway",
+                        _ => "legacy",
+                    },
+                )
+            },
+        )
+        .optional()
+        .map_err(|_| KeyLeaseError::Storage)
+}
+
 fn hex_digest(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -3026,12 +3291,15 @@ CREATE TABLE IF NOT EXISTS migration_runs(migration_id TEXT PRIMARY KEY,version 
 CREATE TABLE IF NOT EXISTS migration_checkpoints(migration_id TEXT NOT NULL,item_id TEXT NOT NULL,original_revision INTEGER NOT NULL,applied_revision INTEGER NOT NULL,envelope TEXT NOT NULL,PRIMARY KEY(migration_id,item_id));
 CREATE TABLE IF NOT EXISTS clients(agent_id TEXT PRIMARY KEY,token_hash TEXT NOT NULL,revoked INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS local_client_roles(agent_id TEXT PRIMARY KEY,role TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS client_keys(agent_id TEXT PRIMARY KEY,public_key TEXT NOT NULL,created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS policy_rules(rule_id TEXT PRIMARY KEY,record_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS connections(connection_id TEXT PRIMARY KEY,record_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS device_identity(device_id TEXT PRIMARY KEY,provenance TEXT NOT NULL,created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS agent_baseline_rules(rule_id TEXT PRIMARY KEY,agent_id TEXT NOT NULL,record_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pairing_codes(code_hash TEXT PRIMARY KEY,expires_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS approver_devices(device_id TEXT PRIMARY KEY,record_json TEXT NOT NULL,revoked INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS device_unlock_offers(device_id TEXT PRIMARY KEY,expires_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS device_unlock_slots(device_id TEXT PRIMARY KEY,wrapped_root_key TEXT NOT NULL,created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS trusts(trust_id TEXT PRIMARY KEY,agent_id TEXT NOT NULL,record_json TEXT NOT NULL,rule_json TEXT NOT NULL,expires_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS gateway_connect_codes(code_hash TEXT PRIMARY KEY,name TEXT NOT NULL,expires_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS gateway_connections(agent_id TEXT PRIMARY KEY,record_json TEXT NOT NULL,revoked INTEGER NOT NULL);

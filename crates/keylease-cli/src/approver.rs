@@ -173,6 +173,58 @@ async fn revoke_trust(
     Ok(Json(json!({"revoked": id})))
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UnlockBody {
+    /// Base64 of the device's 32-byte unlock secret.
+    secret: String,
+    #[serde(default)]
+    session_ttl_seconds: Option<i64>,
+}
+
+async fn unlock_setup(
+    State(service): State<Arc<KeyLeaseService>>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<Value> {
+    let device = signed_device(&service, &method, &uri, &headers, &body)?;
+    let secret = service.remote_unlock_setup(&device)?;
+    Ok(Json(json!({"secret": STANDARD.encode(secret.as_ref())})))
+}
+
+async fn unlock(
+    State(service): State<Arc<KeyLeaseService>>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<Value> {
+    let device = signed_device(&service, &method, &uri, &headers, &body)?;
+    let invalid = || {
+        ApiError(KeyLeaseError::InvalidRequest {
+            reason: "invalid unlock body".into(),
+        })
+    };
+    let request: UnlockBody = serde_json::from_slice(&body).map_err(|_| invalid())?;
+    let secret: Zeroizing<[u8; 32]> = Zeroizing::new(
+        STANDARD
+            .decode(&request.secret)
+            .ok()
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or_else(invalid)?,
+    );
+    let ttl = Duration::seconds(
+        request
+            .session_ttl_seconds
+            .unwrap_or(86_400)
+            .clamp(60, 7 * 86_400),
+    );
+    let unlocked = service.remote_unlock(&device, &secret, ttl)?;
+    Ok(Json(json!({"unlocked": true, "was_locked": unlocked})))
+}
+
 /// The approver API's routes, also mounted by the MCP gateway.
 pub(crate) fn approver_routes() -> Router<Arc<KeyLeaseService>> {
     Router::new()
@@ -181,6 +233,8 @@ pub(crate) fn approver_routes() -> Router<Arc<KeyLeaseService>> {
         .route("/v1/approvals/{id}/decide", post(decide))
         .route("/v1/trusts", get(trusts))
         .route("/v1/trusts/{id}/revoke", post(revoke_trust))
+        .route("/v1/unlock/setup", post(unlock_setup))
+        .route("/v1/unlock", post(unlock))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
 }
 
@@ -243,6 +297,21 @@ pub(crate) enum RemoteCommand {
         trust: Option<String>,
         #[arg(long, default_value = "resource", value_parser = ["resource", "item", "project"])]
         scope: String,
+    },
+    /// On the node: let a paired device set up remote unlock within 10 minutes
+    /// (master password). Then run `keylease remote unlock-setup` on the device.
+    AllowUnlock { device_id: String },
+    /// On the node: stop a device from unlocking the vault (master password).
+    DisallowUnlock { device_id: String },
+    /// On the approver: fetch and keep this device's unlock secret for a node
+    /// (after `allow-unlock` there; the node must be unlocked).
+    UnlockSetup { name: String },
+    /// On the approver: unlock a locked node (after a reboot).
+    Unlock {
+        name: String,
+        /// Lock again after this long without activity (30m, 6h, 1d, 7d).
+        #[arg(long, default_value = "1d", value_parser = cloud::parse_ttl)]
+        idle_lock: Duration,
     },
     /// On the approver: list active trusts on a node.
     Trusts { name: String },
@@ -487,6 +556,62 @@ pub(crate) async fn remote_command(cli: &Cli, command: RemoteCommand) -> Result<
                     reqwest::Method::POST,
                     &format!("/v1/approvals/{id}/decide"),
                     Some(serde_json::to_value(body).map_err(|_| KeyLeaseError::Storage)?),
+                )
+                .await?,
+            )
+        }
+        RemoteCommand::AllowUnlock { device_id } => {
+            let expires_at = admin_service(&cli.db)?.allow_remote_unlock(&device_id)?;
+            print_json(&json!({
+                "device_id": device_id,
+                "expires_at": expires_at,
+                "next": "On that device: keylease remote unlock-setup NAME",
+            }))
+        }
+        RemoteCommand::DisallowUnlock { device_id } => {
+            let removed = admin_service(&cli.db)?.disable_remote_unlock(&device_id)?;
+            print_json(&json!({"device_id": device_id, "removed": removed}))
+        }
+        RemoteCommand::UnlockSetup { name } => {
+            let response =
+                signed_request(&name, reqwest::Method::POST, "/v1/unlock/setup", None).await?;
+            let secret = Zeroizing::new(
+                response
+                    .get("secret")
+                    .and_then(Value::as_str)
+                    .ok_or(KeyLeaseError::Storage)?
+                    .to_owned(),
+            );
+            write_atomic(
+                &remotes_dir()?.join(format!("{name}.unlock")),
+                secret.as_bytes(),
+            )?;
+            print_json(&json!({
+                "remote": name,
+                "unlock": "set up",
+                "next": format!("After the node restarts locked: keylease remote unlock {name}"),
+            }))
+        }
+        RemoteCommand::Unlock { name, idle_lock } => {
+            valid_profile_name(&name)?;
+            let secret = read_secret_file(
+                &remotes_dir()?.join(format!("{name}.unlock")),
+                "remote unlock secret",
+            )
+            .map_err(|_| KeyLeaseError::InvalidRequest {
+                reason: format!(
+                    "no unlock secret for {name}; run `keylease remote unlock-setup {name}`"
+                ),
+            })?;
+            print_json(
+                &signed_request(
+                    &name,
+                    reqwest::Method::POST,
+                    "/v1/unlock",
+                    Some(json!({
+                        "secret": secret.trim(),
+                        "session_ttl_seconds": idle_lock.num_seconds(),
+                    })),
                 )
                 .await?,
             )

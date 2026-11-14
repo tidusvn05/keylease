@@ -26,13 +26,16 @@ from this directory: it uses this project's identity by itself.
   a field's reference is `kl://VAULT/ITEM/FIELD` (`keylease status` shows the vault id).
 - Use in a command: `keylease run --env NAME=kl://VAULT/ITEM/FIELD -- COMMAND`. The value is
   in the program's environment and scrubbed from its output; do not try to print it.
-- SSH and PostgreSQL without the secret: `keylease ssh HOST ...`, `keylease db psql ITEM`.
+- SSH and PostgreSQL without the secret: `keylease ssh HOST ...`, `keylease db query ITEM
+  \"SQL\"` (read-only unless `--write`), `keylease db psql ITEM`.
 - Add: create the item without its secret (`keylease groups list`, `keylease templates list`):
-  `echo '{{\"group_id\":\"...\",\"kind\":\"core.api_credential\",\"title\":\"...\"}}' |
-  keylease entries create --input-json - --idempotency-key KEY`, then
-  `keylease entries ask-secret ITEM_ID --field FIELD` (`password` for a login, `credential`
-  for an API credential): the user types the value into KeyLease and the command returns
-  once it is stored.
+  `keylease entries create --title T --group-id G --kind KIND [--field host=...]
+  --idempotency-key KEY`, then `keylease entries ask-secret ITEM_ID --field FIELD`
+  (`password` for a login, `credential` for an API credential): the user types the value
+  into KeyLease and the command returns once it is stored.
+- New password you choose (a database user, a signing key): `keylease entries generate-secret
+  ITEM_ID --field FIELD` stores a random value without showing it; then set it where it
+  belongs with `keylease run --env PW=kl://VAULT/ITEM_ID/FIELD -- ...`.
 - Change or remove: `keylease entries update ID --if-revision N --idempotency-key KEY
   --patch-json -`, `keylease entries delete ID --if-revision N --idempotency-key KEY`, where N
   is `metadata.revision` from `entries view`. Never put a secret in a patch; replace one with

@@ -43,15 +43,27 @@ const BASELINE_APPROVAL_ACTIONS: &[&str] = &[
     "group:create",
     "group:update",
     "ssh:sign",
+    "ssh:issue_cert",
     "db:connect",
     "entry:supply_secret",
+    "entry:generate_secret",
 ];
 
 /// An agent asking the owner to type a value into a field. Its approval is
 /// answered by the owner entering the value, so it is never trusted.
 pub(crate) const SUPPLY_SECRET_ACTION: &str = "entry:supply_secret";
+const GENERATE_SECRET_ACTION: &str = "entry:generate_secret";
 
 /// Risk of a vault command, which caps how long it may be trusted.
+fn validate_secret_field_name(field: &str) -> Result<()> {
+    if field.is_empty() || field.len() > 128 || field.chars().any(char::is_control) {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "invalid field".into(),
+        });
+    }
+    Ok(())
+}
+
 pub(crate) fn vault_action_risk(action: &str) -> RiskTier {
     match action {
         "entry:search" | "entry:read_metadata" | "entry:read_fields" | "ssh:list_keys" => {
@@ -61,7 +73,9 @@ pub(crate) fn vault_action_risk(action: &str) -> RiskTier {
         "entry:create"
         | "entry:update_standard_fields"
         | "entry:move"
+        | "entry:generate_secret"
         | "ssh:sign"
+        | "ssh:issue_cert"
         | "db:connect" => RiskTier::R2,
         // `keylease run` puts a secret in a child process and scrubs it from
         // the output, so the agent never reads it: high impact, but trustable
@@ -265,6 +279,8 @@ pub struct ApprovalDecisionOutcome {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnrolledAgent {
     pub agent_id: AgentId,
+    /// Empty for a key-bound agent.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub token: String,
     pub baseline_rule_ids: Vec<String>,
 }
@@ -375,7 +391,7 @@ impl KeyLeaseService {
         request_digest_hex: &str,
         risk: RiskTier,
         project: Option<ProjectId>,
-    ) -> Result<()> {
+    ) -> Result<String> {
         if self.store.kill_switch_enabled()? {
             self.audit_vault(
                 actor,
@@ -431,7 +447,7 @@ impl KeyLeaseService {
                 now,
                 &event,
             )?;
-            return Ok(());
+            return Ok(open.id.0);
         }
         let approval = ApprovalRecord {
             id: ApprovalId::new(),
@@ -621,11 +637,7 @@ impl KeyLeaseService {
         id: &ItemId,
         field: &str,
     ) -> Result<()> {
-        if field.is_empty() || field.len() > 128 || field.chars().any(char::is_control) {
-            return Err(KeyLeaseError::InvalidRequest {
-                reason: "invalid field".into(),
-            });
-        }
+        validate_secret_field_name(field)?;
         self.with_vault(|vault| {
             self.store.get_item(vault, id)?;
             self.authorize_vault(
@@ -653,7 +665,6 @@ impl KeyLeaseService {
     /// The owner's answer to a `request_secret_authorized` approval: stores
     /// `value` in the requested field, then approves (admin path).
     pub fn supply_secret_admin(&self, approval_id: &str, value: &str) -> Result<()> {
-        let owner = self.admin_owner()?;
         let approval = self.store.get_approval(approval_id)?;
         let invalid = |reason: &str| KeyLeaseError::InvalidRequest {
             reason: reason.into(),
@@ -676,7 +687,23 @@ impl KeyLeaseService {
             return Err(invalid("the request names no field"));
         };
         let item_id = ItemId(item_id.into());
-        let item = self.with_vault(|vault| self.store.get_item(vault, &item_id))?;
+        self.write_secret_field(&item_id, field, value, &format!("supply-{approval_id}"))?;
+        self.decide_approval_admin(approval_id, true, None)?;
+        Ok(())
+    }
+
+    /// Stores `value` in `field` of an item as the owner, adding the field,
+    /// hidden, when the item has none yet (an API credential created without
+    /// its `credential`). Callers have already authorized the agent's request.
+    fn write_secret_field(
+        &self,
+        item_id: &ItemId,
+        field: &str,
+        value: &str,
+        idempotency_key: &str,
+    ) -> Result<ItemMetadata> {
+        let owner = self.admin_owner()?;
+        let item = self.with_vault(|vault| self.store.get_item(vault, item_id))?;
         let mut patch = EntryPatch::default();
         if field == "password" {
             patch.password = Some(value.into());
@@ -693,8 +720,6 @@ impl KeyLeaseService {
                     };
                     existing
                 }
-                // An item created without its secret (an API credential's
-                // `credential`) has no such field yet: add it, hidden.
                 None => ItemField {
                     id: FieldId::new(),
                     key: field.into(),
@@ -709,14 +734,52 @@ impl KeyLeaseService {
         }
         self.update_entry(
             &owner,
-            &item_id,
+            item_id,
             patch,
             item.revision,
-            &format!("supply-{approval_id}"),
+            idempotency_key,
             false,
-        )?;
-        self.decide_approval_admin(approval_id, true, None)?;
-        Ok(())
+        )
+    }
+
+    /// An agent has the vault generate a new value for `field` (a database
+    /// password it is about to set, an API signing secret) and store it. The
+    /// agent gets the field's reference, never the value: it puts the value
+    /// where it belongs with `keylease run`. Filling an empty field is an
+    /// everyday write (R2); replacing a value is a protected-field change (R3).
+    pub fn generate_secret_authorized(
+        &self,
+        actor: &ActorContext,
+        id: &ItemId,
+        field: &str,
+        recipe: &PasswordRecipe,
+    ) -> Result<ItemMetadata> {
+        validate_secret_field_name(field)?;
+        let value = Zeroizing::new(generate_password_with_recipe(recipe)?);
+        self.with_vault(|vault| {
+            let item = self.store.get_item(vault, id)?;
+            let replaces = item.fields.iter().any(|existing| {
+                existing.key == field && !field_value_string(&existing.value).is_empty()
+            });
+            let action = if replaces {
+                "entry:update_protected_fields"
+            } else {
+                GENERATE_SECRET_ACTION
+            };
+            self.authorize_vault(
+                vault,
+                actor,
+                action,
+                &format!("kl://{}/{}/{field}", vault.vault_id.0, id.0),
+                serde_json::json!({"field": field, "generated": true, "replaces": replaces}),
+            )
+        })?;
+        self.write_secret_field(
+            id,
+            field,
+            &value,
+            &format!("generate-{}", RequestId::new().0),
+        )
     }
 
     /// The person at the terminal who unlocked the vault with the master password.
@@ -844,6 +907,17 @@ impl KeyLeaseService {
         actor: &ActorContext,
         name: &str,
     ) -> Result<EnrolledAgent> {
+        self.enroll_agent_with_key_authorized(actor, name, None)
+    }
+
+    /// [`Self::enroll_agent_authorized`]; with `public_key` the agent is
+    /// key-bound and gets no token.
+    pub fn enroll_agent_with_key_authorized(
+        &self,
+        actor: &ActorContext,
+        name: &str,
+        public_key: Option<&str>,
+    ) -> Result<EnrolledAgent> {
         if !self.desktop_owner_only(&actor.agent_id)? {
             return Err(KeyLeaseError::Denied {
                 reason: "only the desktop owner can enroll an agent".into(),
@@ -859,7 +933,13 @@ impl KeyLeaseService {
             )?;
             Ok(vault.vault_id.clone())
         })?;
-        let (agent_id, token) = self.register_client(name)?;
+        let (agent_id, token) = match public_key {
+            Some(public_key) => (
+                self.register_client_with_key(name, public_key)?,
+                String::new(),
+            ),
+            None => self.register_client(name)?,
+        };
         let enrolled = self.install_agent_baseline(&agent_id, &vault_id);
         if let Err(error) = enrolled {
             // Never leave a client behind that has a token but no baseline.
@@ -1388,6 +1468,75 @@ mod tests {
             f.service
                 .request_secret_authorized(&f.agent, &f.item, "token")
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn an_agent_has_the_vault_generate_a_secret_it_never_sees() {
+        let f = fixture();
+        let group = f.service.create_group("Bot", None).unwrap().id;
+        let mut input = entry_in(group, None, "Signing key");
+        input.kind = "core.api_credential".into();
+        input.username = None;
+        let item = f
+            .service
+            .create_entry(&f.owner, input, "sign", false)
+            .unwrap()
+            .id;
+        let recipe = PasswordRecipe::Random {
+            length: 40,
+            uppercase: true,
+            lowercase: true,
+            numbers: true,
+            symbols: false,
+            avoid_ambiguous: false,
+        };
+        // Filling an empty field is an everyday write.
+        let id = approval_id(f.service.generate_secret_authorized(
+            &f.agent,
+            &item,
+            "credential",
+            &recipe,
+        ));
+        let approval = f.service.store.get_approval(&id).unwrap();
+        assert_eq!(approval.action.as_deref(), Some("entry:generate_secret"));
+        assert_eq!(approval.risk, Some(RiskTier::R2));
+        f.service
+            .decide_approval_authorized(&f.owner, &id, true)
+            .unwrap();
+        f.service
+            .generate_secret_authorized(&f.agent, &item, "credential", &recipe)
+            .unwrap();
+        let first = f
+            .service
+            .reveal_field_authorized(&f.owner, &item, "credential")
+            .unwrap();
+        assert_eq!(first.len(), 40);
+        assert!(first.chars().all(|c| c.is_ascii_alphanumeric()));
+        // Replacing it is a protected-field change, asked again.
+        let id = approval_id(f.service.generate_secret_authorized(
+            &f.agent,
+            &item,
+            "credential",
+            &recipe,
+        ));
+        let approval = f.service.store.get_approval(&id).unwrap();
+        assert_eq!(
+            approval.action.as_deref(),
+            Some("entry:update_protected_fields")
+        );
+        assert_eq!(approval.risk, Some(RiskTier::R3));
+        f.service
+            .decide_approval_authorized(&f.owner, &id, true)
+            .unwrap();
+        f.service
+            .generate_secret_authorized(&f.agent, &item, "credential", &recipe)
+            .unwrap();
+        assert_ne!(
+            f.service
+                .reveal_field_authorized(&f.owner, &item, "credential")
+                .unwrap(),
+            first
         );
     }
 

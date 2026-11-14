@@ -179,7 +179,7 @@ option:
 | R4 | T4 reveal, DB migration/DDL role, root SSH to production | once only |
 
 *As implemented:* risk comes from the action plus the item's environment.
-Secret reveal and `keylease run` injection are R4. SSH signing and database
+Secret reveal is R4; `keylease run` injection is R3. SSH signing and database
 connections are R2, or R3 when the item's environment is `production`; the
 code cannot yet tell a migration role or a root login apart, so use separate
 items for those and approve them once.
@@ -198,9 +198,27 @@ store the private key mode 0600 under `~/.keylease/clients/`). Each request is
 signed over its canonical digest, a timestamp and a nonce; the node rejects
 stale or replayed signatures. Bearer tokens remain accepted for clients
 registered without a key and are marked `legacy` in the UI and audit.
-Time-boxed trust may only be granted to key-bound clients. *Not enforced yet:*
-until key-bound identity lands (rollout step 6), trust is granted to the
-registered client.
+Time-boxed trust may only be granted to key-bound clients.
+
+*As implemented:* every CLI registration path (`client register`, `agent
+enroll`, `projects init`, `mcp setup`) makes a key by default and writes the
+private key, `kl_ed25519_<base64 seed>`, to the client's usual credential file,
+so `KEYLEASE_AGENT_ID` and `KEYLEASE_CLIENT_TOKEN_FILE` work unchanged; the
+store keeps the public key in `client_keys` and an unusable token hash.
+`auth.signature` = `{timestamp, nonce, sig}`, where `sig` is Ed25519 over
+SHA-256 of a domain tag and the canonical (key-sorted) JSON request without
+`sig`. `keylease-rpc`'s `dispatch_value` verifies it on the raw request before
+parsing; the service rejects a skew over 120 s and a nonce seen in the window.
+The CLI re-signs every send, so `--wait-approval` retries are not replays.
+`--legacy-token` still issues a bearer token, `client upgrade` moves a token
+client to a key in place (same agent id, so rules and trusts survive), and
+`client list` and audit events (`client_auth`) mark `legacy` clients. The
+owner apps' credentials (`agent_desktop`, `agent_mobile`) and gateway
+connections are not agent clients and are unchanged. *Option not taken:*
+trust is not restricted to key-bound clients, so existing installs keep their
+trusts and approvals working without re-registering; a client's key, like a
+token, is readable by other processes of the same Unix user, so the
+restriction would mostly add friction. Binding trust to a host key is not done.
 
 ### 7. Standalone VPS (mode A: self-trust)
 
@@ -274,14 +292,22 @@ The node exposes pairing and approval endpoints on its existing HTTPS listener
    enrollment, trust list and notifications (driven by a passive
    `pending_approvals` count in `status`). Key-bound identity moved to step 6.
 2. SSH agent. **Implemented** (`keylease ssh`, `keylease ssh-agent`; see
-   `docs/ssh-agent.md`). Session-bind host binding and CA-issued ephemeral
-   certificates are not done.
+   `docs/ssh-agent.md`), with session-bind host binding (the service verifies
+   the host's signature and the session of the login, shows and binds the host
+   key in the approval, and enforces an item's `host_keys` pins, forwarding
+   hops included) and CA-issued certificates: an SSH key item with
+   `ca_principals` is a CA (`keylease ssh-ca init`) that only issues
+   five-minute user certificates (`ssh:issue_cert`) for a key `keylease ssh
+   --cert` generates per run. Host and user are not policy arguments of their
+   own: the host is the host key fingerprint, and the user is limited by the
+   certificate's principals.
 3. PostgreSQL proxy and `db query`. **Proxy implemented** (`keylease db
    psql|exec|proxy`; see `docs/db-proxy.md`) with a different split than
    section 3 describes: the proxy runs in the agent's process and the service
    answers only the SCRAM challenge, so the password stays in the service
    without the daemon holding network listeners. Production items are R3.
-   `db query` (T0) is not done.
+   `keylease db query ITEM "SQL"` (read-only unless `--write`) runs one
+   statement through the same proxy, like the MCP `db_query` tool.
 4. Standalone VPS mode A, with unlock options. **Implemented** as
    `serve --password-file` and automatic use of a systemd
    `keylease-master-password` credential. Instead of an
@@ -291,13 +317,25 @@ The node exposes pairing and approval endpoints on its existing HTTPS listener
    **Pairing and signed remote approvals implemented** with the CLI as the
    approver (`keylease serve --approver-listen`, `keylease remote`; see
    `docs/remote-approval.md`) and in the macOS app's Remote Vaults section
-   (key in the Keychain). The mobile approver, push delivery and remote unlock
-   are not done.
+   (key in the Keychain). **Push delivery implemented** through ntfy or any
+   plain-text POST URL (`keylease notify set`), carrying only "requests wait on
+   HOST", never their content. **Remote unlock implemented** for the CLI
+   approver (`keylease remote allow-unlock` on the node, `remote unlock-setup`
+   and `remote unlock` on the device): a per-device key slot wraps the root
+   key under a key derived (HKDF-SHA256) from a 32-byte secret only the device
+   holds; the node makes the slot itself when the device asks within ten
+   minutes of the owner's consent. The Keychain/biometric variant in the macOS
+   app and the mobile approver are not done.
 6. Signed client identity becomes required for new registrations.
+   **Implemented** as the default for new registrations, with bearer tokens
+   kept as `legacy` (`--legacy-token`, `client upgrade`); see section 6 and
+   `docs/agent-approvals.md`. Trust is not restricted to key-bound clients.
 7. `keylease run` with output scrubbing; then browser login fill. **`keylease
    run` implemented** (`docs/run-with-secrets.md`) as `entry:inject_secret`,
-   R4, one approval per run naming the program. Browser login fill is not
-   done.
+   R3 (approved per run naming the program, or trusted for up to an hour). Its
+   counterpart `entries generate-secret` (`entry:generate_secret`, R2 for an
+   empty field, a protected-field change R3 when it replaces one) lets an agent
+   create a credential it never sees. Browser login fill is not done.
 
 8. MCP surfaces. **Implemented**: `keylease mcp` (stdio, configured with
    `keylease mcp setup`) and the self-hosted gateway (`serve --gateway-url`,

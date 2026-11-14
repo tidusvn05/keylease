@@ -95,6 +95,8 @@ public enum RpcRequest: Encodable, Sendable {
     )
     case entriesReveal(id: String, field: String)
     case entriesRevealById(id: String, fieldId: String)
+    case entriesRequestSecret(id: String, field: String)
+    case entriesGenerateSecret(id: String, field: String, recipe: PasswordRecipe?)
     case entriesRevealMany(id: String, fieldIds: [String])
     case entriesTotp(id: String)
     case entriesHistory(id: String)
@@ -132,6 +134,7 @@ public enum RpcRequest: Encodable, Sendable {
     )
     /// `publicKeyBlob` and `data` are base64.
     case sshSign(publicKeyBlob: String, data: String, flags: UInt32)
+    case sshIssueCert(id: String, publicKey: String, principals: [String], ttlSeconds: UInt64?)
     case auditQuery(limit: UInt32)
     case leaseRequest(
         request: ActionRequest,
@@ -176,6 +179,8 @@ public enum RpcRequest: Encodable, Sendable {
         case .entriesDelete: "entries_delete"
         case .entriesReveal: "entries_reveal"
         case .entriesRevealById: "entries_reveal_by_id"
+        case .entriesRequestSecret: "entries_request_secret"
+        case .entriesGenerateSecret: "entries_generate_secret"
         case .entriesRevealMany: "entries_reveal_many"
         case .entriesTotp: "entries_totp"
         case .entriesHistory: "entries_history"
@@ -200,6 +205,7 @@ public enum RpcRequest: Encodable, Sendable {
         case .dbTarget: "db_target"
         case .dbScram: "db_scram"
         case .sshSign: "ssh_sign"
+        case .sshIssueCert: "ssh_issue_cert"
         case .cloudRequest: "cloud_request"
         case .auditQuery: "audit_query"
         case .leaseRequest: "lease_request"
@@ -337,6 +343,13 @@ public enum RpcRequest: Encodable, Sendable {
         case .entriesRevealById(let id, let fieldId):
             try c.encode(id, forKey: key("id"))
             try c.encode(fieldId, forKey: key("field_id"))
+        case .entriesRequestSecret(let id, let field):
+            try c.encode(id, forKey: key("id"))
+            try c.encode(field, forKey: key("field"))
+        case .entriesGenerateSecret(let id, let field, let recipe):
+            try c.encode(id, forKey: key("id"))
+            try c.encode(field, forKey: key("field"))
+            try c.encodeIfPresent(recipe, forKey: key("recipe"))
         case .entriesRevealMany(let id, let fieldIds):
             try c.encode(id, forKey: key("id"))
             try c.encode(fieldIds, forKey: key("field_ids"))
@@ -388,6 +401,11 @@ public enum RpcRequest: Encodable, Sendable {
             try c.encode(publicKeyBlob, forKey: key("public_key_blob"))
             try c.encode(data, forKey: key("data"))
             try c.encode(flags, forKey: key("flags"))
+        case .sshIssueCert(let id, let publicKey, let principals, let ttlSeconds):
+            try c.encode(id, forKey: key("id"))
+            try c.encode(publicKey, forKey: key("public_key"))
+            try c.encode(principals, forKey: key("principals"))
+            try c.encodeIfPresent(ttlSeconds, forKey: key("ttl_seconds"))
         case .auditQuery(let limit):
             try c.encode(limit, forKey: key("limit"))
         case .leaseRequest(let request, let ttlSeconds, let maxUses, let approvalId):

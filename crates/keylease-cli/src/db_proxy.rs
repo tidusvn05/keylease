@@ -45,6 +45,20 @@ pub(crate) enum DbCommand {
         #[command(flatten)]
         tls: TlsArgs,
     },
+    /// Run one SQL statement and print the rows as CSV. Read-only unless
+    /// `--write`; the mode is shown to the approver with the purpose.
+    Query {
+        item_id: String,
+        sql: String,
+        /// Another database on the same server; default: the item's.
+        #[arg(long)]
+        database: Option<String>,
+        /// Allow the statement to change data.
+        #[arg(long)]
+        write: bool,
+        #[command(flatten)]
+        tls: TlsArgs,
+    },
     /// Run any command with PGHOST/PGPORT/PGUSER/PGDATABASE and DATABASE_URL
     /// pointing at a private, single-use proxy.
     #[command(trailing_var_arg = true)]
@@ -120,6 +134,51 @@ pub(crate) async fn db_command(cli: &Cli, daemon: &Path, command: DbCommand) -> 
             Ok(())
         }
         DbCommand::Psql { item_id, args, tls } => {
+            run_with_proxy(backend, &item_id, tls, "psql", args).await
+        }
+        DbCommand::Query {
+            item_id,
+            sql,
+            database,
+            write,
+            tls,
+        } => {
+            let invalid = |reason: &str| KeyLeaseError::InvalidRequest {
+                reason: reason.into(),
+            };
+            if sql.trim().is_empty() {
+                return Err(invalid("the SQL is empty"));
+            }
+            // psql reads a `-c` string that starts with a backslash as a
+            // meta-command (`\!` runs a shell).
+            if sql.trim_start().starts_with('\\') {
+                return Err(invalid("give SQL, not a psql meta-command"));
+            }
+            if let Some(database) = &database
+                && !crate::mcp::valid_database_name(database)
+            {
+                return Err(invalid("--database must be a plain database name"));
+            }
+            let mode = if write {
+                "[writes allowed]"
+            } else {
+                "[read-only]"
+            };
+            let purpose = match backend.purpose().map(str::trim) {
+                Some(purpose) if !purpose.is_empty() => format!("{mode} {purpose}"),
+                _ => mode.to_owned(),
+            };
+            let backend = backend.with_purpose(Some(purpose));
+            let mut args: Vec<String> = ["-X", "-q", "--csv", "-v", "ON_ERROR_STOP=1"]
+                .map(String::from)
+                .into();
+            if let Some(database) = database {
+                args.extend(["-d".into(), database]);
+            }
+            if !write {
+                args.extend(["-c".into(), "SET default_transaction_read_only = on".into()]);
+            }
+            args.extend(["-c".into(), sql]);
             run_with_proxy(backend, &item_id, tls, "psql", args).await
         }
         DbCommand::Exec {

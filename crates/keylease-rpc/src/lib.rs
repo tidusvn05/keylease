@@ -84,6 +84,12 @@ pub struct RpcAuth {
     /// bound into the approval digest. Untrusted text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purpose: Option<String>,
+    /// A key-bound client's signature over the whole request; `token` is
+    /// then empty. Checked by [`dispatch_value`] on the raw JSON before
+    /// parsing (see `keylease_service::client_key`); kept here only so the
+    /// field round-trips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<Value>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
@@ -257,6 +263,13 @@ pub enum RpcRequest {
         id: ItemId,
         field: String,
     },
+    /// An agent has the vault generate and store a field's value; the reply never holds it.
+    EntriesGenerateSecret {
+        auth: RpcAuth,
+        id: ItemId,
+        field: String,
+        recipe: Option<keylease_service::PasswordRecipe>,
+    },
     EntriesRevealMany {
         auth: RpcAuth,
         id: ItemId,
@@ -349,6 +362,10 @@ pub enum RpcRequest {
     AgentEnroll {
         auth: RpcAuth,
         name: String,
+        /// The new agent's public key (`kl_ed25519_pub_...` or `ssh-ed25519
+        /// ...`). With it the agent is key-bound and no token is returned.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        public_key: Option<String>,
     },
     SshIdentities {
         auth: RpcAuth,
@@ -381,6 +398,23 @@ pub enum RpcRequest {
         /// Base64 of the bytes the agent protocol asked to sign.
         data: String,
         flags: u32,
+        /// The connection's `session-bind@openssh.com` records, oldest first.
+        /// Older clients and ssh versions send none.
+        #[serde(default)]
+        session_binds: Vec<keylease_service::SshSessionBind>,
+    },
+    /// Issue a short-lived SSH user certificate from a CA item for a key the
+    /// client generated.
+    SshIssueCert {
+        auth: RpcAuth,
+        id: ItemId,
+        /// The client's public key in OpenSSH format.
+        public_key: String,
+        /// A subset of the CA's principals; empty for all of them.
+        #[serde(default)]
+        principals: Vec<String>,
+        #[serde(default)]
+        ttl_seconds: Option<u64>,
     },
     AuditQuery {
         auth: RpcAuth,
@@ -407,6 +441,9 @@ tokio::task_local! {
     /// Set only by [`handle_rpc_as`]: an identity the transport verified
     /// itself (the HTTP gateway's OAuth token), used instead of a client token.
     static PREAUTHENTICATED: ActorContext;
+    /// Set only by [`dispatch_value`]: the agent whose signature over this
+    /// request verified.
+    static SIGNED: AgentId;
 }
 
 /// Runs `request` as an actor the caller has already authenticated. The
@@ -758,6 +795,29 @@ pub async fn handle_rpc(
             service.request_secret_authorized(&actor, &id, &field)?;
             Ok(json!({"item_id":id,"field":field,"filled":true}))
         }
+        RpcRequest::EntriesGenerateSecret {
+            auth,
+            id,
+            field,
+            recipe,
+        } => {
+            let actor = actor(service, &auth)?;
+            let recipe = recipe.unwrap_or(keylease_service::PasswordRecipe::Random {
+                length: 32,
+                uppercase: true,
+                lowercase: true,
+                numbers: true,
+                symbols: false,
+                avoid_ambiguous: false,
+            });
+            let item = service.generate_secret_authorized(&actor, &id, &field, &recipe)?;
+            Ok(json!({
+                "item_id":id,
+                "field":field,
+                "generated":true,
+                "revision":item.revision,
+            }))
+        }
         RpcRequest::EntriesRevealById { auth, id, field_id } => {
             let actor = actor(service, &auth)?;
             Ok(json!({
@@ -959,6 +1019,7 @@ pub async fn handle_rpc(
             public_key_blob,
             data,
             flags,
+            session_binds,
         } => {
             use base64::{Engine, engine::general_purpose::STANDARD};
             let actor = actor(service, &auth)?;
@@ -974,13 +1035,39 @@ pub async fn handle_rpc(
                 &decode(&public_key_blob)?,
                 &decode(&data)?,
                 flags,
+                &session_binds,
             )?)
             .map_err(|_| KeyLeaseError::Storage)
         }
-        RpcRequest::AgentEnroll { auth, name } => {
+        RpcRequest::SshIssueCert {
+            auth,
+            id,
+            public_key,
+            principals,
+            ttl_seconds,
+        } => {
             let actor = actor(service, &auth)?;
-            serde_json::to_value(service.enroll_agent_authorized(&actor, &name)?)
-                .map_err(|_| KeyLeaseError::Storage)
+            serde_json::to_value(service.ssh_issue_certificate_authorized(
+                &actor,
+                &id,
+                &public_key,
+                &principals,
+                ttl_seconds,
+            )?)
+            .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::AgentEnroll {
+            auth,
+            name,
+            public_key,
+        } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.enroll_agent_with_key_authorized(
+                &actor,
+                &name,
+                public_key.as_deref(),
+            )?)
+            .map_err(|_| KeyLeaseError::Storage)
         }
         RpcRequest::AuditQuery { auth, limit } => {
             let actor = actor(service, &auth)?;
@@ -1042,6 +1129,28 @@ fn actor(service: &KeyLeaseService, auth: &RpcAuth) -> Result<ActorContext> {
             ..verified
         });
     }
+    if let Ok(signed) = SIGNED.try_with(Clone::clone) {
+        if signed != auth.agent_id {
+            return Err(KeyLeaseError::Denied {
+                reason: "request names a different agent than its signature".into(),
+            });
+        }
+        return Ok(ActorContext {
+            agent_id: signed,
+            workload_id: None,
+            human_principal: None,
+            on_behalf_of: None,
+            client_session_id: auth.session_id.clone(),
+            purpose: auth.purpose.clone(),
+        });
+    }
+    if auth.signature.is_some() {
+        // Only `dispatch_value` verifies signatures; an in-process caller
+        // passing a signed request is not authenticated by it.
+        return Err(KeyLeaseError::Denied {
+            reason: "client authentication failed".into(),
+        });
+    }
     let mut actor = service.authenticate(&auth.agent_id, &auth.token.0, &auth.session_id)?;
     actor.purpose = auth.purpose.clone();
     Ok(actor)
@@ -1068,13 +1177,24 @@ pub async fn dispatch_value(
     capabilities: RpcCapabilities,
     request: Value,
 ) -> Value {
+    // The signature covers the request as sent, so it is checked before
+    // parsing can drop or reorder anything.
+    let signed = match service.verify_signed_request(&request) {
+        Ok(signed) => signed,
+        Err(error) => return encode_response(Err(error)),
+    };
     let parsed =
         serde_json::from_value::<RpcRequest>(request).map_err(|_| KeyLeaseError::InvalidRequest {
             reason: "invalid JSON RPC request".into(),
         });
-    match parsed {
-        Ok(request) => encode_response(handle_rpc(service, capabilities, request).await),
-        Err(error) => encode_response(Err(error)),
+    match (parsed, signed) {
+        (Ok(request), Some(agent)) => encode_response(
+            SIGNED
+                .scope(agent, handle_rpc(service, capabilities, request))
+                .await,
+        ),
+        (Ok(request), None) => encode_response(handle_rpc(service, capabilities, request).await),
+        (Err(error), _) => encode_response(Err(error)),
     }
 }
 

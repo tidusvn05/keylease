@@ -89,11 +89,33 @@ keylease --db /var/lib/keylease/vault.sqlite remote revoke-device DEVICE_ID
 A revoked device's signatures stop working immediately. Trusts it granted stay
 until they expire; revoke them too if the device was lost.
 
+## Unlocking the VPS from the laptop
+
+A VPS that must not keep its master password on disk (no `keylease service
+install` credential) can start locked and be unlocked from a paired laptop:
+
+```sh
+# On the VPS, once, while it is unlocked (master password):
+keylease remote allow-unlock DEVICE_ID      # valid 10 minutes
+# On the laptop:
+keylease remote unlock-setup vps            # keeps a 32-byte unlock secret in ~/.keylease/remotes/vps.unlock
+# After a reboot (`keylease serve --start-locked --approver-listen …`):
+keylease remote unlock vps [--idle-lock 1d]
+```
+
+The node stores a separate key slot for that device: the vault's root key
+wrapped with a key derived from the device's secret, which only the laptop
+holds. The request is signed by the device like every approver request and
+travels over the node's HTTPS. `remote disallow-unlock DEVICE_ID` or
+`remote revoke-device DEVICE_ID` deletes the slot; changing the master
+password keeps it. Whoever has both the laptop's `remotes/` files and network
+access to the node can unlock it, so protect that directory as you would the
+master password.
+
 ## Not done yet
 
 - The mobile app does not speak this protocol yet. The macOS app keeps the
-  key in the Keychain, not the Secure Enclave (which has no Ed25519).
-- No push: approvers poll. The Mac polls only while its own vault is
-  unlocked.
-- Remote unlock (ADR 0005 section 8) is not implemented; unlock the VPS as
-  described in `docs/agent-approvals.md`.
+  key in the Keychain, not the Secure Enclave (which has no Ed25519), and has
+  no remote-unlock button yet.
+- Approvers poll; for a push when an agent waits, use `keylease notify`
+  (`docs/agent-approvals.md`).

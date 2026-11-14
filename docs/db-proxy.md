@@ -28,6 +28,26 @@ keylease db exec ITEM_ID -- pg_dump --schema-only
 keylease db exec ITEM_ID -- npm run migrate      # reads DATABASE_URL
 ```
 
+For one statement, `db query` prints the rows as CSV and is read-only unless
+`--write` (the mode is shown in the approval, in front of the purpose):
+
+```sh
+keylease db query ITEM_ID "select id, state from orders limit 5"
+keylease db query ITEM_ID --write "update orders set state = 'paid' where id = 42"
+```
+
+It refuses psql meta-commands (`\!` runs a shell) and takes `--database NAME` for
+another database on the same server.
+
+To give a role a new password without anyone seeing it, generate it in the item
+and set it with `keylease run` (as a role allowed to change it):
+
+```sh
+keylease entries generate-secret ITEM_ID --field password
+keylease run --env PW=kl://VAULT/ITEM_ID/password -- \
+  sh -c 'psql -h admin-host -U postgres -c "alter role app password '"'"'$PW'"'"'"'
+```
+
 `db psql` and `db exec` start a private, single-use proxy socket and set
 `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE` and a password-free `DATABASE_URL`
 for the child; `PGPASSWORD` is removed. For a long-lived proxy:

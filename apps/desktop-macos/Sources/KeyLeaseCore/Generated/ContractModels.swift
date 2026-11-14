@@ -1079,6 +1079,7 @@ public struct AuditEvent: Codable, Equatable, Sendable {
     public let byteCount: UInt64?
     public let cellCount: UInt64?
     public let changedFields: [String]
+    public let clientAuth: String?
     public let connectionId: String?
     public let connector: String?
     public let decision: String
@@ -1092,12 +1093,13 @@ public struct AuditEvent: Codable, Equatable, Sendable {
     public let timestamp: String
     public let trustId: String?
     public let workloadId: String?
-    public init(action: String, agentId: String, byteCount: UInt64?, cellCount: UInt64?, changedFields: [String], connectionId: String?, connector: String?, decision: String, itemCount: UInt64?, onBehalfOf: String?, outcome: String, policyVersion: UInt64?, requestId: String, resource: String, schemaVersion: UInt32, timestamp: String, trustId: String?, workloadId: String?) {
+    public init(action: String, agentId: String, byteCount: UInt64?, cellCount: UInt64?, changedFields: [String], clientAuth: String?, connectionId: String?, connector: String?, decision: String, itemCount: UInt64?, onBehalfOf: String?, outcome: String, policyVersion: UInt64?, requestId: String, resource: String, schemaVersion: UInt32, timestamp: String, trustId: String?, workloadId: String?) {
         self.action = action
         self.agentId = agentId
         self.byteCount = byteCount
         self.cellCount = cellCount
         self.changedFields = changedFields
+        self.clientAuth = clientAuth
         self.connectionId = connectionId
         self.connector = connector
         self.decision = decision
@@ -1118,6 +1120,7 @@ public struct AuditEvent: Codable, Equatable, Sendable {
         case byteCount = "byte_count"
         case cellCount = "cell_count"
         case changedFields = "changed_fields"
+        case clientAuth = "client_auth"
         case connectionId = "connection_id"
         case connector = "connector"
         case decision = "decision"

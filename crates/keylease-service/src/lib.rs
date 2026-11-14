@@ -32,6 +32,7 @@ use tokio::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
+pub mod client_key;
 mod cloud;
 mod db;
 mod gateway;
@@ -51,7 +52,10 @@ pub use gateway::{
 };
 pub use inject::InjectRequest;
 pub use remote::{APPROVER_SIGNATURE_CONTEXT, ApproverDevice, PairingCode, approver_signing_input};
-pub use ssh::{SSH_AGENT_RSA_SHA2_256, SSH_AGENT_RSA_SHA2_512, SshIdentity, SshSignature};
+pub use ssh::{
+    DEFAULT_CERT_TTL_SECONDS, MAX_CERT_TTL_SECONDS, MAX_SESSION_BINDS, SSH_AGENT_RSA_SHA2_256,
+    SSH_AGENT_RSA_SHA2_512, SshCertificate, SshIdentity, SshSessionBind, SshSignature,
+};
 pub use trust::{ApprovalDecisionOutcome, EnrolledAgent};
 use trust::{VAULT_CONNECTION_ID, project_alias, vault_action_risk};
 
@@ -74,6 +78,9 @@ pub struct KeyLeaseService {
     connectors: HashMap<String, Arc<dyn Connector>>,
     active_executions: Mutex<HashMap<String, u32>>,
     authentication_failures: Mutex<HashMap<String, VecDeque<Instant>>>,
+    /// Nonces of recent signed client requests (`agent\nnonce` → timestamp),
+    /// so a captured request cannot be replayed within its validity window.
+    signature_nonces: Mutex<HashMap<String, i64>>,
     agent_handoffs: Mutex<HashMap<String, AgentNewItemHandoff>>,
     google_oauth_flows: Arc<Mutex<HashMap<String, GoogleOAuthFlow>>>,
     /// SQLite `data_version` when the in-memory policy was last built; a
@@ -512,6 +519,7 @@ impl KeyLeaseService {
             connectors,
             active_executions: Mutex::new(HashMap::new()),
             authentication_failures: Mutex::new(HashMap::new()),
+            signature_nonces: Mutex::new(HashMap::new()),
             agent_handoffs: Mutex::new(HashMap::new()),
             google_oauth_flows: Arc::new(Mutex::new(HashMap::new())),
         })
@@ -632,17 +640,10 @@ impl KeyLeaseService {
         })
     }
 
+    /// Registers a legacy bearer-token client; see
+    /// [`Self::register_client_with_key`] for the signing kind.
     pub fn register_client(&self, name: &str) -> Result<(AgentId, String)> {
-        if name.is_empty()
-            || !name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        {
-            return Err(KeyLeaseError::InvalidRequest {
-                reason: "client name must be ASCII letters, digits, '-' or '_'".into(),
-            });
-        }
-        let id = AgentId(format!("agent_{name}"));
+        let id = client_key::client_agent_id(name)?;
         let token = self.store.register_client(&id)?;
         Ok((id, token))
     }
@@ -4502,6 +4503,22 @@ impl KeyLeaseService {
         arguments: Value,
         risk: RiskTier,
     ) -> Result<()> {
+        self.authorize_vault_grant(vault, actor, action, resource, arguments, risk)
+            .map(drop)
+    }
+
+    /// Authorizes like `authorize_vault_at_risk` and returns what allowed the
+    /// request: the matched rule (a `trust_…` id for a trust) or the consumed
+    /// approval's id, for material that should name its grant.
+    fn authorize_vault_grant(
+        &self,
+        vault: &UnlockedVault,
+        actor: &ActorContext,
+        action: &str,
+        resource: &str,
+        arguments: Value,
+        risk: RiskTier,
+    ) -> Result<String> {
         self.sync_external_policy_changes()?;
         let request = ActionRequest {
             schema_version: CONTRACT_VERSION,
@@ -4559,10 +4576,10 @@ impl KeyLeaseService {
                         "trust_used",
                         vec![],
                     );
-                    event.trust_id = Some(matched_rule);
+                    event.trust_id = Some(matched_rule.clone());
                     self.store.append_audit(&event)?;
                 }
-                Ok(())
+                Ok(matched_rule)
             }
             PolicyDecision::RequireApproval {
                 policy_version,
@@ -4685,6 +4702,7 @@ impl KeyLeaseService {
             byte_count: None,
             changed_fields,
             trust_id: None,
+            client_auth: self.audit_client_auth(&actor.agent_id),
         }
     }
     fn audit_action(
@@ -4734,6 +4752,7 @@ impl KeyLeaseService {
                 .and_then(|r| serde_json::to_vec(&r.body).ok().map(|v| v.len() as u64)),
             changed_fields: vec![],
             trust_id: None,
+            client_auth: self.audit_client_auth(&actor.agent_id),
         }
     }
 }
