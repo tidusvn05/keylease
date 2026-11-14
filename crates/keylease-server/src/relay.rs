@@ -111,10 +111,18 @@ pub(crate) struct Caller {
 }
 
 fn role_of(value: &str) -> RelayRole {
-    if value == "owner" {
-        RelayRole::Owner
-    } else {
-        RelayRole::Node
+    match value {
+        "owner" => RelayRole::Owner,
+        "device" => RelayRole::Device,
+        _ => RelayRole::Node,
+    }
+}
+
+fn role_name(role: RelayRole) -> &'static str {
+    match role {
+        RelayRole::Owner => "owner",
+        RelayRole::Node => "node",
+        RelayRole::Device => "device",
     }
 }
 
@@ -268,6 +276,9 @@ async fn create_invite(
         return Err(denied("only the owner creates invites"));
     }
     let invite: CreateRelayInvite = parse(&body)?;
+    if invite.role == RelayRole::Owner {
+        return Err(invalid("an invite is for a node or a device"));
+    }
     let ttl = invite.expires_at - Utc::now();
     if !valid_hex_hash(&invite.lookup_hash)
         || !valid_name(&invite.name)
@@ -278,13 +289,14 @@ async fn create_invite(
         return Err(invalid("invalid relay invite"));
     }
     sqlx::query(
-        "INSERT INTO relay_invites(lookup_hash,account_id,name,owner_tag_b64,expires_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",
+        "INSERT INTO relay_invites(lookup_hash,account_id,name,owner_tag_b64,expires_at,role) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
     )
     .bind(&invite.lookup_hash)
     .bind(&caller.account_id)
     .bind(invite.name.trim())
     .bind(&invite.owner_tag_b64)
     .bind(invite.expires_at)
+    .bind(role_name(invite.role))
     .execute(state.repository.pool())
     .await
     .map_err(storage)?;
@@ -294,7 +306,7 @@ async fn create_invite(
 async fn open_invite(state: &CloudApiState, lookup: &str) -> ApiResult<(String, RelayInvite)> {
     let hash = relay_digest(lookup.trim().to_ascii_uppercase().as_bytes());
     let row = sqlx::query(
-        "SELECT i.account_id,i.name,i.owner_tag_b64,i.expires_at,a.owner_member_id,m.sign_public_b64,m.box_public_b64 \
+        "SELECT i.account_id,i.name,i.owner_tag_b64,i.expires_at,i.role,a.owner_member_id,m.sign_public_b64,m.box_public_b64 \
          FROM relay_invites i JOIN relay_accounts a ON a.account_id=i.account_id \
          JOIN relay_members m ON m.member_id=a.owner_member_id \
          WHERE i.lookup_hash=$1 AND i.used_at IS NULL AND i.expires_at > $2",
@@ -321,6 +333,7 @@ async fn open_invite(state: &CloudApiState, lookup: &str) -> ApiResult<(String, 
             name: row.get("name"),
             owner_tag_b64: row.get("owner_tag_b64"),
             expires_at: row.get::<DateTime<Utc>, _>("expires_at"),
+            role: role_of(row.get::<String, _>("role").as_str()),
         },
     ))
 }
@@ -353,7 +366,7 @@ async fn join(
         return Err(denied("invite was already used"));
     }
     sqlx::query(
-        "INSERT INTO relay_members(member_id,account_id,role,name,sign_public_b64,box_public_b64,node_tag_b64,invite_lookup_hash,created_at) VALUES($1,$2,'node',$3,$4,$5,$6,$7,$8)",
+        "INSERT INTO relay_members(member_id,account_id,role,name,sign_public_b64,box_public_b64,node_tag_b64,invite_lookup_hash,created_at) VALUES($1,$2,$9,$3,$4,$5,$6,$7,$8)",
     )
     .bind(&member_id)
     .bind(&invite.account_id)
@@ -363,6 +376,7 @@ async fn join(
     .bind(&body.node_tag_b64)
     .bind(&hash)
     .bind(Utc::now())
+    .bind(role_name(invite.role))
     .execute(&mut *tx)
     .await
     .map_err(|_| invalid("relay keys are already registered"))?;
@@ -484,6 +498,12 @@ async fn send_message(
     let allowed = match (caller.role, recipient_role) {
         (RelayRole::Owner, RelayRole::Node) => {
             kind::OWNER_TO_NODE.contains(&envelope.kind.as_str())
+        }
+        (RelayRole::Owner, RelayRole::Device) => {
+            kind::OWNER_TO_DEVICE.contains(&envelope.kind.as_str())
+        }
+        (RelayRole::Device, RelayRole::Owner) => {
+            kind::DEVICE_TO_OWNER.contains(&envelope.kind.as_str())
         }
         (RelayRole::Node, RelayRole::Owner) => {
             kind::NODE_TO_OWNER.contains(&envelope.kind.as_str())

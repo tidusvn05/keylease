@@ -180,3 +180,20 @@ else.
 - A node removed from the cloud keeps the copies it already had.
 - The node is trusted with what you share: a fully compromised VPS can read
   every item shared with it while its vault is unlocked.
+
+## Your other devices
+
+A second Mac or a phone can hold the whole vault and stay in sync with the
+owner device ([ADR 0009](adr/0009-device-sync.md)):
+
+```sh
+keylease cloud invite phone --device        # on the owner device
+keylease cloud join --url https://vault.example.com   # on the new device; enter the code
+keylease cloud sync                          # on the owner device, to verify it
+```
+
+From then on every `keylease cloud sync` (the daemon runs it regularly)
+exchanges changes. Edits on any device reach the others through the owner
+device; when the same item changes on two devices, the newer change wins and
+the older one stays in the item's history.
+

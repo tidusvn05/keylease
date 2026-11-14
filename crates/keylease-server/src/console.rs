@@ -336,7 +336,7 @@ async fn revoke_device(
     require_csrf(&headers)?;
     let account_id = session(&state, &headers).await?;
     let changed = sqlx::query(
-        "UPDATE relay_members SET revoked_at=now() WHERE member_id=$1 AND account_id=$2 AND role='node' AND revoked_at IS NULL",
+        "UPDATE relay_members SET revoked_at=now() WHERE member_id=$1 AND account_id=$2 AND role IN ('node','device') AND revoked_at IS NULL",
     )
     .bind(&member)
     .bind(&account_id)

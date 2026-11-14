@@ -87,6 +87,13 @@ impl RelayPayloadLabel<'_> {
 pub enum RelayRole {
     Owner,
     Node,
+    /// Another device of the owner (a second Mac, a phone): syncs two-way
+    /// with the owner device (v2 plan, step 10).
+    Device,
+}
+
+fn node_role() -> RelayRole {
+    RelayRole::Node
 }
 
 /// A member's public keys, base64 (standard, padded).
@@ -177,6 +184,9 @@ pub struct CreateRelayInvite {
     pub expires_at: DateTime<Utc>,
     /// HMAC(secret half, owner keys), base64.
     pub owner_tag_b64: String,
+    /// The role the joining member gets: `node` (default) or `device`.
+    #[serde(default = "node_role")]
+    pub role: RelayRole,
 }
 
 /// `GET /v1/relay/invites/{lookup}`: what a joining node sees.
@@ -189,6 +199,8 @@ pub struct RelayInvite {
     pub name: String,
     pub owner_tag_b64: String,
     pub expires_at: DateTime<Utc>,
+    #[serde(default = "node_role")]
+    pub role: RelayRole,
 }
 
 /// `POST /v1/relay/join`: a node registers its keys with an invite.
@@ -232,8 +244,13 @@ pub mod kind {
     pub const REQUEST_DECISION: &str = "request_decision";
     pub const BACKUP: &str = "backup";
 
+    /// A synced item, group or project, or a deletion (owner ⇄ device).
+    pub const SYNC: &str = "sync";
+
     pub const OWNER_TO_NODE: &[&str] = &[SHARE, UNSHARE, RESTORE, REQUEST_DECISION];
     pub const NODE_TO_OWNER: &[&str] = &[SHARE_REQUEST];
+    pub const OWNER_TO_DEVICE: &[&str] = &[SYNC];
+    pub const DEVICE_TO_OWNER: &[&str] = &[SYNC];
 }
 
 /// One mailbox message. `sealed_json` is a sealed box serialized as JSON.

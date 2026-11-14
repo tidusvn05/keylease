@@ -27,8 +27,14 @@ pub(crate) enum CloudCommand {
         #[arg(long, default_value = "owner")]
         name: String,
     },
-    /// Owner: a one-time code that lets a node (a VPS) join.
-    Invite { name: String },
+    /// Owner: a one-time code that lets a node (a VPS) join, or with
+    /// --device another device of yours, which then syncs everything two-way.
+    Invite {
+        name: String,
+        /// Invite one of your own devices (synced two-way) instead of a node.
+        #[arg(long)]
+        device: bool,
+    },
     /// Node: join the owner's cloud with an invite code.
     Join {
         #[arg(long)]
@@ -251,6 +257,9 @@ async fn sync_round(
         problems.extend(service.cloud_verify_members(&members)?);
         published = service.cloud_publish_shares()?;
     }
+    if link.role != CloudRole::Node {
+        published += service.cloud_publish_sync()?;
+    }
     let mut sent = 0;
     for message in service.cloud_outbox()? {
         match relay
@@ -442,9 +451,16 @@ pub(crate) async fn cloud_command(cli: &Cli, socket: &Path, command: CloudComman
                 "note": "Open it once in your browser; it signs you in and stops working.",
             }))
         }
-        CloudCommand::Invite { name } => {
+        CloudCommand::Invite { name, device } => {
             let link = require_link(&service)?;
-            let invite = service.cloud_create_invite(&name)?;
+            let invite = service.cloud_create_invite(
+                &name,
+                if device {
+                    CloudRole::Device
+                } else {
+                    CloudRole::Node
+                },
+            )?;
             Relay::new(&service, &link.url)?
                 .post::<_, Value>("/v1/relay/invites", &invite.request, true)
                 .await?;
