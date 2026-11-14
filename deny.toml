@@ -15,6 +15,12 @@ ignore = [
     # basic-toml is unmaintained (not vulnerable). age pulls it in through
     # i18n-config, which only parses age's own embedded i18n.toml at build time.
     { id = "RUSTSEC-2026-0374", reason = "unmaintained, not vulnerable; build-time parse of age's own i18n config" },
+    # SQLite < 3.54 (libsqlite3-sys < 0.39) can leak page-cache memory when it
+    # opens a database together with a crafted `-wal` file. The fix needs
+    # rusqlite 0.41+, which cargo refuses while sqlx 0.9 (Postgres only here,
+    # but its optional sqlx-sqlite stays in the lockfile) caps
+    # libsqlite3-sys below 0.38. KeyLease opens only its own vault files.
+    { id = "RUSTSEC-2026-0459", reason = "blocked by sqlx 0.9's libsqlite3-sys cap; only own vault files are opened; bump rusqlite when sqlx allows" },
 ]
 
 [licenses]
