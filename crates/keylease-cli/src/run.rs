@@ -10,19 +10,34 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use keylease_service::InjectRequest;
 use tokio::io::AsyncRead;
 
-/// Parses `NAME=kl://<vault>/<item>/<field>` (or `NAME=<item>/<field>`).
+/// Parses `NAME=kl://<vault>/<item>/<field>` (or `NAME=<item>/<field>`), or
+/// a named reference `NAME=kl://<project>[/<environment>]/<item>#<field>`.
 pub(crate) fn parse_binding(binding: &str) -> Result<(String, InjectRequest)> {
     let invalid = || KeyLeaseError::InvalidRequest {
-        reason: "use --env NAME=kl://VAULT/ITEM/FIELD or NAME=ITEM/FIELD".into(),
+        reason: "use --env NAME=kl://PROJECT[/ENV]/ITEM#FIELD, NAME=kl://VAULT/ITEM/FIELD or \
+                 NAME=ITEM/FIELD"
+            .into(),
     };
     let (name, reference) = binding.split_once('=').ok_or_else(invalid)?;
-    if name.is_empty()
-        || name.starts_with(|c: char| c.is_ascii_digit())
-        || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
+    if !valid_env_name(name) {
         return Err(invalid());
     }
     let path = reference.strip_prefix("kl://").unwrap_or(reference);
+    if let Some((item_path, field)) = path.split_once('#') {
+        if field.is_empty()
+            || item_path.is_empty()
+            || !(2..=3).contains(&item_path.split('/').count())
+        {
+            return Err(invalid());
+        }
+        return Ok((
+            name.to_owned(),
+            InjectRequest {
+                item_id: ItemId(format!("ref:{item_path}")),
+                field: field.into(),
+            },
+        ));
+    }
     let parts: Vec<&str> = path.split('/').collect();
     let (item, field) = match parts.as_slice() {
         [vault, item, field] if vault.starts_with("vault_") => (*item, *field),
@@ -39,6 +54,82 @@ pub(crate) fn parse_binding(binding: &str) -> Result<(String, InjectRequest)> {
             field: field.into(),
         },
     ))
+}
+
+fn valid_env_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// The `.env` variables of a project's env items: every variable of each
+/// active `core.environment` item in the project (and environment, when
+/// given), as `NAME` → inject request. Later items do not override earlier
+/// ones; explicit `--env` bindings override all of them.
+async fn project_bindings(
+    cli: &Cli,
+    daemon: &Path,
+    project: &str,
+    environment: Option<&str>,
+) -> Result<Vec<(String, InjectRequest)>> {
+    let found = rpc(
+        daemon,
+        RpcRequest::EntriesSearch {
+            auth: auth(cli)?,
+            query: String::new(),
+            project_slug: Some(project.to_owned()),
+            unassigned: false,
+        },
+    )
+    .await?;
+    let items: Vec<ItemMetadata> =
+        serde_json::from_value(found).map_err(|_| KeyLeaseError::Storage)?;
+    let mut bindings: Vec<(String, InjectRequest)> = Vec::new();
+    for item in items.iter().filter(|item| {
+        item.kind == "core.environment"
+            && environment.is_none_or(|wanted| {
+                item.environment
+                    .as_deref()
+                    .is_some_and(|value| value.eq_ignore_ascii_case(wanted))
+            })
+    }) {
+        let view = rpc(
+            daemon,
+            RpcRequest::EntriesView {
+                auth: auth(cli)?,
+                id: item.id.clone(),
+            },
+        )
+        .await?;
+        let view: EntryView = serde_json::from_value(view).map_err(|_| KeyLeaseError::Storage)?;
+        for field in view
+            .fields
+            .iter()
+            .filter(|field| field.semantic_role.as_deref() == Some("environment_variable"))
+        {
+            let name = field.key.strip_prefix("env.").unwrap_or(&field.label);
+            if valid_env_name(name) && !bindings.iter().any(|(known, _)| known == name) {
+                bindings.push((
+                    name.to_owned(),
+                    InjectRequest {
+                        item_id: item.id.clone(),
+                        field: field.key.clone(),
+                    },
+                ));
+            }
+        }
+    }
+    if bindings.is_empty() {
+        return Err(KeyLeaseError::NotFound {
+            resource: match environment {
+                Some(environment) => {
+                    format!("env items in project {project}, environment {environment}")
+                }
+                None => format!("env items in project {project}"),
+            },
+        });
+    }
+    Ok(bindings)
 }
 
 pub(crate) fn shell_words(words: &[String]) -> String {
@@ -170,14 +261,23 @@ pub(crate) async fn run(
     cli: &Cli,
     daemon: &Path,
     bindings: Vec<String>,
+    project: Option<String>,
+    environment: Option<String>,
     command: Vec<String>,
 ) -> Result<()> {
-    let (names, requests): (Vec<String>, Vec<InjectRequest>) = bindings
+    let explicit = bindings
         .iter()
         .map(|binding| parse_binding(binding))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .unzip();
+        .collect::<Result<Vec<_>>>()?;
+    let mut all = match &project {
+        Some(project) => project_bindings(cli, daemon, project, environment.as_deref()).await?,
+        None => Vec::new(),
+    };
+    for (name, request) in explicit {
+        all.retain(|(known, _)| known != &name);
+        all.push((name, request));
+    }
+    let (names, requests): (Vec<String>, Vec<InjectRequest>) = all.into_iter().unzip();
     let program = command
         .first()
         .ok_or_else(|| KeyLeaseError::InvalidRequest {
@@ -238,6 +338,16 @@ mod tests {
         assert_eq!(request.item_id.0, "item_2");
         assert_eq!(request.field, "password");
         assert!(parse_binding("TOKEN=item_3/token").is_ok());
+        // Named references: kl://PROJECT[/ENV]/ITEM#FIELD.
+        let (name, request) =
+            parse_binding("STRIPE_KEY=kl://shop/production/Stripe#secret_key").unwrap();
+        assert_eq!(name, "STRIPE_KEY");
+        assert_eq!(request.item_id.0, "ref:shop/production/Stripe");
+        assert_eq!(request.field, "secret_key");
+        assert!(parse_binding("DB=kl://shop/postgres#password").is_ok());
+        for bad in ["A=kl://shop#x", "A=kl://shop/item#", "A=kl://a/b/c/d#x"] {
+            assert!(parse_binding(bad).is_err(), "{bad}");
+        }
         for bad in [
             "=item_1/x",
             "1X=item_1/x",

@@ -24,8 +24,10 @@ from this directory: it uses this project's identity by itself.
 
 - Find: `keylease entries search QUERY`, `keylease entries view ID`. Values are redacted;
   a field's reference is `kl://VAULT/ITEM/FIELD` (`keylease status` shows the vault id).
-- Use in a command: `keylease run --env NAME=kl://VAULT/ITEM/FIELD -- COMMAND`. The value is
-  in the program's environment and scrubbed from its output; do not try to print it.
+- Use in a command: `keylease run --env NAME=kl://VAULT/ITEM/FIELD -- COMMAND` (or by name,
+  `NAME=kl://PROJECT/ENV/ITEM#FIELD`; `keylease run --project P --environment E -- COMMAND`
+  sets every variable of the project's env files). The value is in the program's environment
+  and scrubbed from its output; do not try to print it.
 - SSH and PostgreSQL without the secret: `keylease ssh HOST ...`, `keylease db query ITEM
   \"SQL\"` (read-only unless `--write`), `keylease db psql ITEM`.
 - Add: create the item without its secret (`keylease groups list`, `keylease templates list`):

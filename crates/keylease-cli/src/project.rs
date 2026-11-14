@@ -226,6 +226,8 @@ pub(crate) fn add(db: &Path, args: AddArgs) -> Result<()> {
             sections: vec![],
             totp: None,
             totp_uri: None,
+            environment: None,
+            personal: false,
         },
         &format!("add-{}", RequestId::new().0),
         false,

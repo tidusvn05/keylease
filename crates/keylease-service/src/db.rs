@@ -90,11 +90,13 @@ fn db_target(item: &VaultItem) -> Result<DbTarget> {
     })
 }
 
-/// Production items get the stricter tier, which caps trust at one hour.
-fn connect_risk(item: &VaultItem) -> RiskTier {
-    match item.environment.as_deref().map(str::to_ascii_lowercase) {
-        Some(environment) if environment.starts_with("prod") => RiskTier::R3,
-        _ => RiskTier::R2,
+/// Items in a protected environment get the stricter tier, which caps
+/// trust at one hour.
+fn connect_risk(protected: bool) -> RiskTier {
+    if protected {
+        RiskTier::R3
+    } else {
+        RiskTier::R2
     }
 }
 
@@ -225,7 +227,7 @@ impl KeyLeaseService {
                 "db:connect",
                 &resource,
                 serde_json::json!({"database": database, "role": target.username}),
-                connect_risk(&item),
+                connect_risk(self.item_environment_protected(vault, &item)?),
             )?;
             let password = Zeroizing::new(text_field(&item, "password").ok_or_else(|| {
                 KeyLeaseError::InvalidRequest {
@@ -280,19 +282,11 @@ mod tests {
 
     #[test]
     fn production_items_are_a_higher_tier() {
-        let mut item: VaultItem = serde_json::from_value(serde_json::json!({
-            "id": "item_x", "vault_id": "vault_x", "group_id": "group_x",
-            "kind": "core.database", "title": "db", "sections": [], "fields": [],
-            "urls": [], "tags": [], "attachments": [], "notes": null,
-            "schema_version": 1, "revision": 1,
-            "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
-            "secret_changed_at": null, "expires_at": null,
-            "rotation_interval_days": null, "issuer": null, "environment": null,
-            "status": "active"
-        }))
-        .unwrap();
-        assert_eq!(connect_risk(&item), RiskTier::R2);
-        item.environment = Some("Production".into());
-        assert_eq!(connect_risk(&item), RiskTier::R3);
+        assert_eq!(connect_risk(false), RiskTier::R2);
+        assert_eq!(connect_risk(true), RiskTier::R3);
+        // Without configured environments, "prod…" names are protected.
+        assert!(environment_is_protected(None, Some("Production")));
+        assert!(!environment_is_protected(None, Some("staging")));
+        assert!(!environment_is_protected(None, None));
     }
 }

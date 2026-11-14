@@ -3334,6 +3334,7 @@ mod tests {
             project_id: None,
             agent_access: keylease_core::AgentAccess::None,
             content_metadata: None,
+            personal: false,
             schema_version: 1,
             revision: 1,
             created_at: now,
@@ -3691,6 +3692,7 @@ mod tests {
             created_at: now,
             updated_at: now,
             archived_at: None,
+            environments: Vec::new(),
         };
         source
             .put_project(

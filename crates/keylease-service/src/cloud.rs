@@ -2318,6 +2318,7 @@ mod tests {
                     project_id: current.as_ref().and_then(|c| c.project_id.clone()),
                     agent_access: AgentAccess::None,
                     content_metadata: None,
+                    personal: false,
                     schema_version: 1,
                     revision: current.as_ref().map_or(1, |c| c.revision + 1),
                     created_at: now,
@@ -2687,6 +2688,7 @@ mod tests {
                     created_at: now,
                     updated_at: now,
                     archived_at: None,
+                    environments: Vec::new(),
                 };
                 owner.store.put_project(
                     vault,

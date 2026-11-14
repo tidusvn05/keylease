@@ -59,6 +59,8 @@ fn semantic_migration_previews_applies_and_rolls_back_atomically() {
                 sections: vec![],
                 totp: None,
                 totp_uri: None,
+                environment: None,
+                personal: false,
             },
             "legacy-card",
             false,
@@ -369,6 +371,8 @@ fn agent_write_search_and_revision_are_policy_enforced() {
         sections: vec![],
         totp: None,
         totp_uri: None,
+        environment: None,
+        personal: false,
     };
     let item = service
         .create_entry(&actor, input.clone(), "task-create", false)
@@ -585,6 +589,8 @@ fn structured_entries_keep_project_identity_through_search_and_reassignment() {
                 sections: vec![],
                 totp: None,
                 totp_uri: None,
+                environment: None,
+                personal: false,
             },
             "create-project-entry",
             false,
@@ -850,6 +856,8 @@ fn totp_short_uri_survives_create_update_and_failed_save() {
         sections: vec![],
         totp: None,
         totp_uri: Some(source.into()),
+        environment: None,
+        personal: false,
     };
     let created = service
         .create_entry(&owner, input, "totp-create", false)
@@ -1655,6 +1663,8 @@ fn batch_reveal_is_bounded_and_returns_only_requested_field_ids() {
                 sections: vec![],
                 totp: None,
                 totp_uri: None,
+                environment: None,
+                personal: false,
             },
             "batch-create",
             false,
@@ -1687,5 +1697,304 @@ fn batch_reveal_is_bounded_and_returns_only_requested_field_ids() {
     assert!(matches!(
         service.reveal_fields_by_id_authorized(&actor, &created.id, &[]),
         Err(KeyLeaseError::InvalidRequest { .. })
+    ));
+}
+
+fn grant(service: &KeyLeaseService, actor: &ActorContext, action: &str, resource: String) {
+    service
+        .add_grant(PolicyRule {
+            id: format!("{}-{action}", actor.agent_id.0),
+            version: 1,
+            effect: PolicyEffect::Allow,
+            agent_id: Some(actor.agent_id.clone()),
+            connection_id: None,
+            resource_prefix: resource,
+            actions: vec![action.into()],
+            argument_equals: Default::default(),
+            not_before: None,
+            expires_at: None,
+            max_lease_ttl_seconds: 600,
+            max_uses: 100,
+            budget: Default::default(),
+        })
+        .unwrap();
+}
+
+/// A vault with a desktop owner and an agent holding the usual test grants.
+fn service_with_owner() -> (
+    tempfile::TempDir,
+    KeyLeaseService,
+    ActorContext,
+    ActorContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(NativeStore::open(dir.path().join("vault.sqlite")).unwrap());
+    let service = KeyLeaseService::new(store).unwrap();
+    let vault = service.initialize(b"password", Duration::hours(1)).unwrap();
+    let (owner_id, owner_token) = service.register_desktop_client().unwrap();
+    // Owner authority is installed when the owner client unlocks.
+    service.lock().unwrap();
+    service
+        .unlock_for_client(&owner_id, b"password", Duration::hours(1))
+        .unwrap();
+    let owner = service
+        .authenticate(&owner_id, &owner_token, "owner-session")
+        .unwrap();
+    let (agent_id, agent_token) = service.register_client("test").unwrap();
+    let agent = service
+        .authenticate(&agent_id, &agent_token, "agent-session")
+        .unwrap();
+    for action in [
+        "entry:create",
+        "entry:search",
+        "entry:update_standard_fields",
+        "entry:update_protected_fields",
+    ] {
+        grant(&service, &agent, action, format!("kl://{}", vault.0));
+    }
+    (dir, service, owner, agent)
+}
+
+fn login_input(group: &VaultGroup, title: &str) -> NewEntryInput {
+    NewEntryInput {
+        group_id: group.id.clone(),
+        kind: "core.login".into(),
+        title: title.into(),
+        project_slug: None,
+        favorite: false,
+        username: Some("me".into()),
+        password: Some("hunter2-personal".into()),
+        url: None,
+        notes: None,
+        custom_fields: vec![],
+        sections: vec![],
+        totp: None,
+        totp_uri: None,
+        environment: None,
+        personal: false,
+    }
+}
+
+#[test]
+fn personal_items_do_not_exist_for_agents() {
+    let (_dir, service, owner, agent) = service_with_owner();
+    let group = service.create_group("Personal", None).unwrap();
+    let vault = group.vault_id.0.clone();
+    for action in [
+        "entry:read_metadata",
+        "entry:read_secret",
+        "entry:inject_secret",
+    ] {
+        grant(&service, &agent, action, format!("kl://{vault}"));
+    }
+    // Agents cannot create personal items, the owner can.
+    let mut input = login_input(&group, "Bank");
+    input.personal = true;
+    assert!(matches!(
+        service.create_entry(&agent, input.clone(), "agent-personal", false),
+        Err(KeyLeaseError::Denied { .. })
+    ));
+    let bank = service
+        .create_entry(&owner, input, "owner-personal", false)
+        .unwrap();
+    assert!(bank.personal);
+    let work = service
+        .create_entry(&agent, login_input(&group, "Work"), "work", false)
+        .unwrap();
+
+    let titles = |actor: &ActorContext| {
+        service
+            .search_entries(actor, "")
+            .unwrap()
+            .into_iter()
+            .map(|item| item.title)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(titles(&agent), vec!["Work".to_string()]);
+    assert!(titles(&owner).contains(&"Bank".to_string()));
+    // Every command on the item fails as not found, despite the grants.
+    assert!(matches!(
+        service.get_entry_metadata(&agent, &bank.id),
+        Err(KeyLeaseError::NotFound { .. })
+    ));
+    assert!(matches!(
+        service.reveal_field_authorized(&agent, &bank.id, "password"),
+        Err(KeyLeaseError::NotFound { .. })
+    ));
+    assert!(matches!(
+        service.inject_fields_authorized(
+            &agent,
+            "env",
+            &[],
+            &[InjectRequest {
+                item_id: bank.id.clone(),
+                field: "password".into()
+            }]
+        ),
+        Err(KeyLeaseError::NotFound { .. })
+    ));
+    assert!(service.get_entry_metadata(&agent, &work.id).is_ok());
+    // Only the owner moves items into or out of the Personal area.
+    let patch = EntryPatch {
+        personal: Some(true),
+        ..Default::default()
+    };
+    assert!(matches!(
+        service.update_entry(
+            &agent,
+            &work.id,
+            patch.clone(),
+            work.revision,
+            "agent-hide",
+            false
+        ),
+        Err(KeyLeaseError::Denied { .. })
+    ));
+    let hidden = service
+        .update_entry(&owner, &work.id, patch, work.revision, "owner-hide", false)
+        .unwrap();
+    assert!(hidden.personal);
+    assert!(titles(&agent).is_empty());
+}
+
+#[test]
+fn project_environments_validate_items_and_protect_production() {
+    let (_dir, service, owner, agent) = service_with_owner();
+    let group = service.create_group("Shop", None).unwrap();
+    let project = service
+        .create_project_agent(&owner, "shop", Some("Shop"), "project-shop")
+        .unwrap();
+    // New projects start with dev, staging and a protected production.
+    assert_eq!(
+        project
+            .environments
+            .iter()
+            .map(|environment| (environment.slug.as_str(), environment.protected))
+            .collect::<Vec<_>>(),
+        vec![("dev", false), ("staging", false), ("production", true)]
+    );
+    let mut input = login_input(&group, "Stripe");
+    input.password = None;
+    input.project_slug = Some("shop".into());
+    input.environment = Some("qa".into());
+    assert!(matches!(
+        service.create_entry(&agent, input.clone(), "bad-env", false),
+        Err(KeyLeaseError::InvalidRequest { .. })
+    ));
+    input.environment = Some("Production".into());
+    let item = service
+        .create_entry(&agent, input, "prod-env", false)
+        .unwrap();
+    // Stored as the slug.
+    assert_eq!(item.environment.as_deref(), Some("production"));
+    let stored = service
+        .with_vault(|vault| service.store.get_item(vault, &item.id))
+        .unwrap();
+    assert!(
+        service
+            .with_vault(|vault| service.item_environment_protected(vault, &stored))
+            .unwrap()
+    );
+
+    // A client allowed only standard-field edits cannot move the item out of
+    // production; that lowers its risk tier, so it is a protected change.
+    let (limited_id, limited_token) = service.register_client("limited").unwrap();
+    let limited = service
+        .authenticate(&limited_id, &limited_token, "limited")
+        .unwrap();
+    let vault = group.vault_id.0.clone();
+    grant(
+        &service,
+        &limited,
+        "entry:update_standard_fields",
+        format!("kl://{vault}"),
+    );
+    let to_dev = EntryPatch {
+        environment: Some("dev".into()),
+        ..Default::default()
+    };
+    assert!(
+        service
+            .update_entry(
+                &limited,
+                &item.id,
+                to_dev.clone(),
+                item.revision,
+                "limited-dev",
+                false
+            )
+            .is_err()
+    );
+    let moved = service
+        .update_entry(&agent, &item.id, to_dev, item.revision, "agent-dev", false)
+        .unwrap();
+    assert_eq!(moved.environment.as_deref(), Some("dev"));
+
+    // Environments are managed by the owner; one in use cannot be removed.
+    let updated = service
+        .set_project_environment("shop", "qa", Some("QA"), false)
+        .unwrap();
+    assert!(updated.environment("qa").is_some());
+    assert!(service.remove_project_environment("shop", "dev").is_err());
+    assert!(service.remove_project_environment("shop", "qa").is_ok());
+    assert!(
+        service
+            .set_project_environment("shop", "Not Valid", None, false)
+            .is_err()
+    );
+}
+
+#[test]
+fn named_references_resolve_to_project_items() {
+    let (_dir, service, owner, agent) = service_with_owner();
+    let group = service.create_group("Shop", None).unwrap();
+    service
+        .create_project_agent(&owner, "shop", None, "project-shop")
+        .unwrap();
+    let vault = group.vault_id.0.clone();
+    grant(
+        &service,
+        &agent,
+        "entry:inject_secret",
+        format!("kl://{vault}"),
+    );
+    for (environment, secret) in [
+        ("staging", "sk_test_staging"),
+        ("production", "sk_live_prod"),
+    ] {
+        let mut input = login_input(&group, "Stripe");
+        input.project_slug = Some("shop".into());
+        input.environment = Some(environment.into());
+        input.password = Some(secret.into());
+        service
+            .create_entry(&agent, input, &format!("stripe-{environment}"), false)
+            .unwrap();
+    }
+    let request = |path: &str, field: &str| InjectRequest {
+        item_id: ItemId(format!("ref:{path}")),
+        field: field.into(),
+    };
+    let values = service
+        .inject_fields_authorized(
+            &agent,
+            "env",
+            &[],
+            &[request("shop/staging/stripe", "password")],
+        )
+        .unwrap();
+    assert_eq!(values, vec!["sk_test_staging".to_string()]);
+    // Without the environment the name is ambiguous.
+    assert!(matches!(
+        service.inject_fields_authorized(&agent, "env", &[], &[request("shop/Stripe", "password")]),
+        Err(KeyLeaseError::InvalidRequest { .. })
+    ));
+    assert!(matches!(
+        service.inject_fields_authorized(
+            &agent,
+            "env",
+            &[],
+            &[request("shop/staging/missing", "password")]
+        ),
+        Err(KeyLeaseError::NotFound { .. })
     ));
 }

@@ -164,6 +164,9 @@ impl KdbxAdapter for KeepassRsAdapter {
                 entry.set_protected(fields::NOTES, notes);
             }
             entry.set_protected("KeyLease.Kind", &item.kind);
+            if item.personal {
+                entry.set_protected("KeyLease.Personal", "true");
+            }
             entry.set_protected("KeyLease.SchemaVersion", item.schema_version.to_string());
             entry.set_protected(
                 "KeyLease.TemplateVersion",
@@ -290,6 +293,11 @@ fn walk_group(
             project_id: None,
             agent_access: AgentAccess::None,
             content_metadata: None,
+            personal: entry
+                .get("KeyLease.Personal")
+                .map_or(entry.get("KeyLease.Kind").is_none(), |value| {
+                    value == "true"
+                }),
             schema_version: entry
                 .get("KeyLease.SchemaVersion")
                 .and_then(|v| v.parse().ok())
@@ -387,6 +395,7 @@ fn walk_group(
                 "KeyLease.SchemaVersion",
                 "KeyLease.TemplateVersion",
                 "KeyLease.Sections",
+                "KeyLease.Personal",
             ]
             .contains(&name.as_str())
                 || name.starts_with("KeyLease.FieldId.")
@@ -688,6 +697,7 @@ mod tests {
             project_id: None,
             agent_access: AgentAccess::None,
             content_metadata: None,
+            personal: false,
             schema_version: 1,
             revision: 1,
             created_at: Utc::now(),
@@ -765,6 +775,7 @@ mod tests {
             project_id: None,
             agent_access: AgentAccess::None,
             content_metadata: None,
+            personal: false,
             schema_version: 1,
             revision: 1,
             created_at: Utc::now(),
@@ -814,6 +825,36 @@ mod tests {
             updated_at: Utc::now(),
         };
         (vault, group)
+    }
+
+    #[test]
+    fn the_personal_flag_survives_a_round_trip() {
+        let (vault, group) = ordering_fixture();
+        let round_trip = |personal: bool| {
+            let mut item = item_with_ordered_fields(&group, &vault);
+            item.personal = personal;
+            let mut bytes = vec![];
+            KeepassRsAdapter
+                .export(
+                    &mut bytes,
+                    "password",
+                    std::slice::from_ref(&group),
+                    std::slice::from_ref(&item),
+                )
+                .unwrap();
+            let imported = KeepassRsAdapter
+                .preview_import(&mut bytes.as_slice(), "password", &vault)
+                .unwrap();
+            let item = &imported.items[0];
+            (
+                item.personal,
+                item.fields
+                    .iter()
+                    .any(|field| field.key.starts_with("KeyLease.")),
+            )
+        };
+        assert_eq!(round_trip(true), (true, false));
+        assert_eq!(round_trip(false), (false, false));
     }
 
     #[test]

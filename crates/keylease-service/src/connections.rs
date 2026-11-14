@@ -52,6 +52,7 @@ impl KeyLeaseService {
                 project_id: None,
                 agent_access: AgentAccess::None,
                 content_metadata: None,
+                personal: false,
                 schema_version: 1,
                 revision: 1,
                 created_at: now,

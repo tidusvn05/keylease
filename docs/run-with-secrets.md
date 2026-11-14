@@ -10,6 +10,24 @@ keylease run --env STRIPE_API_KEY=kl://VAULT_ID/ITEM_ID/password \
              -- terraform plan
 ```
 
+References can also name the item, which is easier to write and to read in
+an approval: `kl://PROJECT[/ENVIRONMENT]/ITEM#FIELD`, with the item's title
+(case-insensitive) and the field's key, label or `.env` variable name.
+
+```sh
+keylease run --env STRIPE_API_KEY=kl://shop/production/Stripe#password -- ./deploy.sh
+```
+
+`--project shop --environment production` sets every variable of the
+project's env files (`core.environment` items) in that environment, without
+listing them; `--env` bindings add to or override them:
+
+```sh
+keylease run --project shop --environment production -- npm run migrate
+```
+
+See [projects and environments](projects-and-environments.md).
+
 - One approval per run covers every `--env` of the same item. It shows the
   program's name and the field keys, and it is `entry:inject_secret`, risk R3:
   approve it once, or trust it for up to an hour (on the item, or with its

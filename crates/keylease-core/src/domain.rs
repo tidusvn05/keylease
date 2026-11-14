@@ -171,6 +171,10 @@ pub struct VaultItem {
     pub agent_access: AgentAccess,
     #[serde(default)]
     pub content_metadata: Option<ContentMetadata>,
+    /// Personal items (the password-manager area) are invisible to agents:
+    /// search, metadata, reveal and every broker refuse them as not found.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub personal: bool,
     pub schema_version: u32,
     pub revision: u64,
     pub created_at: DateTime<Utc>,
@@ -278,6 +282,62 @@ pub struct VaultProject {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub archived_at: Option<DateTime<Utc>>,
+    /// Deployment environments (dev, staging, production…). Empty means the
+    /// project does not restrict `VaultItem::environment`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub environments: Vec<ProjectEnvironment>,
+}
+
+/// One environment of a project. Items in a protected environment are used
+/// at a higher risk tier (R3), which caps time-boxed trust at one hour.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectEnvironment {
+    pub slug: String,
+    pub name: String,
+    #[serde(default)]
+    pub protected: bool,
+}
+
+impl ProjectEnvironment {
+    /// The environments a new project starts with.
+    pub fn defaults() -> Vec<Self> {
+        [
+            ("dev", "Development", false),
+            ("staging", "Staging", false),
+            ("production", "Production", true),
+        ]
+        .into_iter()
+        .map(|(slug, name, protected)| Self {
+            slug: slug.into(),
+            name: name.into(),
+            protected,
+        })
+        .collect()
+    }
+}
+
+impl VaultProject {
+    /// The configured environment matching `name` (slug or display name,
+    /// case-insensitive).
+    pub fn environment(&self, name: &str) -> Option<&ProjectEnvironment> {
+        self.environments.iter().find(|environment| {
+            environment.slug.eq_ignore_ascii_case(name)
+                || environment.name.eq_ignore_ascii_case(name)
+        })
+    }
+}
+
+/// Whether an item's environment is protected. Configured project
+/// environments decide; otherwise names starting with "prod" are.
+pub fn environment_is_protected(project: Option<&VaultProject>, environment: Option<&str>) -> bool {
+    let Some(environment) = environment.map(str::trim).filter(|name| !name.is_empty()) else {
+        return false;
+    };
+    match project.and_then(|project| project.environment(environment)) {
+        Some(configured) => configured.protected,
+        None => environment.to_ascii_lowercase().starts_with("prod"),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -301,6 +361,10 @@ pub struct ItemMetadata {
     /// and current code remain excluded from metadata.
     pub has_totp: bool,
     pub favorite: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub personal: bool,
     pub revision: u64,
     pub updated_at: DateTime<Utc>,
 }
@@ -348,6 +412,8 @@ impl VaultItem {
             has_notes,
             has_totp,
             favorite,
+            environment: self.environment.clone(),
+            personal: self.personal,
             revision: self.revision,
             updated_at: self.updated_at,
         }

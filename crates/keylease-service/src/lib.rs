@@ -38,6 +38,7 @@ pub mod client_key;
 mod cloud;
 mod connections;
 mod db;
+mod environments;
 mod identity;
 mod inject;
 mod items;
@@ -57,6 +58,7 @@ pub use cloud::{
     ShareScope,
 };
 pub use db::{DbTarget, ScramClientFinal};
+use environments::*;
 pub use inject::InjectRequest;
 use items::*;
 use owner_rules::*;
@@ -221,6 +223,13 @@ pub struct NewEntryInput {
     pub totp: Option<TotpConfig>,
     #[serde(default)]
     pub totp_uri: Option<String>,
+    /// Deployment environment (a slug of the project's environments when it
+    /// defines any). Protected environments raise the item's risk tier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
+    /// Put the item in the Personal area, invisible to agents (owner only).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub personal: bool,
 }
 
 impl std::fmt::Debug for NewEntryInput {
@@ -255,6 +264,12 @@ pub struct EntryPatch {
     #[serde(default)]
     pub remove_field_ids: Vec<FieldId>,
     pub favorite: Option<bool>,
+    /// New environment; an empty string clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
+    /// Move the item into or out of the Personal area (owner only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personal: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]

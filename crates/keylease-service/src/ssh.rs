@@ -267,11 +267,12 @@ fn item_ca_principals(item: &VaultItem) -> Option<Vec<String>> {
     )
 }
 
-/// R2, or R3 when the item's environment is production.
-fn environment_risk(item: &VaultItem) -> RiskTier {
-    match item.environment.as_deref().map(str::to_ascii_lowercase) {
-        Some(environment) if environment.starts_with("prod") => RiskTier::R3,
-        _ => RiskTier::R2,
+/// R2, or R3 when the item's environment is protected.
+fn environment_risk(protected: bool) -> RiskTier {
+    if protected {
+        RiskTier::R3
+    } else {
+        RiskTier::R2
     }
 }
 
@@ -438,6 +439,7 @@ impl KeyLeaseService {
             for item in self.store.list_items(vault)? {
                 // A CA only issues certificates; it is never offered for a login.
                 if item.status != ItemStatus::Active
+                    || !self.item_visible_to(actor, &item)?
                     || item.kind != "core.ssh_key"
                     || item_ca_principals(&item).is_some()
                 {
@@ -534,7 +536,7 @@ impl KeyLeaseService {
                 "ssh:sign",
                 &resource,
                 arguments,
-                environment_risk(&item),
+                environment_risk(self.item_environment_protected(vault, &item)?),
             )?;
             // Decrypt only after the use is authorized.
             let key = unlock_key(&item, key)?;
@@ -616,7 +618,7 @@ impl KeyLeaseService {
                 "ssh:issue_cert",
                 &resource,
                 serde_json::json!({"principals": principals, "ttl_seconds": ttl}),
-                environment_risk(&item),
+                environment_risk(self.item_environment_protected(vault, &item)?),
             )?;
             let ca = unlock_key(&item, ca)?;
             let now = Utc::now();
@@ -713,6 +715,8 @@ mod tests {
             sections: vec![],
             totp: None,
             totp_uri: None,
+            environment: None,
+            personal: false,
         };
         input.custom_fields.push(field(
             "private_key",

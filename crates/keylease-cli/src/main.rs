@@ -231,9 +231,15 @@ enum Command {
     /// Run a program with vault values in its environment, scrubbed from its output.
     #[command(trailing_var_arg = true)]
     Run {
-        /// NAME=kl://VAULT/ITEM/FIELD (repeatable).
-        #[arg(long = "env", required = true)]
+        /// NAME=kl://PROJECT[/ENV]/ITEM#FIELD or NAME=kl://VAULT/ITEM/FIELD (repeatable).
+        #[arg(long = "env", required_unless_present = "project")]
         bindings: Vec<String>,
+        /// Inject every variable of the project's env items (`core.environment`).
+        #[arg(long)]
+        project: Option<String>,
+        /// With --project: only env items of this environment.
+        #[arg(long, requires = "project")]
+        environment: Option<String>,
         #[arg(allow_hyphen_values = true, required = true)]
         command: Vec<String>,
     },
@@ -607,6 +613,34 @@ enum ProjectCommand {
         #[arg(long)]
         idempotency_key: String,
     },
+    /// A project's environments (dev, staging, production…). Items in a
+    /// protected environment use the stricter risk tier (master password).
+    Env {
+        #[command(subcommand)]
+        command: ProjectEnvCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProjectEnvCommand {
+    List {
+        project: String,
+    },
+    /// Add an environment, or change its name or protection.
+    Set {
+        project: String,
+        slug: String,
+        #[arg(long)]
+        name: Option<String>,
+        /// Use the stricter risk tier (R3, trust at most one hour) for its items.
+        #[arg(long)]
+        protected: bool,
+    },
+    /// Remove an environment that no item uses.
+    Remove {
+        project: String,
+        slug: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -712,6 +746,15 @@ enum EntryCommand {
         /// A non-secret field, KEY=VALUE (repeatable): `--field host=db.internal`.
         #[arg(long = "field", value_name = "KEY=VALUE")]
         fields: Vec<String>,
+        /// Project slug (default: the project of the current directory, for its agent).
+        #[arg(long)]
+        project: Option<String>,
+        /// Environment, one of the project's (`keylease projects env list PROJECT`).
+        #[arg(long)]
+        environment: Option<String>,
+        /// Put the entry in the Personal area, invisible to agents (owner only).
+        #[arg(long)]
+        personal: bool,
         #[arg(long)]
         idempotency_key: String,
         #[arg(long)]
@@ -1130,6 +1173,27 @@ async fn run() -> Result<()> {
             ProjectCommand::List => {
                 print_rpc(&socket, RpcRequest::ProjectsList { auth: auth(&cli)? }).await
             }
+            ProjectCommand::Env { command } => {
+                let service = admin_service(&cli.db)?;
+                let project = match command {
+                    ProjectEnvCommand::List { project } => service.get_project_by_slug(&project)?,
+                    ProjectEnvCommand::Set {
+                        project,
+                        slug,
+                        name,
+                        protected,
+                    } => service.set_project_environment(
+                        &project,
+                        &slug,
+                        name.as_deref(),
+                        protected,
+                    )?,
+                    ProjectEnvCommand::Remove { project, slug } => {
+                        service.remove_project_environment(&project, &slug)?
+                    }
+                };
+                print_json(&json!({"project": project.slug, "environments": project.environments}))
+            }
             ProjectCommand::Create {
                 slug,
                 name,
@@ -1204,7 +1268,12 @@ async fn run() -> Result<()> {
                 remote_mcp::connection_command(&cli.db, command)
             }
         },
-        Command::Run { bindings, command } => run::run(&cli, &socket, bindings, command).await,
+        Command::Run {
+            bindings,
+            project,
+            environment,
+            command,
+        } => run::run(&cli, &socket, bindings, project, environment, command).await,
         Command::Gate { command } => gate_command(&cli, &socket, command).await,
         Command::Audit { command } => {
             let service = admin_service(&cli.db)?;
@@ -2481,6 +2550,9 @@ async fn entry_command(cli: &Cli, socket: &Path, command: EntryCommand) -> Resul
             username,
             url,
             fields,
+            project,
+            environment,
+            personal,
             idempotency_key,
             dry_run,
         } => {
@@ -2501,9 +2573,18 @@ async fn entry_command(cli: &Cli, socket: &Path, command: EntryCommand) -> Resul
                     sections: vec![],
                     totp: None,
                     totp_uri: None,
+                    environment: None,
+                    personal: false,
                 },
                 None => read_json::<NewEntryInput>(input_json.as_deref().unwrap_or("-"))?,
             };
+            if project.is_some() {
+                input.project_slug = project;
+            }
+            if environment.is_some() {
+                input.environment = environment;
+            }
+            input.personal |= personal;
             for field in &fields {
                 input.custom_fields.push(plain_field(&input.kind, field)?);
             }
