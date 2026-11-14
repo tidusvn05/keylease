@@ -231,7 +231,7 @@ keylease --db work.sqlite vault import-onepux account.1pux \
 catalogs. `docs/phase-0-1-implementation-matrix.md` tracks acceptance evidence
 and the macOS/provider checks that must happen in their real environments.
 
-## LeaseGate Cloud and Edge
+## KeyLease Cloud and Edge
 
 The repository also contains a self-hosted control plane and gateway for
 running agents against SaaS connectors with signed policy bundles: Cloud API
@@ -291,22 +291,22 @@ machine-readable acceptance report. See
   audit, keyed mutation journal and lease/execution journal.
 - `keylease-1pux`: bounded plaintext 1PUX ZIP importer and migration reports.
 - `keylease-kdbx`: KDBX 4 import/export adapter and migration reports.
-- `leasegate-policy`: deterministic deny-by-default policy and approvals.
-- `leasegate-connectors`: connector trait, fake conformance connector and typed
+- `keylease-policy`: deterministic deny-by-default policy and approvals.
+- `keylease-connectors`: connector trait, fake conformance connector and typed
   Google, GitHub, Linear, Notion, Slack and Jira providers.
-- `leasegate-connector-sdk`: manifest validation, JSON Schema generation,
+- `keylease-connector-sdk`: manifest validation, JSON Schema generation,
   conformance checks and signed immutable connector packaging CLI/library.
 - `keylease-service`: the only mutation/policy/connector orchestration layer.
 - `keylease` (`crates/keylease-cli`): headless CLI and local Unix-socket daemon.
 - `keylease-cloud`: PostgreSQL-backed control API, connector registry, policy
   proposals, dynamic-credential metadata, posture, rotation and worker.
-- `leasegate-control` / `leasegate-policy-bundle`: versioned Cloud/Edge wire
+- `keylease-protocol`: versioned Cloud/Edge wire
   contracts and Ed25519/JCS signatures.
-- `leasegate-credentials`: self-hosted AWS STS, SSH certificate, PostgreSQL role
+- `keylease-credentials`: self-hosted AWS STS, SSH certificate, PostgreSQL role
   and OAuth token-exchange credential broker/backends.
-- `leasegate-edge`: Linux local Gateway, signed control cache, credential API,
+- `keylease-edge`: Linux local Gateway, signed control cache, credential API,
   offline enforcement and encrypted audit/credential state.
-- `leasegate-mcp`: authenticated Streamable HTTP MCP adapter over the canonical
+- `keylease-mcp`: authenticated Streamable HTTP MCP adapter over the canonical
   service boundary.
 - `keylease-rpc`: the single implementation of the local RPC contract, shared by
   the CLI daemon and the mobile FFI so the wire format cannot drift.
@@ -350,4 +350,4 @@ cd apps/desktop-macos-app && swift build && swift test
 ## Security and license
 
 Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
-KeyLease and LeaseGate are licensed under the [Apache License 2.0](LICENSE).
+KeyLease is licensed under the [Apache License 2.0](LICENSE).

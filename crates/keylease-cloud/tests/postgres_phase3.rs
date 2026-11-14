@@ -4,11 +4,11 @@ use keylease_core::{
     AccountId, AgentId, ApprovalId, ApprovalSemanticSummary, ConnectionId, DeviceId, ItemId,
     PolicyBundleId, RequestId, RiskTier, SyncMutationId, VaultId,
 };
-use leasegate_control::{
+use keylease_protocol::{
     ApprovalRequest, CONTROL_CONTRACT_VERSION, ControlEvent, OfflineAuthorization,
     PolicyBundlePayload, Revocation, RevocationScope, SyncMutationEnvelope, SyncMutationStatus,
 };
-use leasegate_policy_bundle::{ControlSigner, verify_policy_bundle};
+use keylease_protocol::{ControlSigner, verify_policy_bundle};
 use sha2::{Digest, Sha256};
 
 fn hex(bytes: &[u8]) -> String {

@@ -1,6 +1,8 @@
 use chrono::{Duration, Utc};
 use clap::{Args, Parser, Subcommand};
+use keylease_connectors::Connector;
 use keylease_core::*;
+use keylease_policy::{PolicyTemplateInput, PolicyTemplateKind, materialize_provider_template};
 use keylease_rpc::{MAX_LOCAL_JSON_BYTES, RpcAuth, RpcCapabilities, RpcRequest, dispatch_line};
 use keylease_service::{
     AgentNewItemGuide, AgentNewItemHandoffInput, AgentNewItemHandoffReceipt, ContentCreateInput,
@@ -9,8 +11,6 @@ use keylease_service::{
     client_key,
 };
 use keylease_store::NativeStore;
-use leasegate_connectors::Connector;
-use leasegate_policy::{PolicyTemplateInput, PolicyTemplateKind, materialize_provider_template};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -47,7 +47,7 @@ mod trust;
 #[command(
     name = "keylease",
     version,
-    about = "Local-first encrypted vault and LeaseGate agent gateway",
+    about = "Local-first encrypted vault and trust layer for AI agents",
     after_help = "Agents:\
         \n  keylease agent enroll NAME                  a CLI agent with its own identity\
         \n  keylease ssh | db | run                     use a secret without revealing it\
@@ -1233,11 +1233,11 @@ async fn run() -> Result<()> {
                 "action_response":schemars::schema_for!(ActionResponse)
             },
             "connectors":[
-                leasegate_connectors::FakeConnector::default().manifest(),
-                leasegate_connectors::google_manifest(),
-                leasegate_connectors::github_manifest(),
-                leasegate_connectors::linear_manifest(),
-                leasegate_connectors::notion_manifest()
+                keylease_connectors::FakeConnector::default().manifest(),
+                keylease_connectors::google_manifest(),
+                keylease_connectors::github_manifest(),
+                keylease_connectors::linear_manifest(),
+                keylease_connectors::notion_manifest()
             ]
         })),
     }

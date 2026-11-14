@@ -2,7 +2,7 @@ use axum::{body::Body, http::Request};
 use chrono::Utc;
 use http_body_util::BodyExt;
 use keylease_cloud::{CloudApiConfig, CloudApiState, CloudRepository, router};
-use leasegate_policy_bundle::ControlSigner;
+use keylease_protocol::ControlSigner;
 use serde_json::{Value, json};
 use std::{fs, os::unix::fs::PermissionsExt};
 use tower::ServiceExt;

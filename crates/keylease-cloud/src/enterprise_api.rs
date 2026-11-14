@@ -18,7 +18,7 @@ use keylease_core::{
     AccessReviewId, DeviceChallengeId, DeviceId, HumanId, KeyLeaseError, MembershipId,
     OrganizationId, PolicyBundleId, PolicyReleaseId, PolicyRule, ProjectId, SecurityAlertId,
 };
-use leasegate_control::{
+use keylease_protocol::{
     AccessReview, AccessReviewDecision, AccessReviewState, ApprovalDecision,
     ApprovalDecisionRequest, ApprovalReceiptPayload, CONTROL_CONTRACT_VERSION,
     EnterprisePermission, KeyProvider, MembershipRole, MobilePlatform, OfflineAuthorization,
@@ -26,7 +26,7 @@ use leasegate_control::{
     PolicyReleaseState, RetentionPolicy, SiemDestination, SignedOperatorSession,
     WorkloadIdentityBinding,
 };
-use leasegate_policy_bundle::{verify_operator_session, verify_policy_bundle};
+use keylease_protocol::{verify_operator_session, verify_policy_bundle};
 use serde::Deserialize;
 use serde_json::{Value, json};
 

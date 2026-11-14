@@ -78,7 +78,7 @@ docker compose --env-file "$env_file" -f "$compose_file" exec -T control-plane \
 pass 'Control Plane readiness endpoint and database dependency are healthy'
 
 docker compose --env-file "$env_file" -f "$compose_file" exec -T gateway \
-  leasegate-edge healthcheck
+  keylease-edge healthcheck
 pass 'Gateway has an active policy and available audit-spool capacity'
 
 domain=$(read_env_value LEASEGATE_DOMAIN)

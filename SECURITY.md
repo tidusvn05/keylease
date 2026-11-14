@@ -10,7 +10,7 @@ Please **do not open a public issue**. Report privately through GitHub:
 vulnerability reporting). Include:
 
 - the affected component (`keylease` CLI or daemon, MCP server, gateway,
-  remote approver, desktop or mobile app, LeaseGate Cloud/Edge) and the commit;
+  remote approver, desktop or mobile app, KeyLease Cloud/Edge) and the commit;
 - what an attacker needs (local user, enrolled agent, network access to the
   gateway, a prompt the model reads, …) and what they gain;
 - steps or a proof of concept against a test vault, never against real data.

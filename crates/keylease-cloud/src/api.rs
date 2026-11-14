@@ -7,28 +7,28 @@ use axum::{
     routing::{delete, get, post},
 };
 use chrono::{DateTime, Duration, Utc};
+use keylease_connector_sdk::{SignedConnectorPackage, conformance_report, validate_manifest};
+use keylease_connectors::{
+    ConnectorManifest, github_manifest, google_manifest, jira_manifest, linear_manifest,
+    normalized_permissions, notion_manifest, slack_manifest, validate_and_canonicalize,
+};
 use keylease_core::{
     AccountId, ActionRequest, AgentId, ConnectionHealth, ConnectionId, ConnectorPublisherId,
     CredentialLeaseId, DeviceId, EdgeId, KeyLeaseError, OrganizationId, PolicyBundleId,
     PolicyDecision, PolicyProposalId, PolicyRule, ProjectId, Result, RotationId, VaultId,
 };
-use leasegate_connector_sdk::{SignedConnectorPackage, conformance_report, validate_manifest};
-use leasegate_connectors::{
-    ConnectorManifest, github_manifest, google_manifest, jira_manifest, linear_manifest,
-    normalized_permissions, notion_manifest, slack_manifest, validate_and_canonicalize,
+use keylease_credentials::{
+    CREDENTIAL_CONTRACT_VERSION, ConnectionPosture, CredentialLeaseRecord, CredentialLeaseState,
+    RotationRecord, RotationState,
 };
-use leasegate_control::{
+use keylease_policy::RulePolicyEngine;
+use keylease_protocol::{
     ApprovalDecision, ApprovalDecisionRequest, ApprovalReceiptPayload, ApprovalRequest, AuditBatch,
     CONTROL_CONTRACT_VERSION, ConnectionDescriptor, EdgeHeartbeat, OfflineAuthorization,
     PolicyBundlePayload, PolicyProposal, PolicyProposalReviewRequest, PolicyProposalStatus,
     Revocation, SyncPushRequest,
 };
-use leasegate_credentials::{
-    CREDENTIAL_CONTRACT_VERSION, ConnectionPosture, CredentialLeaseRecord, CredentialLeaseState,
-    RotationRecord, RotationState,
-};
-use leasegate_policy::RulePolicyEngine;
-use leasegate_policy_bundle::{ControlSigner, verify_policy_bundle};
+use keylease_protocol::{ControlSigner, verify_policy_bundle};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -686,7 +686,7 @@ async fn sync_pull(
 async fn activate_policy(
     State(state): State<CloudApiState>,
     headers: HeaderMap,
-    Json(payload): Json<leasegate_control::PolicyBundlePayload>,
+    Json(payload): Json<keylease_protocol::PolicyBundlePayload>,
 ) -> ApiResult<Json<Value>> {
     authorize(&state, &headers)?;
     let previous = state
@@ -1819,7 +1819,7 @@ async fn find_manifest(
                 && entry.connector_version == version
                 && matches!(
                     entry.status,
-                    leasegate_connector_sdk::ConnectorRegistryStatus::Published
+                    keylease_connector_sdk::ConnectorRegistryStatus::Published
                 )
         })
         .ok_or_else(|| {

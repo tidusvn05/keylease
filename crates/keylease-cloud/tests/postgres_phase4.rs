@@ -1,19 +1,19 @@
 use chrono::{Duration, Utc};
 use keylease_cloud::{AuditQueryFilter, CloudRepository};
+use keylease_connector_sdk::{
+    CONNECTOR_PACKAGE_VERSION, ConnectorPackagePayload, ConnectorPackageSigner,
+};
+use keylease_connectors::notion_manifest;
 use keylease_core::{
     AccountId, AuditEvent, ConnectionHealth, ConnectionId, DataBudget, DeviceId, PolicyBundleId,
     PolicyEffect, PolicyProposalId, PolicyRule, RequestId,
 };
-use leasegate_connector_sdk::{
-    CONNECTOR_PACKAGE_VERSION, ConnectorPackagePayload, ConnectorPackageSigner,
-};
-use leasegate_connectors::notion_manifest;
-use leasegate_control::{
+use keylease_protocol::{
     AuditBatch, CONTROL_CONTRACT_VERSION, ConnectionDescriptor, OfflineAuthorization,
     PolicyBundlePayload, PolicyProposal, PolicyProposalDecision, PolicyProposalReviewRequest,
     PolicyProposalStatus,
 };
-use leasegate_policy_bundle::{ControlSigner, verify_policy_bundle};
+use keylease_protocol::{ControlSigner, verify_policy_bundle};
 
 #[tokio::test]
 async fn phase4_registry_proposal_connections_and_audit_are_tenant_scoped() {

@@ -3,11 +3,11 @@ use keylease_cloud::{CloudRepository, CredentialLeaseFilter};
 use keylease_core::{
     AccountId, ConnectionHealth, ConnectionId, CredentialLeaseId, DeviceId, RotationId,
 };
-use leasegate_control::{CONTROL_CONTRACT_VERSION, ConnectionDescriptor, RevocationScope};
-use leasegate_credentials::{
+use keylease_credentials::{
     CREDENTIAL_CONTRACT_VERSION, ConnectionPosture, ConnectionPostureStatus, CredentialKind,
     CredentialLeaseRecord, CredentialLeaseState, RotationRecord, RotationState, SenderConstraint,
 };
+use keylease_protocol::{CONTROL_CONTRACT_VERSION, ConnectionDescriptor, RevocationScope};
 
 #[tokio::test]
 async fn phase5_lease_posture_rotation_and_revocation_are_tenant_bound() {
@@ -142,7 +142,7 @@ async fn phase5_lease_posture_rotation_and_revocation_are_tenant_bound() {
         .unwrap();
     assert!(matches!(
         event.kind,
-        leasegate_control::ControlEventKind::Revocation(ref revocation)
+        keylease_protocol::ControlEventKind::Revocation(ref revocation)
             if revocation.scope == RevocationScope::Lease && revocation.target_id == lease_id.0
     ));
     lease.state = CredentialLeaseState::Revoked;

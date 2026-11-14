@@ -6,13 +6,13 @@ use keylease_core::{
     AccessReviewId, AccountId, DeviceId, KeyProviderId, OrganizationId, PolicyBundleId,
     SiemDestinationId, WorkloadIdentityId,
 };
-use leasegate_control::{
+use keylease_protocol::{
     AccessReview, AccessReviewDecision, AccessReviewState, CONTROL_CONTRACT_VERSION, KeyProvider,
     KeyProviderKind, MembershipRole, MobilePlatform, OfflineAuthorization, OidcProvider,
     OperatorDevice, PolicyBundlePayload, PolicyRelease, PolicyReleaseState, RetentionPolicy,
     SiemDestination, SiemFormat, WorkloadIdentityBinding,
 };
-use leasegate_policy_bundle::{ControlSigner, verify_operator_session};
+use keylease_protocol::{ControlSigner, verify_operator_session};
 use std::collections::BTreeMap;
 
 #[tokio::test]

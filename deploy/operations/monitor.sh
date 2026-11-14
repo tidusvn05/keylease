@@ -56,7 +56,7 @@ else
   add_issue control_not_ready
 fi
 gateway_ready=0
-if docker compose --env-file "$env_file" -f "$compose_dir/compose.yaml" exec -T gateway leasegate-edge healthcheck >/dev/null 2>&1; then
+if docker compose --env-file "$env_file" -f "$compose_dir/compose.yaml" exec -T gateway keylease-edge healthcheck >/dev/null 2>&1; then
   gateway_ready=1
 else
   add_issue gateway_not_ready

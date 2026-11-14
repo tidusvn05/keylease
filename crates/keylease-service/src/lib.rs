@@ -6,17 +6,17 @@ use keylease_1pux::{
     ImportPreview as OnePuxImportPreview, MigrationReport as OnePuxMigrationReport, OnePuxAdapter,
     ZipOnePuxAdapter,
 };
-use keylease_core::*;
-use keylease_kdbx::{ImportPreview, KdbxAdapter, KeepassRsAdapter, MigrationReport};
-use keylease_store::{
-    LeaseConsume, MutationContext, NativeStore, TaskBudgetContext, UnlockedVault,
-};
-use leasegate_connectors::{
+use keylease_connectors::{
     BuiltinConnector, CanonicalAction, Connector, ConnectorCredential, FakeConnector,
     OAuthCredential, a1_cell_count, enforce_response_budget, normalized_permissions,
     validate_connection_credential, validate_enrolled_resource,
 };
-use leasegate_policy::RulePolicyEngine;
+use keylease_core::*;
+use keylease_kdbx::{ImportPreview, KdbxAdapter, KeepassRsAdapter, MigrationReport};
+use keylease_policy::RulePolicyEngine;
+use keylease_store::{
+    LeaseConsume, MutationContext, NativeStore, TaskBudgetContext, UnlockedVault,
+};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -6388,7 +6388,7 @@ fn task_budget_context(
 
 fn validate_connection_permissions(
     connection: &ConnectionRecord,
-    action: &leasegate_connectors::ActionSpec,
+    action: &keylease_connectors::ActionSpec,
 ) -> Result<()> {
     // Empty means the provider/token type cannot report permissions. When a
     // structured OAuth credential does report them, enforce incrementally per

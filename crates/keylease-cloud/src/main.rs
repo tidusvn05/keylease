@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
 use keylease_cloud::{CloudApiConfig, CloudApiState, CloudRepository, router};
-use leasegate_policy_bundle::ControlSigner;
+use keylease_protocol::ControlSigner;
 use std::{env, fs, net::SocketAddr, path::Path};
 use tracing::info;
 use tracing_subscriber::EnvFilter;

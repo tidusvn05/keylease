@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
 use keylease_core::{KeyLeaseError, Result};
-use leasegate_control::OidcProvider;
+use keylease_protocol::OidcProvider;
 use serde::Deserialize;
 use std::time::Duration;
 

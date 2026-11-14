@@ -150,7 +150,7 @@ services:
       - ./secrets:/run/leasegate-secrets:ro
     networks: [control]
     healthcheck:
-      test: ["CMD", "leasegate-edge", "healthcheck"]
+      test: ["CMD", "keylease-edge", "healthcheck"]
       interval: 10s
       timeout: 5s
       retries: 6
