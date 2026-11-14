@@ -1296,6 +1296,196 @@
           }
         }
       }
+    },
+    "/v1/orgs/{org}/projects/{slug}/machine-identities": {
+      "get": {
+        "operationId": "machineIdentities",
+        "summary": "Machine identities",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "identities"
+                  ],
+                  "properties": {
+                    "identities": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "identity_id",
+                          "name",
+                          "environment",
+                          "issuer",
+                          "audience",
+                          "subject"
+                        ],
+                        "properties": {
+                          "identity_id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "environment": {
+                            "type": "string"
+                          },
+                          "issuer": {
+                            "type": "string"
+                          },
+                          "audience": {
+                            "type": "string"
+                          },
+                          "subject": {
+                            "type": "string"
+                          },
+                          "created_at": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createMachineIdentity",
+        "summary": "Create a machine identity",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "environment",
+                  "issuer",
+                  "audience",
+                  "subject"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "environment": {
+                    "type": "string"
+                  },
+                  "issuer": {
+                    "type": "string"
+                  },
+                  "audience": {
+                    "type": "string"
+                  },
+                  "subject": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orgs/{org}/projects/{slug}/machine-identities/{identity}": {
+      "delete": {
+        "operationId": "revokeMachineIdentity",
+        "summary": "Revoke",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "identity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

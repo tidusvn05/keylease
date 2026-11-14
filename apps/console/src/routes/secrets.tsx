@@ -54,6 +54,41 @@ function Secrets() {
       return data?.change_requests ?? [];
     },
   });
+  const machinesKey = ["machines", search.org, search.project];
+  const { data: machines = [] } = useQuery({
+    queryKey: machinesKey,
+    enabled: project?.my_role === "admin",
+    queryFn: async () =>
+      (await api.GET("/v1/orgs/{org}/projects/{slug}/machine-identities", { params: { path: params } })).data
+        ?.identities ?? [],
+  });
+  const addMachine = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const field = (name: string) => String(data.get(name) ?? "");
+    const { error } = await api.POST("/v1/orgs/{org}/projects/{slug}/machine-identities", {
+      params: { path: params },
+      body: {
+        name: field("name"),
+        environment,
+        issuer: field("issuer"),
+        audience: field("audience"),
+        subject: field("subject"),
+      },
+    });
+    report(error);
+    if (!error) form.reset();
+    await queryClient.invalidateQueries({ queryKey: machinesKey });
+  };
+  const revokeMachine = async (identity: string) => {
+    report(
+      (await api.DELETE("/v1/orgs/{org}/projects/{slug}/machine-identities/{identity}", {
+        params: { path: { ...params, identity } },
+      })).error,
+    );
+    await queryClient.invalidateQueries({ queryKey: machinesKey });
+  };
   const writable = project?.my_role === "write" || project?.my_role === "admin";
   const path = (name: string) => ({ path: { ...params, environment, name } });
   const refresh = () =>
@@ -230,6 +265,37 @@ function Secrets() {
           <input className={input} name="value" type="password" required autoComplete="off" placeholder={t("secrets.value")} aria-label={t("secrets.value")} />
           <Button type="submit">{t("secrets.set")}</Button>
         </form>
+      )}
+      {project.my_role === "admin" && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">{t("secrets.machines")}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <p className="text-muted-foreground">{t("secrets.machinesHelp")}</p>
+            {machines
+              .filter((machine) => machine.environment === environment)
+              .map((machine) => (
+                <div key={machine.identity_id} className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{machine.name}</span>
+                  <code className="text-xs">{machine.identity_id}</code>
+                  <span className="text-muted-foreground">{machine.subject}</span>
+                  <Button size="sm" variant="ghost" onClick={() => void revokeMachine(machine.identity_id)}>
+                    {t("secrets.revoke")}
+                  </Button>
+                </div>
+              ))}
+            <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => void addMachine(event)}>
+              <input className={input} name="name" required placeholder={t("secrets.name")} aria-label={t("secrets.name")} />
+              <input className={input} name="issuer" required defaultValue="https://token.actions.githubusercontent.com" aria-label={t("secrets.issuer")} />
+              <input className={input} name="audience" required defaultValue="keylease" aria-label={t("secrets.audience")} />
+              <input className={input} name="subject" required placeholder="repo:acme/shop:ref:refs/heads/main" aria-label={t("secrets.subject")} />
+              <Button type="submit" size="sm">
+                {t("secrets.addMachine")}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
       )}
       {history && (
         <Card>

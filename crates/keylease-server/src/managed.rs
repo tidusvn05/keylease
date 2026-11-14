@@ -185,7 +185,7 @@ async fn key_version(
 }
 
 /// Checks the caller's project role and that the environment exists.
-async fn authorize(
+pub(crate) async fn authorize(
     state: &CloudApiState,
     headers: &HeaderMap,
     org: &str,
@@ -227,7 +227,7 @@ async fn authorize(
     Ok(account)
 }
 
-async fn audit_event(
+pub(crate) async fn audit_event(
     state: &CloudApiState,
     org: &str,
     slug: &str,
@@ -259,7 +259,7 @@ fn valid_name(name: &str) -> bool {
 }
 
 /// The latest version of every live secret in an environment.
-async fn current(
+pub(crate) async fn current(
     state: &CloudApiState,
     org: &str,
     slug: &str,
@@ -278,7 +278,7 @@ async fn current(
     .map(|rows| rows.into_iter().filter(|row| !row.get::<bool, _>("deleted")).collect())
 }
 
-async fn decrypt(
+pub(crate) async fn decrypt(
     state: &CloudApiState,
     org: &str,
     slug: &str,

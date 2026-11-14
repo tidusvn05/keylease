@@ -31,6 +31,7 @@ mod approve;
 mod approver;
 mod backend;
 mod bundle;
+mod ci;
 mod cloud;
 mod db_proxy;
 mod http_mitm;
@@ -282,6 +283,12 @@ enum Command {
     Remote {
         #[command(subcommand)]
         command: approver::RemoteCommand,
+    },
+    /// CI/CD: read a Managed project environment with the job's OIDC token
+    /// (a machine identity) and run a command with it; no vault needed.
+    Ci {
+        #[command(subcommand)]
+        command: CiCommand,
     },
     /// Call HTTP APIs with an item's credential without seeing it (ADR 0007).
     Http {
@@ -669,6 +676,12 @@ enum ProjectCommand {
         #[command(subcommand)]
         command: ProjectEnvCommand,
     },
+}
+
+#[derive(Subcommand)]
+enum CiCommand {
+    /// Run a command with the environment's secrets (scrubbed from its output).
+    Run(ci::CiRunArgs),
 }
 
 #[derive(Subcommand)]
@@ -1344,6 +1357,9 @@ async fn run() -> Result<()> {
             .await
         }
         Command::Http { command } => http_proxy::http_command(&cli, &socket, command).await,
+        Command::Ci { command } => match command {
+            CiCommand::Run(args) => ci::run(args).await,
+        },
         Command::Gate { command } => gate_command(&cli, &socket, command).await,
         Command::Audit { command } => {
             let service = admin_service(&cli.db)?;
