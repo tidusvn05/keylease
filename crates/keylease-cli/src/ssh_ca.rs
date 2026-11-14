@@ -140,6 +140,8 @@ pub(crate) fn init(db: &Path, args: InitArgs) -> Result<()> {
             sections: vec![],
             totp: None,
             totp_uri: None,
+            environment: None,
+            personal: false,
         },
         &format!("ssh-ca-{}", RequestId::new().0),
         false,

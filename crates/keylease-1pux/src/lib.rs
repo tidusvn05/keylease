@@ -435,6 +435,8 @@ fn convert_item(
         project_id: None,
         agent_access: AgentAccess::None,
         content_metadata: None,
+        // Imported password-manager data starts in the Personal area.
+        personal: true,
         schema_version: 1,
         revision: 1,
         created_at,

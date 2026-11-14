@@ -513,10 +513,24 @@ impl KeyLeaseService {
             validate_sections(&input.sections, &input.custom_fields)?;
             validate_specialized_item(&input.kind, &input.sections, &input.custom_fields)?;
             validate_item_title(&input.title)?;
-            let project_id = resolve_project_id(
-                &self.store.list_projects(vault)?,
-                input.project_slug.as_deref(),
-            )?;
+            let projects = self.store.list_projects(vault)?;
+            let project_id = resolve_project_id(&projects, input.project_slug.as_deref())?;
+            let project = project_id
+                .as_ref()
+                .and_then(|id| projects.iter().find(|project| &project.id == id));
+            let environment = match input.environment.as_deref() {
+                Some(environment) => resolve_item_environment(project, Some(environment))?,
+                // An env file names its environment in its metadata; use it
+                // when it is one of the project's environments.
+                None => env_file_scope(&input.kind, &input.custom_fields)
+                    .and_then(|scope| resolve_item_environment(project, Some(&scope)).ok())
+                    .flatten(),
+            };
+            if input.personal && !self.is_local_owner(&actor.agent_id)? {
+                return Err(KeyLeaseError::Denied {
+                    reason: "only the vault owner can put items in the Personal area".into(),
+                });
+            }
             validate_idempotency_key(idempotency_key)?;
             let request_value = serde_json::to_value(&input).map_err(|_| KeyLeaseError::Storage)?;
             let request_material = operation_material(&serde_json::json!({
@@ -627,6 +641,7 @@ impl KeyLeaseService {
                 project_id,
                 agent_access: AgentAccess::None,
                 content_metadata: None,
+                personal: input.personal,
                 schema_version: 1,
                 revision: 1,
                 created_at: now,
@@ -635,7 +650,7 @@ impl KeyLeaseService {
                 expires_at: None,
                 rotation_interval_days: None,
                 issuer: None,
-                environment: None,
+                environment,
                 owner: None,
                 status: ItemStatus::Active,
                 extensions: Default::default(),
@@ -732,7 +747,41 @@ impl KeyLeaseService {
                 "patch":arguments,
             }))?;
             let resource = format!("kl://{}/{}", vault.vault_id.0, id.0);
+            if patch.personal.is_some() && !self.is_local_owner(&actor.agent_id)? {
+                return Err(KeyLeaseError::Denied {
+                    reason: "only the vault owner can move items into or out of the Personal area"
+                        .into(),
+                });
+            }
+            // The item's project and environment after the patch decide its
+            // risk; leaving or entering a protected environment is a
+            // protected change, so a standard-field trust cannot lower a
+            // production item's tier.
+            let projects = self.store.list_projects(vault)?;
+            let final_project_id = match (&requested_project_id, patch.clear_project) {
+                (Some(id), _) => id.clone(),
+                (None, true) => None,
+                (None, false) => current_item.project_id.clone(),
+            };
+            let final_project = final_project_id
+                .as_ref()
+                .and_then(|id| projects.iter().find(|project| &project.id == id));
+            let final_environment = match &patch.environment {
+                Some(environment) => resolve_item_environment(final_project, Some(environment))?,
+                None => {
+                    resolve_item_environment(final_project, current_item.environment.as_deref())?
+                }
+            };
+            let current_project = current_item
+                .project_id
+                .as_ref()
+                .and_then(|id| projects.iter().find(|project| &project.id == id));
+            let environment_changes_protection = final_environment != current_item.environment
+                && (environment_is_protected(current_project, current_item.environment.as_deref())
+                    || environment_is_protected(final_project, final_environment.as_deref()));
             let has_standard_fields = patch.title.is_some()
+                || patch.environment.is_some()
+                || patch.personal.is_some()
                 || patch.project_slug.is_some()
                 || patch.clear_project
                 || patch.username.is_some()
@@ -778,7 +827,8 @@ impl KeyLeaseService {
                 || patch.field_updates.iter().any(field_requires_protection)
                 || replacement_removes_protected
                 || updates_downgrade_protected
-                || explicitly_removes_protected;
+                || explicitly_removes_protected
+                || environment_changes_protection;
             if !has_standard_fields
                 && !has_protected_fields
                 && patch.totp.is_none()
@@ -890,6 +940,16 @@ impl KeyLeaseService {
                 item.extensions.remove("onepux.favorite_index");
                 changed.push("favorite".into())
             }
+            if item.environment != final_environment {
+                item.environment = final_environment;
+                changed.push("environment".into())
+            }
+            if let Some(v) = patch.personal
+                && item.personal != v
+            {
+                item.personal = v;
+                changed.push("personal".into())
+            }
             if let Some(v) = patch.totp {
                 upsert(
                     &mut item.fields,
@@ -999,10 +1059,12 @@ impl KeyLeaseService {
                 serde_json::json!({"query":query,"project_slug":project_slug,"unassigned":unassigned}),
             )?;
             let q = query.to_lowercase();
+            let owner = self.is_local_owner(&actor.agent_id)?;
             let result = self
                 .store
                 .list_items(vault)?
                 .into_iter()
+                .filter(|i| owner || !i.personal)
                 .filter(|i| {
                     if unassigned { i.project_id.is_none() }
                     else { project_id.as_ref().is_none_or(|id| i.project_id.as_ref() == Some(id)) }
@@ -1461,6 +1523,7 @@ impl KeyLeaseService {
                 created_at: now,
                 updated_at: now,
                 archived_at: None,
+                environments: ProjectEnvironment::defaults(),
             };
             let audit = self.vault_audit_event(
                 actor,
@@ -1508,7 +1571,7 @@ impl KeyLeaseService {
                 .list_items(vault)?
                 .into_iter()
                 .filter(|item| is_agent_content_kind(&item.kind))
-                .filter(|item| owner || item.agent_access != AgentAccess::None)
+                .filter(|item| owner || (item.agent_access != AgentAccess::None && !item.personal))
                 .filter(|item| kind.is_none_or(|kind| item.kind == format!("core.{kind}")))
                 .filter(|item| {
                     tag.is_none_or(|tag| {
@@ -1641,6 +1704,7 @@ impl KeyLeaseService {
                 } else {
                     AgentAccess::ReadWrite
                 },
+                personal: false,
                 content_metadata: Some(ContentMetadata {
                     created_by: actor.agent_id.clone(),
                     last_modified_by: actor.agent_id.clone(),

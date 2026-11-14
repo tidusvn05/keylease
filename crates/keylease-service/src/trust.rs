@@ -1131,6 +1131,8 @@ mod tests {
                     sections: vec![],
                     totp: None,
                     totp_uri: None,
+                    environment: None,
+                    personal: false,
                 },
                 "fixture-entry",
                 false,
@@ -1285,6 +1287,8 @@ mod tests {
             sections: vec![],
             totp: None,
             totp_uri: None,
+            environment: None,
+            personal: false,
         }
     }
 

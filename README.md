@@ -121,6 +121,7 @@ Guides: [agent approvals and trust](docs/agent-approvals.md) ·
 [MCP clients](docs/mcp.md) · [remote MCP server](docs/remote-mcp.md) ·
 [SSH agent](docs/ssh-agent.md) · [PostgreSQL proxy](docs/db-proxy.md) ·
 [`keylease run`](docs/run-with-secrets.md) ·
+[projects, environments and the Personal area](docs/projects-and-environments.md) ·
 [remote approval for a VPS](docs/remote-approval.md) ·
 [cloud sharing, backup and recovery](docs/cloud-sharing.md) ·
 [multiple vaults](docs/multi-vault.md).

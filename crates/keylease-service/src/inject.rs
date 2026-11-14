@@ -48,6 +48,24 @@ impl KeyLeaseService {
             });
         }
         self.with_vault(|vault| {
+            // Named references (`item_id` = "ref:PROJECT[/ENV]/ITEM") resolve
+            // to the item and the field key it stores.
+            let mut resolved = Vec::with_capacity(requests.len());
+            for request in requests {
+                let Some(path) = request.item_id.0.strip_prefix("ref:") else {
+                    resolved.push(request.clone());
+                    continue;
+                };
+                let item_id = self.resolve_named_item(vault, actor, path)?;
+                let item = self.store.get_item(vault, &item_id)?;
+                let field = resolve_field_key(&item, &request.field).ok_or_else(|| {
+                    KeyLeaseError::NotFound {
+                        resource: format!("kl://{path}#{}", request.field),
+                    }
+                })?;
+                resolved.push(InjectRequest { item_id, field });
+            }
+            let requests = resolved.as_slice();
             let mut by_item: BTreeMap<String, Vec<String>> = BTreeMap::new();
             for request in requests {
                 if request.field.is_empty() || request.field.len() > 128 || request.field == "otp" {
@@ -140,6 +158,8 @@ mod tests {
                     sections: vec![],
                     totp: None,
                     totp_uri: None,
+                    environment: None,
+                    personal: false,
                 },
                 "inject-item",
                 false,

@@ -166,6 +166,7 @@ impl KeyLeaseService {
         risk: RiskTier,
     ) -> Result<String> {
         self.sync_external_policy_changes()?;
+        self.refuse_personal_item(vault, actor, action, resource)?;
         let request = ActionRequest {
             schema_version: CONTRACT_VERSION,
             request_id: RequestId::new(),
@@ -245,6 +246,39 @@ impl KeyLeaseService {
             }
         }
     }
+    /// Personal items do not exist for agents: any command on one fails as
+    /// not found, before policy, so no grant or trust can reach it.
+    pub(crate) fn refuse_personal_item(
+        &self,
+        vault: &UnlockedVault,
+        actor: &ActorContext,
+        action: &str,
+        resource: &str,
+    ) -> Result<()> {
+        let Some(rest) = resource.strip_prefix(&format!("kl://{}/", vault.vault_id.0)) else {
+            return Ok(());
+        };
+        let first = rest.split('/').next().unwrap_or_default();
+        if !first.starts_with("item_") {
+            return Ok(());
+        }
+        let Ok(item) = self.store.get_item(vault, &ItemId(first.into())) else {
+            return Ok(());
+        };
+        if item.personal && !self.is_local_owner(&actor.agent_id)? {
+            self.audit_vault(actor, action, resource, "deny", "personal", vec![])?;
+            return Err(KeyLeaseError::NotFound {
+                resource: first.into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Whether `actor` may see `item` in a listing.
+    pub(crate) fn item_visible_to(&self, actor: &ActorContext, item: &VaultItem) -> Result<bool> {
+        Ok(!item.personal || self.is_local_owner(&actor.agent_id)?)
+    }
+
     pub(crate) fn connection_credential(
         &self,
         id: &ConnectionId,
