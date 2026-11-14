@@ -32,11 +32,11 @@ mod approver;
 mod backend;
 mod cloud;
 mod db_proxy;
-mod gateway;
 mod instructions;
 mod mcp;
 mod notify;
 mod project;
+mod remote_mcp;
 mod run;
 mod service;
 mod ssh_agent;
@@ -52,7 +52,7 @@ mod trust;
         \n  keylease agent enroll NAME                  a CLI agent with its own identity\
         \n  keylease ssh | db | run                     use a secret without revealing it\
         \n  keylease mcp setup claude-desktop --write   Claude Desktop, Cursor, Codex (MCP)\
-        \n  keylease serve --gateway-url URL            ChatGPT / claude.ai via your HTTPS gateway\
+        \n  keylease serve --remote-mcp --public-url URL ChatGPT / claude.ai (remote MCP server)\
         \n  keylease cloud request PURPOSE              a node agent asks the owner for an item\
         \n\nDocs: docs/use-cases.md"
 )]
@@ -102,19 +102,26 @@ enum Command {
         /// Allow --approver-listen on a non-loopback address.
         #[arg(long, requires = "approver_listen")]
         approver_listen_public: bool,
-        /// Serve the MCP gateway for web assistants at this public URL
-        /// (https://vault.example.com). See docs/mcp-gateway.md.
+        /// Serve the remote MCP server for web assistants (ChatGPT,
+        /// claude.ai). Needs --public-url. See docs/remote-mcp.md.
+        #[arg(long, requires = "public_url")]
+        remote_mcp: bool,
+        /// Public HTTPS URL of this node (https://vault.example.com), as
+        /// clients reach it through the TLS reverse proxy.
         #[arg(long)]
-        gateway_url: Option<String>,
-        /// Loopback address the gateway listens on, behind a TLS proxy.
-        #[arg(long, default_value = "127.0.0.1:8787", requires = "gateway_url")]
-        gateway_listen: std::net::SocketAddr,
-        /// Offer `run_with_secrets` through the gateway (runs programs on this host).
-        #[arg(long, requires = "gateway_url")]
-        gateway_allow_run: bool,
+        public_url: Option<String>,
+        /// Loopback address the remote MCP server listens on, behind a TLS proxy.
+        #[arg(long, alias = "gateway-listen", default_value = "127.0.0.1:8787")]
+        remote_mcp_listen: std::net::SocketAddr,
+        /// Offer `run_with_secrets` through the remote MCP server (runs programs on this host).
+        #[arg(long, alias = "gateway-allow-run")]
+        remote_mcp_allow_run: bool,
         /// PEM CA for database servers with a private certificate.
-        #[arg(long, requires = "gateway_url")]
-        gateway_db_tls_ca: Option<PathBuf>,
+        #[arg(long, alias = "gateway-db-tls-ca")]
+        remote_mcp_db_tls_ca: Option<PathBuf>,
+        /// Deprecated: use --remote-mcp --public-url URL.
+        #[arg(long, hide = true, conflicts_with = "public_url")]
+        gateway_url: Option<String>,
     },
     /// Push to your phone (ntfy) when an agent waits for approval.
     Notify {
@@ -133,10 +140,11 @@ enum Command {
         #[command(subcommand)]
         command: service::ServiceCommand,
     },
-    /// Connect web assistants to the MCP gateway (admin, master password).
+    /// Deprecated: use `keylease mcp connect-code | connections | revoke`.
+    #[command(hide = true)]
     Gateway {
         #[command(subcommand)]
-        command: gateway::GatewayCommand,
+        command: remote_mcp::ConnectionCommand,
     },
     Status,
     Unlock {
@@ -925,20 +933,28 @@ async fn run() -> Result<()> {
             password_file,
             approver_listen,
             approver_listen_public,
+            remote_mcp,
+            public_url,
+            remote_mcp_listen,
+            remote_mcp_allow_run,
+            remote_mcp_db_tls_ca,
             gateway_url,
-            gateway_listen,
-            gateway_allow_run,
-            gateway_db_tls_ca,
         } => {
             let password_file = password_file.or_else(systemd_password_credential);
-            let gateway = gateway_url
+            let remote_mcp_url = remote_mcp_public_url(
+                remote_mcp,
+                public_url,
+                gateway_url,
+                remote_mcp_allow_run || remote_mcp_db_tls_ca.is_some(),
+            )?;
+            let remote_mcp = remote_mcp_url
                 .map(|url| {
-                    gateway::GatewayConfig::new(
+                    remote_mcp::RemoteMcpConfig::new(
                         &url,
-                        gateway_listen,
+                        remote_mcp_listen,
                         mcp::ToolOptions {
-                            allow_run: gateway_allow_run,
-                            db_tls_ca: gateway_db_tls_ca,
+                            allow_run: remote_mcp_allow_run,
+                            db_tls_ca: remote_mcp_db_tls_ca,
                         },
                         std::time::Duration::from_secs(match cli.wait_approval {
                             0 => mcp::DEFAULT_MCP_APPROVAL_WAIT_SECONDS,
@@ -954,11 +970,16 @@ async fn run() -> Result<()> {
                 start_locked,
                 password_file.as_deref(),
                 approver_listen.map(|address| (address, approver_listen_public)),
-                gateway,
+                remote_mcp,
             )
             .await
         }
-        Command::Gateway { command } => gateway::gateway_command(&cli.db, command),
+        Command::Gateway { command } => {
+            eprintln!(
+                "warning: `keylease gateway` is deprecated; use `keylease mcp connect-code | connections | revoke`"
+            );
+            remote_mcp::connection_command(&cli.db, command)
+        }
         Command::Notify { command } => notify::notify_command(&cli.db, command).await,
         Command::Cloud { command } => cloud::cloud_command(&cli, &socket, command).await,
         Command::Service { command } => service::service_command(&cli.db, &socket, command).await,
@@ -1178,6 +1199,9 @@ async fn run() -> Result<()> {
                     db_tls_ca,
                 };
                 mcp::setup(&cli, &socket, &client, agent, write, options).await
+            }
+            Some(mcp::McpCommand::Connection(command)) => {
+                remote_mcp::connection_command(&cli.db, command)
             }
         },
         Command::Run { bindings, command } => run::run(&cli, &socket, bindings, command).await,
@@ -2836,6 +2860,29 @@ fn is_systemd_credential(path: &Path) -> bool {
         .is_some_and(|directory| path.parent() == Some(Path::new(&directory)))
 }
 
+/// The public URL the remote MCP server answers for, or `None` when it is off.
+/// `--gateway-url URL` (deprecated) means `--remote-mcp --public-url URL`.
+fn remote_mcp_public_url(
+    enabled: bool,
+    public_url: Option<String>,
+    gateway_url: Option<String>,
+    has_options: bool,
+) -> Result<Option<String>> {
+    if let Some(url) = gateway_url {
+        eprintln!("warning: --gateway-url is deprecated; use --remote-mcp --public-url {url}");
+        return Ok(Some(url));
+    }
+    if enabled {
+        return Ok(public_url);
+    }
+    if has_options {
+        return Err(KeyLeaseError::InvalidRequest {
+            reason: "--remote-mcp-allow-run and --remote-mcp-db-tls-ca need --remote-mcp".into(),
+        });
+    }
+    Ok(None)
+}
+
 async fn serve(
     db: &Path,
     socket: &Path,
@@ -2843,7 +2890,7 @@ async fn serve(
     start_locked: bool,
     password_file: Option<&Path>,
     approver: Option<(std::net::SocketAddr, bool)>,
-    gateway: Option<gateway::GatewayConfig>,
+    remote_mcp: Option<remote_mcp::RemoteMcpConfig>,
 ) -> Result<()> {
     let owner_uid = fs::metadata(db)
         .map_err(|_| KeyLeaseError::NotFound {
@@ -2884,11 +2931,11 @@ async fn serve(
             }
         });
     }
-    if let Some(config) = gateway {
+    if let Some(config) = remote_mcp {
         let service = service.clone();
         tokio::spawn(async move {
-            if let Err(error) = gateway::serve_gateway(service, config).await {
-                eprintln!("KeyLease gateway stopped: {error:?}");
+            if let Err(error) = remote_mcp::serve_remote_mcp(service, config).await {
+                eprintln!("KeyLease remote MCP server stopped: {error:?}");
             }
         });
     }
@@ -3383,6 +3430,58 @@ fn exit_code(error: &KeyLeaseError) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_mcp_flags_and_their_deprecated_spellings() {
+        let url = || Some("https://vault.example.com".to_owned());
+        assert_eq!(
+            remote_mcp_public_url(false, None, None, false).unwrap(),
+            None
+        );
+        assert_eq!(
+            remote_mcp_public_url(true, url(), None, false).unwrap(),
+            url()
+        );
+        // --gateway-url alone turns the server on.
+        assert_eq!(
+            remote_mcp_public_url(false, None, url(), true).unwrap(),
+            url()
+        );
+        // --public-url alone does not start the remote MCP server.
+        assert_eq!(
+            remote_mcp_public_url(false, url(), None, false).unwrap(),
+            None
+        );
+        assert!(remote_mcp_public_url(false, None, None, true).is_err());
+    }
+
+    #[test]
+    fn old_gateway_flags_still_parse() {
+        let cli = Cli::try_parse_from([
+            "keylease",
+            "serve",
+            "--gateway-url",
+            "https://vault.example.com",
+            "--gateway-listen",
+            "127.0.0.1:9000",
+            "--gateway-allow-run",
+        ])
+        .unwrap();
+        let Command::Serve {
+            gateway_url,
+            remote_mcp_listen,
+            remote_mcp_allow_run,
+            ..
+        } = cli.command
+        else {
+            panic!("not serve");
+        };
+        assert_eq!(gateway_url.as_deref(), Some("https://vault.example.com"));
+        assert_eq!(remote_mcp_listen.port(), 9000);
+        assert!(remote_mcp_allow_run);
+        assert!(Cli::try_parse_from(["keylease", "gateway", "connections"]).is_ok());
+        assert!(Cli::try_parse_from(["keylease", "mcp", "connect-code", "chatgpt"]).is_ok());
+    }
 
     #[test]
     fn entries_create_takes_plain_fields_but_never_a_secret() {

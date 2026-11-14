@@ -757,6 +757,10 @@ pub(crate) enum McpCommand {
         #[arg(long)]
         db_tls_ca: Option<PathBuf>,
     },
+    /// Remote MCP server (`serve --remote-mcp`): connect web assistants
+    /// such as ChatGPT or claude.ai (admin, master password).
+    #[command(flatten)]
+    Connection(crate::remote_mcp::ConnectionCommand),
 }
 
 /// `keylease mcp`: serve the tools on stdin/stdout until the client exits.

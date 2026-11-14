@@ -14,7 +14,7 @@ not yet verified on its platform · ❌ not implemented.
 | 3 | [Move VPS approvals to your Mac](#3-move-vps-approvals-to-your-mac) | ✅ protocol + CLI · 🟡 Mac UI |
 | 4 | [Approve and trust: the day-to-day loop](#4-approving-and-trusting) | ✅ |
 | 5 | [Claude Desktop, Cursor, Codex (local MCP)](#5-claude-desktop-cursor-and-other-mcp-clients) | ✅ |
-| 6 | [ChatGPT / claude.ai through your own gateway](#6-chatgpt-or-claudeai-through-your-own-gateway) | ✅ tested with a simulated OAuth client |
+| 6 | [ChatGPT / claude.ai through your own remote MCP server](#6-chatgpt-or-claudeai-through-your-own-remote-mcp-server) | ✅ tested with a simulated OAuth client |
 | 7 | [Unattended automation (CI, cron)](#7-unattended-automation) | ✅ |
 | 8 | [Share with a VPS through your cloud, back up, recover](#8-share-with-a-vps-through-your-cloud-back-it-up-recover) | ✅ CLI · ❌ Mac UI for requests |
 
@@ -229,25 +229,25 @@ Details: [MCP clients](mcp.md).
 Status: ✅ tested end to end over stdio against a real `sshd` and PostgreSQL
 (approval wait, trust, read-only refusal, output scrubbing, retry after a
 timed-out wait). ChatGPT Desktop does not start local MCP servers; use the
-gateway in [6](#6-chatgpt-or-claudeai-through-your-own-gateway).
+remote MCP server in [6](#6-chatgpt-or-claudeai-through-your-own-remote-mcp-server).
 
-## 6. ChatGPT or claude.ai through your own gateway
+## 6. ChatGPT or claude.ai through your own remote MCP server
 
 Web assistants call **remote** MCP servers over HTTPS with OAuth sign-in. Run
-the gateway on your VPS:
+the remote MCP server on your VPS:
 
 ```sh
-keylease … serve --gateway-url https://vault.example.com     # behind Caddy, see the guide
-keylease … gateway connect-code chatgpt                       # one-time, 10 minutes
+keylease … serve --remote-mcp --public-url https://vault.example.com     # behind Caddy, see the guide
+keylease … mcp connect-code chatgpt                       # one-time, 10 minutes
 ```
 
 Add `https://vault.example.com/mcp` as a custom connector in ChatGPT or
 claude.ai, enter the connect code on the KeyLease consent page, and the
 assistant becomes an agent with the approval baseline. Approve its requests
 on the VPS, or from your Mac as a paired approver — the approver API is
-served on the same URL. Revoke with `keylease gateway revoke`.
+served on the same URL. Revoke with `keylease mcp revoke`.
 
-Full guide: [self-hosted MCP gateway](mcp-gateway.md).
+Full guide: [remote MCP server](remote-mcp.md).
 
 Status: ✅ OAuth 2.1 (discovery, dynamic registration, PKCE, refresh rotation
 with reuse detection), consent page and MCP over Streamable HTTP are tested
@@ -305,7 +305,7 @@ Details: [cloud sharing](cloud-sharing.md).
 |---|---|
 | Mac Swift UI not compiled or tested on a Mac | 1, 3 |
 | No push, mobile approver or remote unlock | 3, 6 |
-| Gateway not yet tried against the live ChatGPT / claude.ai services | 6 |
+| Remote MCP server not yet tried against the live ChatGPT / claude.ai services | 6 |
 | Share requests are decided from the CLI, not yet the macOS app; no live sync between two personal devices | 8 |
 | MCP database tool is PostgreSQL only; HTTP header proxy, browser login fill | all |
 | Key-bound client identity (ADR 0005 step 6) | all |

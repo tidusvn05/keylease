@@ -4,7 +4,7 @@ Assistants that cannot run shell commands reach tools through MCP. `keylease
 mcp` is an MCP server over stdio: the client **starts it itself** from its
 configuration, as an agent with its own identity, and stops it when it quits.
 You never start it by hand. For web assistants (ChatGPT, claude.ai) see the
-[self-hosted gateway](mcp-gateway.md).
+[remote MCP server](remote-mcp.md).
 
 ## Set up a client
 
@@ -81,4 +81,4 @@ trust and the next calls run without asking.
 - `db_query` needs `psql` installed; output is capped at 64 KiB per stream and
   commands time out after 120 s (`timeout_seconds`, at most 600).
 - ChatGPT Desktop does not start local MCP servers; use the
-  [gateway](mcp-gateway.md).
+  [remote MCP server](remote-mcp.md).

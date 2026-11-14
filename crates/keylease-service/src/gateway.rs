@@ -1,10 +1,10 @@
-//! The self-hosted MCP gateway's authorization server (OAuth 2.1).
+//! The remote MCP server's authorization server (OAuth 2.1).
 //!
 //! Web assistants (ChatGPT, claude.ai) reach a remote MCP server over HTTPS
 //! and sign in with OAuth: they register themselves (RFC 7591), send the user
 //! to `/authorize` with PKCE, and exchange the code for tokens. KeyLease has no
 //! user accounts, so the person proves they own the vault with a one-time
-//! **connect code** printed on the node (`keylease gateway connect-code`).
+//! **connect code** printed on the node (`keylease mcp connect-code`).
 //!
 //! Each successful authorization creates a new agent identity with the
 //! least-privilege baseline, so a web assistant is just another agent: secret
@@ -281,7 +281,7 @@ impl KeyLeaseService {
             .consume_gateway_connect_code(&digest(&normalize_code(connect_code)), Utc::now())?
             .ok_or(OAuthError::AccessDenied(
                 "the connect code is wrong or expired; create a new one with \
-                 `keylease gateway connect-code`",
+                 `keylease mcp connect-code`",
             ))?;
         let suffix = &uuid::Uuid::now_v7().simple().to_string()[24..];
         let (agent_id, _token) = self.register_client(&format!("gw_{name}_{suffix}"))?;
@@ -509,7 +509,7 @@ mod tests {
             ),
             Err(OAuthError::AccessDenied(
                 "the connect code is wrong or expired; create a new one with \
-                 `keylease gateway connect-code`"
+                 `keylease mcp connect-code`"
             ))
         );
         assert_eq!(
