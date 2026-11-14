@@ -4,12 +4,14 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "@/i18n";
 import "@/styles.css";
+import { consoleBase } from "@/lib/paths";
 import { routeTree } from "./routeTree.gen";
 
 const queryClient = new QueryClient();
 
 const router = createRouter({
   routeTree,
+  basepath: consoleBase(),
   context: { queryClient },
   defaultPreload: "intent",
   // Let TanStack Query own caching; the router only triggers loaders.

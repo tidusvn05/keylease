@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 
 export function ComingSoon({ title, description }: { title: string; description: string }) {
   const { t } = useTranslation();
@@ -12,7 +12,6 @@ export function ComingSoon({ title, description }: { title: string; description:
       <Card>
         <CardHeader>
           <CardTitle className="text-base">{t("comingSoon")}</CardTitle>
-          <CardDescription>docs/design/platform-v2-plan-vi.md · P2</CardDescription>
         </CardHeader>
       </Card>
     </div>

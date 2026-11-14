@@ -1,21 +1,29 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { History, LayoutDashboard, MonitorSmartphone, ShieldCheck } from "lucide-react";
+import { History, KeyRound, LayoutDashboard, LogOut, MonitorSmartphone, ShieldCheck } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ServerStatus } from "@/components/server-status";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { languages, setLanguage } from "@/i18n";
+import { signOut } from "@/lib/session";
 
 const nav = [
   { to: "/", key: "nav.overview", icon: LayoutDashboard },
   { to: "/devices", key: "nav.devices", icon: MonitorSmartphone },
+  { to: "/passkeys", key: "nav.passkeys", icon: KeyRound },
   { to: "/approvals", key: "nav.approvals", icon: ShieldCheck },
   { to: "/audit", key: "nav.audit", icon: History },
 ] as const;
 
 export function AppShell({ children }: { children: ReactNode }) {
   const { t, i18n } = useTranslation();
+  const queryClient = useQueryClient();
+  const leave = async () => {
+    await signOut();
+    await queryClient.invalidateQueries({ queryKey: ["me"] });
+  };
   return (
     <div className="flex min-h-svh flex-col md:flex-row">
       <aside className="border-b md:w-60 md:shrink-0 md:border-r md:border-b-0">
@@ -39,6 +47,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         <header className="flex items-center justify-between gap-4 px-4 py-3 md:px-6">
           <ServerStatus />
           <div className="flex items-center gap-1" role="group" aria-label={t("language")}>
+            <Button size="sm" variant="ghost" onClick={() => void leave()}>
+              <LogOut className="size-4" aria-hidden />
+              {t("signOut")}
+            </Button>
             {languages.map((lang) => (
               <Button
                 key={lang}

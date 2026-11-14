@@ -3,7 +3,7 @@
   "info": {
     "title": "KeyLease Server API",
     "version": "0.0.0",
-    "description": "Hand-written placeholder. keylease-server will generate this file with utoipa; then run `pnpm api:types`."
+    "description": "Hand-written until keylease-server generates it; run `pnpm api:types` after editing."
   },
   "paths": {
     "/healthz": {
@@ -14,7 +14,300 @@
             "description": "Server is up",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/Health" }
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/console/session": {
+      "post": {
+        "operationId": "exchangeLink",
+        "summary": "Exchange a device sign-in link",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "token"
+                ],
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/console/me": {
+      "get": {
+        "operationId": "me",
+        "summary": "The signed-in account",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/console/logout": {
+      "post": {
+        "operationId": "logout",
+        "summary": "End this session",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/console/devices": {
+      "get": {
+        "operationId": "devices",
+        "summary": "Devices of the account",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/console/devices/{member}": {
+      "delete": {
+        "operationId": "revokeDevice",
+        "summary": "Revoke a node or device",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "member",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/console/passkeys": {
+      "get": {
+        "operationId": "passkeys",
+        "summary": "Passkeys of the account",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/console/passkeys/{credential}": {
+      "delete": {
+        "operationId": "deletePasskey",
+        "summary": "Delete a passkey",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "credential",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/console/passkeys/register/options": {
+      "post": {
+        "operationId": "passkeyRegisterOptions",
+        "summary": "WebAuthn creation options",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/console/passkeys/register": {
+      "post": {
+        "operationId": "passkeyRegister",
+        "summary": "Register a passkey",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "client_data_json",
+                  "attestation_object"
+                ],
+                "properties": {
+                  "client_data_json": {
+                    "type": "string"
+                  },
+                  "attestation_object": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/console/passkeys/login/options": {
+      "post": {
+        "operationId": "passkeyLoginOptions",
+        "summary": "WebAuthn request options",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/console/passkeys/login": {
+      "post": {
+        "operationId": "passkeyLogin",
+        "summary": "Sign in with a passkey",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "credential_id",
+                  "client_data_json",
+                  "authenticator_data",
+                  "signature"
+                ],
+                "properties": {
+                  "credential_id": {
+                    "type": "string"
+                  },
+                  "client_data_json": {
+                    "type": "string"
+                  },
+                  "authenticator_data": {
+                    "type": "string"
+                  },
+                  "signature": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
@@ -26,11 +319,148 @@
     "schemas": {
       "Health": {
         "type": "object",
-        "required": ["ok", "service", "contract_version"],
+        "required": [
+          "ok",
+          "service",
+          "contract_version"
+        ],
         "properties": {
-          "ok": { "type": "boolean" },
-          "service": { "type": "string" },
-          "contract_version": { "type": "string" }
+          "ok": {
+            "type": "boolean"
+          },
+          "service": {
+            "type": "string"
+          },
+          "contract_version": {
+            "type": "string"
+          }
+        }
+      },
+      "Session": {
+        "type": "object",
+        "required": [
+          "account_id",
+          "expires_at"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          }
+        }
+      },
+      "Me": {
+        "type": "object",
+        "required": [
+          "account_id",
+          "passkeys",
+          "passkeys_available"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "owner_device": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "passkeys": {
+            "type": "integer"
+          },
+          "passkeys_available": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Device": {
+        "type": "object",
+        "required": [
+          "member_id",
+          "role",
+          "name",
+          "created_at"
+        ],
+        "properties": {
+          "member_id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "node",
+              "device"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "DeviceList": {
+        "type": "object",
+        "required": [
+          "devices"
+        ],
+        "properties": {
+          "devices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Device"
+            }
+          }
+        }
+      },
+      "Passkey": {
+        "type": "object",
+        "required": [
+          "credential_id",
+          "name",
+          "created_at"
+        ],
+        "properties": {
+          "credential_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PasskeyList": {
+        "type": "object",
+        "required": [
+          "passkeys"
+        ],
+        "properties": {
+          "passkeys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Passkey"
+            }
+          }
         }
       }
     }
