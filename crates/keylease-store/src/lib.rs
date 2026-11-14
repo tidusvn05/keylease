@@ -1762,7 +1762,7 @@ impl NativeStore {
     /// This device's stable identity for this vault, minting one if needed.
     ///
     /// Reserved now even though sync is not built. `SyncMutationEnvelope`
-    /// (crates/leasegate-control) is signed per device, so every device needs a
+    /// (crates/keylease-protocol) is signed per device, so every device needs a
     /// stable id before it makes its first mutation. Adding one later would
     /// mean a schema migration plus re-provisioning every existing device;
     /// minting it here costs nothing.

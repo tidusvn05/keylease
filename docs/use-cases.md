@@ -254,8 +254,8 @@ with reuse detection), consent page and MCP over Streamable HTTP are tested
 with a client that follows the same steps as ChatGPT/claude.ai, against a real
 `sshd`. Not yet tried against the live ChatGPT and claude.ai services.
 
-The older `leasegate-edge` MCP endpoint (connector actions with a static
-bearer token, [single-VPS LeaseGate install](self-hosted-vps.md)) remains for
+The older `keylease-edge` MCP endpoint (connector actions with a static
+bearer token, [single-VPS Cloud + Edge install](self-hosted-vps.md)) remains for
 the Cloud/Edge product.
 
 ## 7. Unattended automation

@@ -2,7 +2,7 @@ use crate::AuditExportBatch;
 use chrono::Utc;
 use hmac::{Hmac, Mac};
 use keylease_core::{KeyLeaseError, Result};
-use leasegate_control::{SiemDestination, SiemFormat};
+use keylease_protocol::{SiemDestination, SiemFormat};
 use serde::Deserialize;
 use sha2::Sha256;
 use std::{collections::BTreeMap, fs, path::Path, time::Duration};
@@ -101,6 +101,9 @@ impl SiemExporter {
             .http
             .post(endpoint)
             .header("content-type", "application/json")
+            .header("x-keylease-timestamp", &timestamp)
+            .header("x-keylease-signature-sha256", &signature)
+            // Previous header names, kept so existing receivers keep verifying.
             .header("x-leasegate-timestamp", timestamp)
             .header("x-leasegate-signature-sha256", signature)
             .body(payload)
@@ -121,7 +124,7 @@ fn encode_payload(destination: &SiemDestination, batch: &AuditExportBatch) -> Re
         SiemFormat::Json => serde_json::to_value(&batch.events).map_err(|_| KeyLeaseError::Storage)?,
         SiemFormat::Cef => serde_json::Value::Array(batch.events.iter().map(|event| {
             serde_json::Value::String(format!(
-                "CEF:0|LeaseGate|Control|1|{}|{}|5|requestId={} agentId={} resource={} decision={} outcome={}",
+                "CEF:0|KeyLease|Server|1|{}|{}|5|requestId={} agentId={} resource={} decision={} outcome={}",
                 cef(&event.action), cef(&event.action), cef(&event.request_id.0),
                 cef(&event.agent_id.0), cef(&event.resource), cef(&event.decision), cef(&event.outcome)
             ))
@@ -176,7 +179,7 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use keylease_core::{AgentId, RequestId, SiemDestinationId};
-    use leasegate_control::{SiemDestination, SiemFormat};
+    use keylease_protocol::{SiemDestination, SiemFormat};
 
     #[test]
     fn cef_payload_escapes_delimiters_and_contains_no_argument_values() {

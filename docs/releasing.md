@@ -6,7 +6,7 @@ One tag `vX.Y.Z` on `main` produces everything a release ships:
 |---|---|---|
 | **GitHub release**: release notes (no attached binaries) | people following releases | `Release` workflow, job `release` |
 | **crates.io**: `keylease` and the libraries it needs, at `X.Y.Z` | `cargo install --locked keylease`, and Rust code that embeds the vault | job `crates`, `scripts/release.py publish` with a short-lived Trusted Publishing token |
-| **Container images** `ghcr.io/tidusvn05/keylease-cloud:X.Y.Z` and `ghcr.io/tidusvn05/leasegate-edge:X.Y.Z` (and `latest`) | the single-VPS LeaseGate Cloud + Edge deployment ([self-hosted-vps.md](self-hosted-vps.md)) | job `image`, from `deploy/compose/Dockerfile.cloud` and `Dockerfile.edge` |
+| **Container images** `ghcr.io/tidusvn05/keylease-cloud:X.Y.Z` and `ghcr.io/tidusvn05/keylease-edge:X.Y.Z` (and `latest`) | the single-VPS KeyLease Cloud + Edge deployment ([self-hosted-vps.md](self-hosted-vps.md)) | job `image`, from `deploy/compose/Dockerfile.cloud` and `Dockerfile.edge` |
 
 crates.io is the primary output: users install with `cargo install --locked keylease`. GitHub
 attaches the source archives of the tag to the release. A pre-release tag `vX.Y.Z-rc.N` makes
@@ -27,9 +27,12 @@ v0.2.0 and v0.2.1 still attached Linux and macOS archives and a DMG; later ones 
 - Commits use [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`,
   `docs:`, …). git-cliff turns them into `CHANGELOG.md` and the release notes (`cliff.toml`).
 - Published crates, in order (`scripts/release.py order`): `keylease-core`, `keylease-1pux`,
-  `keylease-crypto`, `keylease-kdbx`, `leasegate-connectors`, `leasegate-policy`,
+  `keylease-crypto`, `keylease-kdbx`, `keylease-connectors`, `keylease-policy`,
   `keylease-store`, `keylease-service`, `keylease-rpc`, `keylease` (the binary, in
   `crates/keylease-cli`). Every other crate has `publish = false` (inherited from the workspace).
+- `keylease-connectors` and `keylease-policy` replaced `leasegate-connectors` and
+  `leasegate-policy` after v0.2.1. The new names must go through the first-publish steps below
+  once; the old crates stay on crates.io at their last version.
 
 ## Publishing without stored tokens
 
@@ -48,7 +51,7 @@ names (with `-` and `_` treated alike) are free, and that existing crates are ow
 
 1. On crates.io (Account settings → API tokens), create a token with the scopes
    `publish-new`, `publish-update` and `trusted-publishing`, limited to `keylease` and
-   `keylease-*` and `leasegate-*`, expiring in a day.
+   `keylease-*` (and, for old releases, `leasegate-*`), expiring in a day.
 2. Merge the release pull request. From a clean checkout of the merged `main`, before pushing
    the tag:
    ```sh
@@ -101,7 +104,7 @@ Check the name first: crate names are permanent.
    `main`, the version and the changelog, runs `scripts/verify.sh` and packages every crate;
    then come the GitHub release, crates.io and the images.
 4. **Verify**: `cargo install --locked keylease --version X.Y.Z` and `keylease --version`; and
-   `docker run --rm ghcr.io/tidusvn05/leasegate-edge:X.Y.Z --help`.
+   `docker run --rm ghcr.io/tidusvn05/keylease-edge:X.Y.Z --help`.
 
 ## The macOS app
 

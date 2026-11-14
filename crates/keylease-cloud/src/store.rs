@@ -1,15 +1,19 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
+use keylease_connector_sdk::{
+    ConnectorRegistryEntry, ConnectorRegistryStatus, SignedConnectorPackage,
+    validate_publisher_verifying_key, verify_signed_package,
+};
 use keylease_core::{
     AccountId, AgentId, ConnectionHealth, ConnectionId, ConnectorPublisherId, ControlEventId,
     CredentialLeaseId, DeviceId, EdgeId, HumanId, KeyLeaseError, MembershipId, OrganizationId,
     PolicyProposalId, ProjectId, Result, RotationId, VaultId,
 };
-use leasegate_connector_sdk::{
-    ConnectorRegistryEntry, ConnectorRegistryStatus, SignedConnectorPackage,
-    validate_publisher_verifying_key, verify_signed_package,
+use keylease_credentials::{
+    ConnectionPosture, ConnectionPostureStatus, CredentialKind, CredentialLeaseRecord,
+    CredentialLeaseState, RotationRecord, RotationState,
 };
-use leasegate_control::{
+use keylease_protocol::{
     AgentRegistration, ApprovalDecision, ApprovalRequest, AuditBatch, CONTROL_CONTRACT_VERSION,
     ConnectionDescriptor, ConnectorPublisher, ControlEvent, ControlEventKind, EdgeEventBatch,
     EdgeHealth, EdgeHeartbeat, EdgeRecord, Membership, MembershipRole, Organization,
@@ -18,11 +22,7 @@ use leasegate_control::{
     SignedPolicyBundle, SyncMutationEnvelope, SyncMutationResult, SyncMutationStatus,
     SyncPullResponse, SyncPushResponse,
 };
-use leasegate_credentials::{
-    ConnectionPosture, ConnectionPostureStatus, CredentialKind, CredentialLeaseRecord,
-    CredentialLeaseState, RotationRecord, RotationState,
-};
-use leasegate_policy_bundle::{BundleAcceptanceState, verify_sync_mutation_signature};
+use keylease_protocol::{BundleAcceptanceState, verify_sync_mutation_signature};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
@@ -666,7 +666,7 @@ impl CloudRepository {
         edge_id: &EdgeId,
         record: &CredentialLeaseRecord,
     ) -> Result<()> {
-        if record.schema_version != leasegate_credentials::CREDENTIAL_CONTRACT_VERSION
+        if record.schema_version != keylease_credentials::CREDENTIAL_CONTRACT_VERSION
             || record.policy_version == 0
             || record.expires_at <= record.issued_at
             || record.request_digest_sha256.len() != 64
@@ -845,7 +845,7 @@ impl CloudRepository {
         edge_id: &EdgeId,
         posture: &ConnectionPosture,
     ) -> Result<()> {
-        if posture.schema_version != leasegate_credentials::CREDENTIAL_CONTRACT_VERSION
+        if posture.schema_version != keylease_credentials::CREDENTIAL_CONTRACT_VERSION
             || posture.reason_codes.len() > 32
             || posture
                 .reason_codes
@@ -908,7 +908,7 @@ impl CloudRepository {
         project_id: &ProjectId,
         record: &RotationRecord,
     ) -> Result<()> {
-        if record.schema_version != leasegate_credentials::CREDENTIAL_CONTRACT_VERSION
+        if record.schema_version != keylease_credentials::CREDENTIAL_CONTRACT_VERSION
             || record.state != RotationState::Pending
             || record.reason.is_empty()
             || record.reason.len() > 500

@@ -1,4 +1,4 @@
-# KeyLease and LeaseGate threat model (through Phase 7 single-VPS beta)
+# KeyLease threat model (through Phase 7 single-VPS beta)
 
 Status: accepted for the local MVP. This document is an engineering baseline,
 not an external security review.
@@ -20,7 +20,7 @@ and the UI shares its address space. The application sandbox replaces the
 socket's uid check as the isolation mechanism. This is a deliberate reduction,
 recorded with what replaces it in
 [ADR 0004](../adr/0004-mobile-in-process-boundary.md).
-LeaseGate-hosted managed gateway mode is explicitly out of scope and is
+Vendor-hosted managed gateway mode is explicitly out of scope and is
 rejected; the supported execution mode is `self_hosted/local_gateway` and must
 never fall back when the local Gateway is unavailable.
 

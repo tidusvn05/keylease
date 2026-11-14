@@ -56,7 +56,7 @@ else
   add_issue control_not_ready
 fi
 gateway_ready=0
-if docker compose --env-file "$env_file" -f "$compose_dir/compose.yaml" exec -T gateway leasegate-edge healthcheck >/dev/null 2>&1; then
+if docker compose --env-file "$env_file" -f "$compose_dir/compose.yaml" exec -T gateway keylease-edge healthcheck >/dev/null 2>&1; then
   gateway_ready=1
 else
   add_issue gateway_not_ready
@@ -133,8 +133,8 @@ temporary_metrics=$(mktemp "$metrics_dir/.leasegate.prom.XXXXXX")
   printf '# TYPE leasegate_certificate_expiry_seconds gauge\nleasegate_certificate_expiry_seconds %s\n' "$certificate_expiry_seconds"
   printf '# HELP leasegate_compose_services_running Number of expected services running.\n'
   printf '# TYPE leasegate_compose_services_running gauge\nleasegate_compose_services_running %s\n' "$running_count"
-  printf '# HELP leasegate_control_plane_ready Whether the local Control Plane readiness probe passed.\n'
-  printf '# TYPE leasegate_control_plane_ready gauge\nleasegate_control_plane_ready %s\n' "$control_ready"
+  printf '# HELP keylease_protocol_plane_ready Whether the local Control Plane readiness probe passed.\n'
+  printf '# TYPE keylease_protocol_plane_ready gauge\nkeylease_protocol_plane_ready %s\n' "$control_ready"
   printf '# HELP leasegate_gateway_ready Whether the local Gateway readiness probe passed.\n'
   printf '# TYPE leasegate_gateway_ready gauge\nleasegate_gateway_ready %s\n' "$gateway_ready"
   printf '# HELP leasegate_soak_consecutive_seconds Consecutive healthy seconds observed by the Phase 8 monitor.\n'

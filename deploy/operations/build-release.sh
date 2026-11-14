@@ -26,7 +26,7 @@ done
 [ ! -e "$output_dir" ] || { printf 'Release output already exists: %s\n' "$output_dir" >&2; exit 1; }
 mkdir -p "$output_dir"
 
-control_tag="leasegate-control-plane:$release_id"
+control_tag="keylease-protocol-plane:$release_id"
 web_tag="leasegate-web:$release_id"
 gateway_tag="leasegate-gateway:$release_id"
 export LEASEGATE_CONTROL_IMAGE="$control_tag"

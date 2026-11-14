@@ -5,7 +5,7 @@ use keylease_core::{
     AccessReviewId, DeviceChallengeId, DeviceId, HumanId, KeyLeaseError, MembershipId,
     OperatorSessionId, OrganizationId, PolicyReleaseId, ProjectId, Result, SecurityAlertId,
 };
-use leasegate_control::{
+use keylease_protocol::{
     AccessReview, AccessReviewDecision, AccessReviewEntry, AccessReviewState,
     CONTROL_CONTRACT_VERSION, ComplianceEvidence, DeviceChallenge, KeyProvider, Membership,
     MembershipRole, OidcProvider, OperatorDevice, OperatorSessionClaims, PolicyRelease,

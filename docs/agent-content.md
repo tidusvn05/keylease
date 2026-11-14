@@ -9,7 +9,7 @@ explicit agent access mode:
 - `read_write`: registered local agents can also update the body, title, tags,
   and project.
 
-Creating and updating these three content types does not require a LeaseGate
+Creating and updating these three content types does not require a connector
 grant. It still requires a registered client credential and an unlocked local
 vault. The global kill switch disables this grant-free channel. Agents cannot
 delete content, change its access mode, or mark it reviewed.
