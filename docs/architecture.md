@@ -8,9 +8,9 @@ in the [threat model](security/threat-model.md).
 
 | | KeyLease vault node | KeyLease Cloud + Edge |
 |---|---|---|
-| What it is | An encrypted vault with a policy engine, served by `keylease serve` over a local Unix socket | A self-hosted control plane (Cloud API, worker, PostgreSQL) plus a gateway (Edge) that serves MCP and dynamic credentials |
+| What it is | An encrypted vault with a policy engine, served by `keylease serve` over a local Unix socket | A self-hosted control plane (Cloud API, worker, PostgreSQL) plus an edge node that serves MCP and dynamic credentials |
 | Who uses it | One person: agents on a Mac or a VPS | An operator running agents against SaaS connectors with signed policy bundles |
-| Agent interface | `keylease` CLI (and the brokers below), MCP over stdio, the OAuth MCP gateway | MCP over Streamable HTTP, credential API |
+| Agent interface | `keylease` CLI (and the brokers below), MCP over stdio, the OAuth remote MCP server | MCP over Streamable HTTP, credential API |
 | Approver | macOS app, `keylease approval …`, paired remote approver | `apps/approval-flutter` web/mobile app |
 | Docs | this page, [ADR 0005](adr/0005-agent-trust-and-secret-use.md) | [Phase 3 architecture](phase-3/architecture-and-tech-stack.md), [single-VPS install](self-hosted-vps.md) |
 
@@ -46,10 +46,10 @@ flowchart LR
   It can search and read metadata; using a secret or changing the vault queues
   an approval.
 - **MCP surfaces** — `keylease mcp` (stdio, started by Claude Desktop, Cursor,
-  Codex as an enrolled agent) and the gateway (`serve --gateway-url`: OAuth
+  Codex as an enrolled agent) and the remote MCP server (`serve --remote-mcp --public-url`: OAuth
   2.1 + Streamable HTTP for ChatGPT and claude.ai; each connection is a new
   agent). Both expose the same tools, none of which returns a secret
-  ([MCP](mcp.md), [gateway](mcp-gateway.md)).
+  ([MCP](mcp.md), [remote MCP server](remote-mcp.md)).
 - **Approver** — a human surface that decides approvals: the macOS app on the
   same Mac, the admin CLI on the node, or a paired remote device. An approver
   is never the agent that asked.
@@ -115,7 +115,7 @@ Details: [agent approvals and trust](agent-approvals.md).
 | Personal Mac | macOS app daemon | macOS app (notification, Touch ID for trusts) | Master password in the app |
 | VPS, self-trust (mode A) | `keylease serve` under systemd | Admin CLI on the VPS (`approval approve`), or pre-approved `grant`s | systemd credential, password file, or interactive |
 | VPS + paired approver (mode B) | `keylease serve --approver-listen` behind TLS | macOS app **Remote Vaults**, or `keylease remote` on a laptop | Same as mode A (remote unlock not implemented) |
-| VPS gateway for web assistants | `keylease serve --gateway-url` behind TLS | Same as mode A or B | Same as mode A |
+| VPS remote MCP server for web assistants | `keylease serve --remote-mcp --public-url` behind TLS | Same as mode A or B | Same as mode A |
 | VPS as a cloud node | any of the above, linked with `keylease cloud join` | Share requests decided on the owner device | Same as mode A; data beyond its own arrives only as approved shares |
 | KeyLease Cloud + Edge | Edge's embedded `KeyLeaseService` | `approval-flutter` | Edge vault password file |
 
@@ -128,9 +128,9 @@ Details: [agent approvals and trust](agent-approvals.md).
 | `crates/keylease-policy` | Deny-by-default rules and approvals |
 | `crates/keylease-service` | The only orchestration layer: vault, policy, trust, SSH signing, SCRAM, injection, remote approvers |
 | `crates/keylease-rpc` | The local RPC contract (frozen by `test-vectors/rpc/commands.json`) |
-| `crates/keylease-cli` | `keylease` CLI, daemon, brokers (`ssh`, `db`, `run`), MCP server (`mcp.rs`), gateway HTTP + OAuth (`gateway.rs`), approver HTTP API, cloud commands and sync loop (`cloud.rs`) |
+| `crates/keylease-cli` | `keylease` CLI, daemon, brokers (`ssh`, `db`, `run`), MCP server (`mcp.rs`), remote MCP server HTTP + OAuth (`remote_mcp.rs`), approver HTTP API, cloud commands and sync loop (`cloud.rs`) |
 | `crates/keylease-mcp` | Streamable HTTP MCP adapter over the service (connector actions) |
-| `crates/keylease-edge`, `keylease-cloud`, `keylease-credentials` | KeyLease Edge gateway, Cloud control plane, dynamic credentials |
+| `crates/keylease-edge`, `keylease-cloud`, `keylease-credentials` | KeyLease edge node, Cloud control plane, dynamic credentials |
 | `apps/desktop-macos`, `apps/desktop-macos-app` | Native Swift client core and SwiftUI app |
 | `packages/leasegate_vault_ui` | Shared Flutter vault UI for the mobile app |
 | `apps/mobile-flutter`, `crates/keylease-mobile` | Android vault client and its in-process FFI |

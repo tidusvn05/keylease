@@ -1,8 +1,8 @@
-//! The self-hosted MCP gateway: KeyLease's vault tools for web assistants
+//! The remote MCP server: KeyLease's vault tools for web assistants
 //! (ChatGPT, claude.ai) over HTTPS, with OAuth 2.1 sign-in.
 //!
-//! `keylease serve --gateway-url https://vault.example.com --gateway-listen
-//! 127.0.0.1:8787` serves, behind a TLS reverse proxy:
+//! `keylease serve --remote-mcp --public-url https://vault.example.com
+//! --remote-mcp-listen 127.0.0.1:8787` serves, behind a TLS reverse proxy:
 //!
 //! | Path | |
 //! |---|---|
@@ -35,7 +35,7 @@ use rmcp::transport::streamable_http_server::{
 use std::time::Duration as StdDuration;
 
 #[derive(Clone)]
-pub(crate) struct GatewayConfig {
+pub(crate) struct RemoteMcpConfig {
     /// Public base URL, without a trailing slash: the OAuth issuer.
     pub(crate) base_url: String,
     pub(crate) listen: std::net::SocketAddr,
@@ -43,7 +43,7 @@ pub(crate) struct GatewayConfig {
     pub(crate) approval_wait: StdDuration,
 }
 
-impl GatewayConfig {
+impl RemoteMcpConfig {
     pub(crate) fn new(
         base_url: &str,
         listen: std::net::SocketAddr,
@@ -51,22 +51,22 @@ impl GatewayConfig {
         approval_wait: StdDuration,
     ) -> Result<Self> {
         let parsed = reqwest::Url::parse(base_url).map_err(|_| KeyLeaseError::InvalidRequest {
-            reason: "--gateway-url must be a URL like https://vault.example.com".into(),
+            reason: "--public-url must be a URL like https://vault.example.com".into(),
         })?;
         let loopback = matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
         if parsed.scheme() != "https" && !(parsed.scheme() == "http" && loopback) {
             return Err(KeyLeaseError::InvalidRequest {
-                reason: "--gateway-url must use https (http only for localhost)".into(),
+                reason: "--public-url must use https (http only for localhost)".into(),
             });
         }
         if parsed.query().is_some() || parsed.fragment().is_some() {
             return Err(KeyLeaseError::InvalidRequest {
-                reason: "--gateway-url must not have a query or fragment".into(),
+                reason: "--public-url must not have a query or fragment".into(),
             });
         }
         if !listen.ip().is_loopback() {
             return Err(KeyLeaseError::InvalidRequest {
-                reason: "--gateway-listen must be a loopback address; publish it through a TLS \
+                reason: "--remote-mcp-listen must be a loopback address; publish it through a TLS \
                          reverse proxy such as Caddy"
                     .into(),
             });
@@ -96,14 +96,14 @@ impl GatewayConfig {
 }
 
 #[derive(Clone)]
-struct Gateway {
+struct RemoteMcp {
     service: Arc<KeyLeaseService>,
-    config: GatewayConfig,
+    config: RemoteMcpConfig,
 }
 
-pub(crate) async fn serve_gateway(
+pub(crate) async fn serve_remote_mcp(
     service: Arc<KeyLeaseService>,
-    config: GatewayConfig,
+    config: RemoteMcpConfig,
 ) -> Result<()> {
     let listen = config.listen;
     let base = config.base_url.clone();
@@ -114,14 +114,14 @@ pub(crate) async fn serve_gateway(
             .map_err(|_| KeyLeaseError::InvalidRequest {
                 reason: format!("cannot listen on {listen}"),
             })?;
-    eprintln!("KeyLease gateway on http://{listen} for {base}/mcp");
+    eprintln!("KeyLease remote MCP server on http://{listen} for {base}/mcp");
     axum::serve(listener, router)
         .await
         .map_err(|_| KeyLeaseError::Storage)
 }
 
-pub(crate) fn router(service: Arc<KeyLeaseService>, config: GatewayConfig) -> Router {
-    let state = Gateway {
+pub(crate) fn router(service: Arc<KeyLeaseService>, config: RemoteMcpConfig) -> Router {
+    let state = RemoteMcp {
         service: service.clone(),
         config: config.clone(),
     };
@@ -201,7 +201,7 @@ async fn security_headers(request: Request, next: Next) -> Response {
 // ---------------------------------------------------------------- bearer
 
 async fn require_bearer(
-    State(gateway): State<Gateway>,
+    State(gateway): State<RemoteMcp>,
     mut request: Request,
     next: Next,
 ) -> Response {
@@ -240,19 +240,19 @@ async fn require_bearer(
 
 // -------------------------------------------------------------- metadata
 
-async fn home(State(gateway): State<Gateway>) -> Html<String> {
+async fn home(State(gateway): State<RemoteMcp>) -> Html<String> {
     Html(page(
         "KeyLease gateway",
         &format!(
-            "<p>This is a KeyLease MCP gateway. Add <code>{}</code> as a remote MCP server (custom \
+            "<p>This is a KeyLease remote MCP server. Add <code>{}</code> as a remote MCP server (custom \
              connector) in your assistant, then sign in with a connect code from \
-             <code>keylease gateway connect-code NAME</code> on this server.</p>",
+             <code>keylease mcp connect-code NAME</code> on this server.</p>",
             escape(&gateway.config.resource())
         ),
     ))
 }
 
-async fn protected_resource(State(gateway): State<Gateway>) -> Response {
+async fn protected_resource(State(gateway): State<RemoteMcp>) -> Response {
     no_store(Json(json!({
         "resource": gateway.config.resource(),
         "authorization_servers": [gateway.config.base_url],
@@ -261,7 +261,7 @@ async fn protected_resource(State(gateway): State<Gateway>) -> Response {
     })))
 }
 
-async fn authorization_server(State(gateway): State<Gateway>) -> Response {
+async fn authorization_server(State(gateway): State<RemoteMcp>) -> Response {
     let base = &gateway.config.base_url;
     no_store(Json(json!({
         "issuer": base,
@@ -301,7 +301,7 @@ struct RegistrationRequest {
 }
 
 async fn register(
-    State(gateway): State<Gateway>,
+    State(gateway): State<RemoteMcp>,
     Json(body): Json<RegistrationRequest>,
 ) -> Response {
     match gateway
@@ -358,7 +358,7 @@ struct AuthorizeParams {
 /// Checks everything that must hold before the user is ever redirected back
 /// to `redirect_uri`; failures here render an error page instead.
 fn checked_client(
-    gateway: &Gateway,
+    gateway: &RemoteMcp,
     params: &AuthorizeParams,
 ) -> std::result::Result<keylease_service::OAuthClient, String> {
     let client = gateway
@@ -374,7 +374,7 @@ fn checked_client(
 }
 
 /// Errors the client should hear about, returned through the redirect.
-fn protocol_error(gateway: &Gateway, params: &AuthorizeParams) -> Option<&'static str> {
+fn protocol_error(gateway: &RemoteMcp, params: &AuthorizeParams) -> Option<&'static str> {
     if params.response_type != "code" {
         return Some("unsupported_response_type");
     }
@@ -388,7 +388,11 @@ fn protocol_error(gateway: &Gateway, params: &AuthorizeParams) -> Option<&'stati
     (!resource_ok).then_some("invalid_target")
 }
 
-fn redirect_with(gateway: &Gateway, params: &AuthorizeParams, pairs: &[(&str, &str)]) -> Response {
+fn redirect_with(
+    gateway: &RemoteMcp,
+    params: &AuthorizeParams,
+    pairs: &[(&str, &str)],
+) -> Response {
     let Ok(mut url) = reqwest::Url::parse(&params.redirect_uri) else {
         return error_page("The redirect address is invalid.");
     };
@@ -406,7 +410,7 @@ fn redirect_with(gateway: &Gateway, params: &AuthorizeParams, pairs: &[(&str, &s
 }
 
 async fn authorize_page(
-    State(gateway): State<Gateway>,
+    State(gateway): State<RemoteMcp>,
     axum::extract::Query(params): axum::extract::Query<AuthorizeParams>,
 ) -> Response {
     let client = match checked_client(&gateway, &params) {
@@ -420,7 +424,7 @@ async fn authorize_page(
 }
 
 async fn authorize_submit(
-    State(gateway): State<Gateway>,
+    State(gateway): State<RemoteMcp>,
     Form(params): Form<AuthorizeParams>,
 ) -> Response {
     let client = match checked_client(&gateway, &params) {
@@ -489,12 +493,12 @@ fn consent_page(
              <code>{host}</code>.</p>\
              <p>It gets its own agent identity: it can search item names and use SSH keys and \
              databases without seeing them, and every secret use waits for your approval in \
-             KeyLease. Revoke it any time with <code>keylease gateway revoke</code>.</p>\
+             KeyLease. Revoke it any time with <code>keylease mcp revoke</code>.</p>\
              {problem}\
              <form method=\"post\" action=\"/authorize\">{hidden}\
              <label>Connect code<br><input name=\"connect_code\" autocomplete=\"off\" \
              autocapitalize=\"characters\" spellcheck=\"false\" autofocus required></label>\
-             <p class=\"hint\">On the server, run <code>keylease gateway connect-code NAME</code>.</p>\
+             <p class=\"hint\">On the server, run <code>keylease mcp connect-code NAME</code>.</p>\
              <button name=\"decision\" value=\"allow\">Connect</button> \
              <button name=\"decision\" value=\"deny\" class=\"secondary\" formnovalidate>Cancel</button>\
              </form>",
@@ -554,7 +558,7 @@ struct TokenRequest {
 }
 
 async fn token(
-    State(gateway): State<Gateway>,
+    State(gateway): State<RemoteMcp>,
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
@@ -603,7 +607,7 @@ async fn token(
 // ----------------------------------------------------------------- admin
 
 #[derive(Subcommand)]
-pub(crate) enum GatewayCommand {
+pub(crate) enum ConnectionCommand {
     /// Print a one-time code (10 minutes) that connects one web assistant.
     ConnectCode {
         /// A name for the connection, e.g. chatgpt or claude-web.
@@ -615,10 +619,10 @@ pub(crate) enum GatewayCommand {
     Revoke { agent_id: String },
 }
 
-pub(crate) fn gateway_command(db: &Path, command: GatewayCommand) -> Result<()> {
+pub(crate) fn connection_command(db: &Path, command: ConnectionCommand) -> Result<()> {
     let service = admin_service(db)?;
     match command {
-        GatewayCommand::ConnectCode { name } => {
+        ConnectionCommand::ConnectCode { name } => {
             let code = service.create_gateway_connect_code(&name)?;
             print_json(&json!({
                 "code": code.code,
@@ -627,8 +631,8 @@ pub(crate) fn gateway_command(db: &Path, command: GatewayCommand) -> Result<()> 
                 "next": "Add https://YOUR-HOST/mcp as a custom connector in your assistant and enter this code when asked.",
             }))
         }
-        GatewayCommand::Connections => print_json(&service.list_gateway_connections()?),
-        GatewayCommand::Revoke { agent_id } => {
+        ConnectionCommand::Connections => print_json(&service.list_gateway_connections()?),
+        ConnectionCommand::Revoke { agent_id } => {
             service.revoke_gateway_connection(&agent_id)?;
             print_json(&json!({"revoked": agent_id}))
         }
@@ -675,7 +679,7 @@ mod tests {
         let store = Arc::new(NativeStore::open(dir.path().join("vault.sqlite")).unwrap());
         let service = Arc::new(KeyLeaseService::new(store).unwrap());
         service.initialize(b"password", Duration::hours(1)).unwrap();
-        let config = GatewayConfig::new(
+        let config = RemoteMcpConfig::new(
             "http://localhost:8787/",
             "127.0.0.1:8787".parse().unwrap(),
             ToolOptions::default(),
@@ -683,7 +687,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            GatewayConfig::new(
+            RemoteMcpConfig::new(
                 "http://vault.example.com",
                 "127.0.0.1:8787".parse().unwrap(),
                 ToolOptions::default(),

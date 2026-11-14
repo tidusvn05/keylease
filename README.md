@@ -1,6 +1,6 @@
 # KeyLease
 
-KeyLease is a local-first encrypted vault with a policy gateway, built so that
+KeyLease is a local-first encrypted vault with a policy layer, built so that
 AI agents can **use** credentials — sign in over SSH, connect to a database,
 run a CLI that needs an API key — without the secret reaching the model, and
 with a human approving what matters.
@@ -16,7 +16,7 @@ with a human approving what matters.
   systemd; a headless VPS can be approved from your Mac.
 - **Any assistant.** CLI agents use `keylease` directly; Claude Desktop,
   Cursor and Codex start `keylease mcp`; ChatGPT and claude.ai connect to your
-  self-hosted gateway with OAuth.
+  self-hosted remote MCP server with OAuth.
 - **Share with a VPS, back up, recover.** Through your self-hosted cloud, a VPS
   receives only the items (or projects) you share or approve, backs up its own
   secrets sealed to you, and a recovery kit restores your vault on a new
@@ -40,7 +40,7 @@ or connectors except through `KeyLeaseService`.
  │ signs SSH, answers SCRAM, injects     │ ◄── remote approver over HTTPS
  └──────────────────────────────────────┘     (Mac app / keylease remote;
         ▲                                        signed, approvals only)
-        └── gateway: OAuth 2.1 + MCP over HTTPS ◄── ChatGPT, claude.ai
+        └── remote MCP: OAuth 2.1 + MCP over HTTPS ◄── ChatGPT, claude.ai
 ```
 
 Roles, secret-handling tiers, the approval sequence and the component map are
@@ -60,7 +60,7 @@ Step-by-step guides, with what is and is not implemented, are in
 | Agents on a VPS, approve from your Mac (paired approver) | ✅ CLI · 🟡 native Mac UI |
 | Unattended automation with narrow grants | ✅ |
 | Claude Desktop, Cursor, Codex through local MCP (`keylease mcp`) | ✅ |
-| ChatGPT / claude.ai through your own HTTPS gateway (OAuth 2.1) | ✅ simulated client · not yet tried on the live services |
+| ChatGPT / claude.ai through your own remote MCP server (OAuth 2.1) | ✅ simulated client · not yet tried on the live services |
 
 ✅ implemented and tested on Linux · 🟡 written, not yet verified on a Mac ·
 ❌ not implemented.
@@ -118,7 +118,7 @@ everyday work in the project for an hour; a reveal is approved once)
 ([use case 2](docs/use-cases.md#2-agents-on-a-vps-self-trust)).
 
 Guides: [agent approvals and trust](docs/agent-approvals.md) ·
-[MCP clients](docs/mcp.md) · [self-hosted MCP gateway](docs/mcp-gateway.md) ·
+[MCP clients](docs/mcp.md) · [remote MCP server](docs/remote-mcp.md) ·
 [SSH agent](docs/ssh-agent.md) · [PostgreSQL proxy](docs/db-proxy.md) ·
 [`keylease run`](docs/run-with-secrets.md) ·
 [remote approval for a VPS](docs/remote-approval.md) ·
@@ -233,9 +233,9 @@ and the macOS/provider checks that must happen in their real environments.
 
 ## KeyLease Cloud and Edge
 
-The repository also contains a self-hosted control plane and gateway for
+The repository also contains a self-hosted control plane and edge node for
 running agents against SaaS connectors with signed policy bundles: Cloud API
-and worker, the Edge gateway with an MCP endpoint and dynamic credentials,
+and worker, the edge node with an MCP endpoint and dynamic credentials,
 and the `approval-flutter` operator app. To run it on one VPS, follow
 [`docs/self-hosted-vps.md`](docs/self-hosted-vps.md).
 
@@ -304,7 +304,7 @@ machine-readable acceptance report. See
   contracts and Ed25519/JCS signatures.
 - `keylease-credentials`: self-hosted AWS STS, SSH certificate, PostgreSQL role
   and OAuth token-exchange credential broker/backends.
-- `keylease-edge`: Linux local Gateway, signed control cache, credential API,
+- `keylease-edge`: Linux edge node, signed control cache, credential API,
   offline enforcement and encrypted audit/credential state.
 - `keylease-mcp`: authenticated Streamable HTTP MCP adapter over the canonical
   service boundary.

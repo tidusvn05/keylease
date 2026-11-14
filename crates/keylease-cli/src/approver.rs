@@ -225,7 +225,7 @@ async fn unlock(
     Ok(Json(json!({"unlocked": true, "was_locked": unlocked})))
 }
 
-/// The approver API's routes, also mounted by the MCP gateway.
+/// The approver API's routes, also mounted by the remote MCP server.
 pub(crate) fn approver_routes() -> Router<Arc<KeyLeaseService>> {
     Router::new()
         .route("/v1/pair", post(pair))
