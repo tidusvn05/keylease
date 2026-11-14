@@ -384,6 +384,23 @@ cho tới khi PR trước được merge.
 | 18 | P5 | `feat/server-brokers` | HTTP proxy phía server, dynamic creds, MySQL |
 | 19 | P6 | `feat/enterprise` | KMS API công khai, PKCS#11, SCIM, export SIEM, managed node (bỏ Edge) |
 
+### 8.2 Trạng thái (2026-11-15)
+
+Đã làm xong 19 bước, mỗi bước một PR xếp chồng (#13 → #34):
+
+| Phase | PR | Ghi chú |
+|---|---|---|
+| P0 | #13 plan + console, #14 bỏ LeaseGate, #15 remote MCP, #16 keylease-server + deploy, #17 tách module service | |
+| P1 | #18 environment/Personal/tham chiếu tên, #19 bundle age + `.env`/CSV, #20 dependency, #21 HTTP proxy base-URL (ADR 0007), #22 HTTPS_PROXY/MITM | |
+| P2 | #23 đăng nhập console + passkey (ADR 0008), #24 sync thiết bị (ADR 0009), #25 console v1 | Web Push, approval/audit trên console: chưa |
+| P3 | #26 tổ chức + phân quyền, #27 Managed + KMS (ADR 0010), #28 change request, #29 SSO OIDC | |
+| P4 | #30 machine identity + `keylease ci run`, #31 GitHub Action + access key cho ESO | |
+| P5 | #32 MCP Gateway, #33 proxy base-URL phía server + PostgreSQL động | MySQL, proxy MCP upstream (OAuth), duyệt từng lần gọi: chưa |
+| P6 | #34 KMS API, xuất audit (JSONL/syslog), SCIM (thu hồi) | PKCS#11/HSM, KMS cloud, đẩy audit, managed node: chưa |
+
+Chưa làm vì cần môi trường khác: app macOS/mobile (Swift, Kotlin/Flutter không
+build được trên máy Linux này), UI app cho các tính năng mới.
+
 App mobile: sau bước 11, khi chốt công nghệ (mục 12). Quyết định mở 3–5 ở mục 9
 lấy theo đề xuất (last-writer-wins, migration tự động, console chỉ hiện metadata
 của project Private) trừ khi có thay đổi.

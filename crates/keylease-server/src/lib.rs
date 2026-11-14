@@ -7,6 +7,7 @@ mod console_sso;
 mod dynamic;
 mod enterprise;
 mod enterprise_api;
+mod enterprise_v2;
 mod gateway;
 mod machine;
 mod managed;
