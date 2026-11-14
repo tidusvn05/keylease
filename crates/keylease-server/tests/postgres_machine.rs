@@ -224,7 +224,40 @@ async fn a_ci_job_reads_its_environment_with_its_oidc_token() {
         "only its own environment"
     );
 
-    // Revoking the identity ends its tokens.
+    // An access key (for the External Secrets Operator) reads the same environment.
+    let (status, key) = call(
+        &app,
+        "POST",
+        &format!("{base}/machine-identities/{identity}/keys"),
+        owner,
+        json!({"days": 30}),
+    )
+    .await;
+    assert_eq!(status, 200, "{key:?}");
+    let key_bearer = format!("Bearer {}", key["key"].as_str().unwrap());
+    let (_, by_key) = call(
+        &app,
+        "GET",
+        "/v1/machine/secrets",
+        ("authorization", &key_bearer),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(by_key["secrets"]["DATABASE_URL"], "postgres://staging");
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("{base}/machine-identities/{identity}/keys"),
+            owner,
+            json!({"days": 999})
+        )
+        .await
+        .0,
+        400
+    );
+
+    // Revoking the identity ends its tokens and keys.
     assert_eq!(
         call(
             &app,

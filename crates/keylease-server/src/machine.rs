@@ -41,6 +41,10 @@ pub(crate) fn router() -> Router<CloudApiState> {
             "/v1/orgs/{org}/projects/{slug}/machine-identities/{identity}",
             delete(revoke_identity),
         )
+        .route(
+            "/v1/orgs/{org}/projects/{slug}/machine-identities/{identity}/keys",
+            post(create_key),
+        )
         .route("/v1/machine/token", post(exchange))
         .route("/v1/machine/secrets", get(machine_secrets))
 }
@@ -179,11 +183,16 @@ async fn revoke_identity(
     .await
     .map_err(storage)?
     .rows_affected();
-    sqlx::query("DELETE FROM machine_tokens WHERE identity_id=$1")
-        .bind(&identity)
-        .execute(&mut *tx)
-        .await
-        .map_err(storage)?;
+    for statement in [
+        "DELETE FROM machine_tokens WHERE identity_id=$1",
+        "DELETE FROM machine_keys WHERE identity_id=$1",
+    ] {
+        sqlx::query(statement)
+            .bind(&identity)
+            .execute(&mut *tx)
+            .await
+            .map_err(storage)?;
+    }
     tx.commit().await.map_err(storage)?;
     if changed == 0 {
         return Err(ApiError(KeyLeaseError::NotFound { resource: identity }));
@@ -199,6 +208,76 @@ async fn revoke_identity(
     )
     .await?;
     Ok(Json(json!({"revoked": identity})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateKey {
+    /// Days until the key expires (1-365, default 90).
+    #[serde(default)]
+    days: Option<i64>,
+}
+
+/// An access key for a consumer that cannot exchange an OIDC token (the
+/// External Secrets Operator's webhook provider). Shown once.
+async fn create_key(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((org, slug, identity)): Path<(String, String, String)>,
+    body: Bytes,
+) -> ApiResult<Json<Value>> {
+    require_csrf(&headers)?;
+    let account = authorize(&state, &headers, &org, &slug, None, ProjectRole::Admin).await?;
+    let request: CreateKey = if body.is_empty() {
+        CreateKey { days: None }
+    } else {
+        parse(&body)?
+    };
+    let days = request.days.unwrap_or(90);
+    if !(1..=365).contains(&days) {
+        return Err(invalid("a key lasts 1 to 365 days"));
+    }
+    let exists = sqlx::query(
+        "SELECT 1 FROM machine_identities WHERE identity_id=$1 AND org_id=$2 AND slug=$3 AND revoked_at IS NULL",
+    )
+    .bind(&identity)
+    .bind(&org)
+    .bind(&slug)
+    .fetch_optional(state.repository.pool())
+    .await
+    .map_err(storage)?;
+    if exists.is_none() {
+        return Err(ApiError(KeyLeaseError::NotFound { resource: identity }));
+    }
+    let mut bytes = [0_u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    let key = format!("klmk_{}", URL_SAFE_NO_PAD.encode(bytes));
+    let key_id = format!("mkey_{}", uuid::Uuid::now_v7().simple());
+    let expires_at = Utc::now() + Duration::days(days);
+    sqlx::query(
+        "INSERT INTO machine_keys(key_hash,key_id,identity_id,created_by,created_at,expires_at) VALUES($1,$2,$3,$4,now(),$5)",
+    )
+    .bind(sha256_hex(key.as_bytes()))
+    .bind(&key_id)
+    .bind(&identity)
+    .bind(&account)
+    .bind(expires_at)
+    .execute(state.repository.pool())
+    .await
+    .map_err(storage)?;
+    audit_event(
+        &state,
+        &org,
+        &slug,
+        None,
+        None,
+        "machine_key_create",
+        &account,
+    )
+    .await?;
+    Ok(Json(
+        json!({"key_id": key_id, "key": key, "expires_at": expires_at}),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -332,10 +411,12 @@ async fn machine_secrets(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
         .ok_or_else(|| denied("a machine token is required"))?;
+    // A 15-minute token from an OIDC exchange, or an access key.
     let row = sqlx::query(
-        "SELECT i.identity_id,i.org_id,i.slug,i.environment FROM machine_tokens t \
-         JOIN machine_identities i ON i.identity_id=t.identity_id \
-         WHERE t.token_hash=$1 AND t.expires_at > now() AND i.revoked_at IS NULL",
+        "SELECT i.identity_id,i.org_id,i.slug,i.environment FROM machine_identities i \
+         WHERE i.revoked_at IS NULL AND i.identity_id IN ( \
+           SELECT identity_id FROM machine_tokens WHERE token_hash=$1 AND expires_at > now() \
+           UNION SELECT identity_id FROM machine_keys WHERE key_hash=$1 AND expires_at > now())",
     )
     .bind(sha256_hex(token.trim().as_bytes()))
     .fetch_optional(state.repository.pool())

@@ -81,6 +81,15 @@ function Secrets() {
     if (!error) form.reset();
     await queryClient.invalidateQueries({ queryKey: machinesKey });
   };
+  const [machineKey, setMachineKey] = useState<string | null>(null);
+  const newKey = async (identity: string) => {
+    const { data, error } = await api.POST("/v1/orgs/{org}/projects/{slug}/machine-identities/{identity}/keys", {
+      params: { path: { ...params, identity } },
+      body: { days: 90 },
+    });
+    report(error);
+    setMachineKey(data?.key ?? null);
+  };
   const revokeMachine = async (identity: string) => {
     report(
       (await api.DELETE("/v1/orgs/{org}/projects/{slug}/machine-identities/{identity}", {
@@ -280,11 +289,19 @@ function Secrets() {
                   <span className="font-medium">{machine.name}</span>
                   <code className="text-xs">{machine.identity_id}</code>
                   <span className="text-muted-foreground">{machine.subject}</span>
+                  <Button size="sm" variant="ghost" onClick={() => void newKey(machine.identity_id)}>
+                    {t("secrets.newKey")}
+                  </Button>
                   <Button size="sm" variant="ghost" onClick={() => void revokeMachine(machine.identity_id)}>
                     {t("secrets.revoke")}
                   </Button>
                 </div>
               ))}
+            {machineKey && (
+              <p>
+                {t("secrets.keyOnce")} <code className="bg-muted rounded px-1 font-mono break-all">{machineKey}</code>
+              </p>
+            )}
             <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => void addMachine(event)}>
               <input className={input} name="name" required placeholder={t("secrets.name")} aria-label={t("secrets.name")} />
               <input className={input} name="issuer" required defaultValue="https://token.actions.githubusercontent.com" aria-label={t("secrets.issuer")} />

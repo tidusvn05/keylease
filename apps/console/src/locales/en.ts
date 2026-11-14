@@ -110,6 +110,8 @@ export const en = {
     subject: "Subject",
     addMachine: "Add",
     revoke: "Revoke",
+    newKey: "Access key",
+    keyOnce: "Access key for the External Secrets Operator (shown once, valid 90 days):",
     readOnly: "You can read these secrets but not change them.",
   },
   approvals: {

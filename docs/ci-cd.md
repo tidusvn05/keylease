@@ -22,11 +22,22 @@ it ends its tokens at once.
 ## 2. Use it in the job
 
 ```yaml
-# GitHub Actions
+# GitHub Actions: the action loads the secrets into the job's environment,
+# masked in the logs (needs only curl and jq, present on GitHub runners).
 permissions:
   id-token: write
   contents: read
 steps:
+  - uses: tidusvn05/keylease/actions/secrets@main   # pin a commit or tag
+    with:
+      server: https://vault.example.com/api
+      identity: mid_…
+  - run: ./deploy.sh        # DATABASE_URL etc. are in the environment
+```
+
+Or keep the secrets inside one command, scrubbed from its output:
+
+```yaml
   - run: cargo install --locked keylease
   - run: keylease ci run -- ./deploy.sh
     env:
@@ -53,3 +64,45 @@ keylease ci run --server … --identity mid_… --oidc-token-file /var/run/secre
 environment's secrets, runs the command with them as environment variables
 and scrubs their values (raw, base64 and percent-encoded) from its output.
 Every exchange and read is in the project's audit.
+
+
+## Kubernetes with the External Secrets Operator
+
+The operator's webhook provider cannot exchange OIDC tokens, so give it an
+**access key** of a machine identity (Console → Secrets → Machine identities →
+Key, or `POST …/machine-identities/{id}/keys` with `{"days": 90}`). The key is
+shown once, expires (1–365 days) and stops working when the identity is
+revoked.
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata: { name: keylease-key, namespace: shop }
+stringData: { key: klmk_… }
+---
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata: { name: keylease, namespace: shop }
+spec:
+  provider:
+    webhook:
+      url: "https://vault.example.com/api/v1/machine/secrets"
+      headers:
+        Authorization: "Bearer {{ .auth.key }}"
+      secrets:
+        - name: auth
+          secretRef: { name: keylease-key }
+      result:
+        jsonPath: "$.secrets.{{ .remoteRef.key }}"
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata: { name: shop, namespace: shop }
+spec:
+  refreshInterval: 1h
+  secretStoreRef: { name: keylease, kind: SecretStore }
+  target: { name: shop-env }
+  data:
+    - secretKey: DATABASE_URL
+      remoteRef: { key: DATABASE_URL }
+```
