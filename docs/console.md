@@ -6,10 +6,12 @@ account, its devices and passkeys; it never shows vault secrets.
 
 ## Server setting
 
-Set the URL browsers use, so passkeys can be bound to it:
+Set the URL browsers use to reach the server, including any path prefix of
+the reverse proxy (the compose setup serves it below `/api`). Passkeys are
+bound to its host:
 
 ```sh
-KEYLEASE_SERVER_PUBLIC_URL=https://vault.example.com
+KEYLEASE_SERVER_PUBLIC_URL=https://vault.example.com/api
 ```
 
 ## Signing in
@@ -33,3 +35,22 @@ pass `--console-url`.
 The console lists the owner device and every node. Revoking a node stops it
 from using the relay immediately; the owner device can only be replaced by
 recovering the account (`keylease cloud recover`).
+
+## Single sign-on
+
+With an OpenID Connect provider (Google Workspace, Microsoft Entra ID, Okta,
+Keycloak, …), set:
+
+```sh
+KEYLEASE_OIDC_ISSUER=https://accounts.example.com
+KEYLEASE_OIDC_CLIENT_ID=keylease-console
+KEYLEASE_OIDC_CLIENT_SECRET_FILE=/run/keylease-secrets/oidc_client_secret   # if the client has one
+KEYLEASE_OIDC_ALLOWED_DOMAINS=example.com                                   # optional
+```
+
+Register the redirect URI `$KEYLEASE_SERVER_PUBLIC_URL/v1/console/sso/callback`
+with the provider. The console then offers **Sign in with single sign-on**.
+An identity must be **linked** once, from a signed-in console (Passkeys →
+Link my single sign-on identity); an unlinked identity signs nobody in. The
+flow uses the authorization code with PKCE, `state` and `nonce`, and checks the
+ID token against the provider's keys.

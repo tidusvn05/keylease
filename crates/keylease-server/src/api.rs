@@ -53,6 +53,8 @@ pub struct CloudApiConfig {
     /// The KMS root key that wraps Managed projects' data keys (32 bytes).
     /// Without it, Managed projects are unavailable.
     pub kms_root_key: Option<[u8; 32]>,
+    /// Console single sign-on (OpenID Connect).
+    pub oidc: Option<crate::console_sso::ConsoleOidc>,
 }
 
 impl std::fmt::Debug for CloudApiConfig {
@@ -64,6 +66,7 @@ impl std::fmt::Debug for CloudApiConfig {
             .field("operations_status_file", &self.operations_status_file)
             .field("public_url", &self.public_url)
             .field("kms_root_key", &self.kms_root_key.map(|_| "[REDACTED]"))
+            .field("oidc", &self.oidc)
             .finish()
     }
 }
@@ -76,6 +79,7 @@ impl Default for CloudApiConfig {
             operations_status_file: None,
             public_url: None,
             kms_root_key: None,
+            oidc: None,
         }
     }
 }
@@ -89,6 +93,9 @@ pub struct CloudApiState {
     operations_status_file: Option<PathBuf>,
     pub(crate) console: crate::console::ConsoleConfig,
     pub(crate) kms: Option<Arc<keylease_crypto::SecretKey>>,
+    pub(crate) oidc: Option<crate::console_sso::ConsoleOidc>,
+    /// KEYLEASE_SERVER_PUBLIC_URL without a trailing slash.
+    pub(crate) public_url: Option<String>,
 }
 
 impl std::fmt::Debug for CloudApiState {
@@ -123,6 +130,11 @@ impl CloudApiState {
             kms: config
                 .kms_root_key
                 .map(|key| Arc::new(keylease_crypto::SecretKey::from_bytes(key))),
+            oidc: config.oidc,
+            public_url: config
+                .public_url
+                .as_deref()
+                .map(|url| url.trim_end_matches('/').to_owned()),
         })
     }
 }
@@ -257,6 +269,7 @@ pub fn router(state: CloudApiState) -> Router {
         .merge(crate::console_assets::router())
         .merge(crate::teams::router())
         .merge(crate::managed::router())
+        .merge(crate::console_sso::router())
         .layer(DefaultBodyLimit::max(maximum))
         .with_state(state)
 }

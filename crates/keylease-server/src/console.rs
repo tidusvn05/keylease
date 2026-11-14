@@ -148,7 +148,11 @@ pub(crate) async fn session(state: &CloudApiState, headers: &HeaderMap) -> ApiRe
 }
 
 /// Starts a session and returns the response that sets its cookie.
-async fn start_session(state: &CloudApiState, account_id: &str, via: &str) -> ApiResult<Response> {
+pub(crate) async fn start_session(
+    state: &CloudApiState,
+    account_id: &str,
+    via: &str,
+) -> ApiResult<Response> {
     let token = URL_SAFE_NO_PAD.encode(random_bytes());
     let expires_at = Utc::now() + Duration::hours(SESSION_HOURS);
     sqlx::query(

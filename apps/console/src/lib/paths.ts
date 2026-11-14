@@ -16,3 +16,8 @@ export function loginToken(hash: string = window.location.hash): string | null {
   const match = /^#login=([A-Za-z0-9_-]{16,128})$/.exec(hash);
   return match?.[1] ?? null;
 }
+
+/** The URL that starts single sign-on (`link` links the identity to this account). */
+export function ssoStartUrl(link = false): string {
+  return `${apiPrefix()}/v1/console/sso/start${link ? "?link=1" : ""}`;
+}

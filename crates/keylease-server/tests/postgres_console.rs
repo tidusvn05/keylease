@@ -81,6 +81,7 @@ async fn console_sign_in_by_device_link_and_passkey() {
                 operations_status_file: None,
                 public_url: Some(ORIGIN.into()),
                 kms_root_key: None,
+                oidc: None,
             },
         )
         .unwrap(),

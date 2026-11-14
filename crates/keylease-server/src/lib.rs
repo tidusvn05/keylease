@@ -3,6 +3,7 @@
 mod api;
 mod console;
 mod console_assets;
+mod console_sso;
 mod enterprise;
 mod enterprise_api;
 mod managed;
@@ -14,6 +15,7 @@ mod teams;
 mod webauthn;
 
 pub use api::{CloudApiConfig, CloudApiState, router};
+pub use console_sso::ConsoleOidc;
 pub use enterprise::{AuditExportBatch, ScimTokenSecret};
 pub use siem::SiemExporter;
 pub use store::{

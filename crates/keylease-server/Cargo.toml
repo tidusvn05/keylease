@@ -41,6 +41,7 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "std"] }
 http-body-util = "0.1"
 tempfile.workspace = true
 

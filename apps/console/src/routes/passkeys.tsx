@@ -6,7 +6,8 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api/client";
-import { meQuery, passkeysQuery } from "@/lib/queries";
+import { ssoStartUrl } from "@/lib/paths";
+import { meQuery, passkeysQuery, ssoQuery } from "@/lib/queries";
 import { registerPasskey } from "@/lib/session";
 
 export const Route = createFileRoute("/passkeys")({
@@ -19,6 +20,17 @@ function Passkeys() {
   const { data: me } = useQuery(meQuery);
   const { data: passkeys = [] } = useQuery(passkeysQuery);
   const [failed, setFailed] = useState(false);
+  const { data: sso } = useQuery(ssoQuery);
+  const { data: identities = [] } = useQuery({
+    queryKey: ["sso-identities"],
+    enabled: sso?.enabled === true,
+    queryFn: async () => (await api.GET("/v1/console/sso/identities")).data?.identities ?? [],
+  });
+  const unlink = useMutation({
+    mutationFn: (subject: string) =>
+      api.DELETE("/v1/console/sso/identities/{subject}", { params: { path: { subject } } }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["sso-identities"] }),
+  });
   const refresh = () =>
     Promise.all([
       queryClient.invalidateQueries({ queryKey: ["passkeys"] }),
@@ -82,6 +94,23 @@ function Passkeys() {
           </Card>
         ))}
       </div>
+      {sso?.enabled && (
+        <div className="space-y-2">
+          <h2 className="text-lg font-semibold">{t("passkeys.sso")}</h2>
+          {identities.length === 0 && <p className="text-muted-foreground text-sm">{t("passkeys.ssoNone")}</p>}
+          {identities.map((identity) => (
+            <div key={identity.subject} className="flex items-center gap-2 text-sm">
+              <span>{identity.email ?? identity.subject}</span>
+              <Button size="sm" variant="ghost" onClick={() => unlink.mutate(identity.subject)}>
+                {t("passkeys.ssoUnlink")}
+              </Button>
+            </div>
+          ))}
+          <Button asChild variant="outline">
+            <a href={ssoStartUrl(true)}>{t("passkeys.ssoLink")}</a>
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,15 +1,18 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyRound } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { loginToken } from "@/lib/paths";
+import { loginToken, ssoStartUrl } from "@/lib/paths";
+import { ssoQuery } from "@/lib/queries";
 import { exchangeLoginToken, signInWithPasskey } from "@/lib/session";
 
 export function SignIn() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const { data: sso } = useQuery(ssoQuery);
+  const [unlinked] = useState(() => window.location.hash === "#sso=unlinked");
   const [state, setState] = useState<"idle" | "busy" | "failed">(
     loginToken() === null ? "idle" : "busy",
   );
@@ -48,6 +51,16 @@ export function SignIn() {
             <KeyRound className="size-4" aria-hidden />
             {state === "busy" ? t("signIn.signingIn") : t("signIn.passkey")}
           </Button>
+          {sso?.enabled && (
+            <Button asChild variant="outline" className="w-full">
+              <a href={ssoStartUrl()}>{t("signIn.sso")}</a>
+            </Button>
+          )}
+          {unlinked && (
+            <p role="alert" className="text-sm">
+              {t("signIn.ssoUnlinked")}
+            </p>
+          )}
           {state === "failed" && (
             <p role="alert" className="text-destructive text-sm">
               {t("signIn.failed")}
