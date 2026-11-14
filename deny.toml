@@ -12,6 +12,9 @@ ignore = [
     # crypto-bigint 0.5 through ssh-key 0.6 (p256/p384). Fixed in 0.7, which
     # ssh-key only uses in its 0.7 release candidates.
     { id = "RUSTSEC-2026-0387", reason = "fixed only in ssh-key 0.7 RCs; ECDSA host keys are rarely vault keys" },
+    # basic-toml is unmaintained (not vulnerable). age pulls it in through
+    # i18n-config, which only parses age's own embedded i18n.toml at build time.
+    { id = "RUSTSEC-2026-0374", reason = "unmaintained, not vulnerable; build-time parse of age's own i18n config" },
 ]
 
 [licenses]

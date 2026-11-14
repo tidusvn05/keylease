@@ -122,6 +122,7 @@ Guides: [agent approvals and trust](docs/agent-approvals.md) ·
 [SSH agent](docs/ssh-agent.md) · [PostgreSQL proxy](docs/db-proxy.md) ·
 [`keylease run`](docs/run-with-secrets.md) ·
 [projects, environments and the Personal area](docs/projects-and-environments.md) ·
+[Mac ↔ VPS bundles, `.env` and CSV import](docs/node-bundles.md) ·
 [remote approval for a VPS](docs/remote-approval.md) ·
 [cloud sharing, backup and recovery](docs/cloud-sharing.md) ·
 [multiple vaults](docs/multi-vault.md).

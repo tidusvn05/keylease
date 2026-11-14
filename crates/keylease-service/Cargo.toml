@@ -36,6 +36,7 @@ rsa = { version = "0.9", features = ["sha2"] }
 signature = "2"
 hmac.workspace = true
 pbkdf2 = "0.12"
+age = { version = "0.12.1", features = ["armor"] }
 
 [dev-dependencies]
 tempfile.workspace = true

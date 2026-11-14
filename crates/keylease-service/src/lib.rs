@@ -34,6 +34,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 mod authorize;
 mod backup;
+mod bundle;
 pub mod client_key;
 mod cloud;
 mod connections;
@@ -50,8 +51,13 @@ mod remote_mcp;
 mod ssh;
 #[cfg(test)]
 mod tests;
+mod text_import;
 mod trust;
 mod vault;
+pub use bundle::{
+    BUNDLE_EXTENSION, BUNDLE_FORMAT, BundleImportReport, BundlePreview, BundleSelection,
+    NodeIdentity,
+};
 pub use cloud::{
     CloudLink, CloudNode, CloudRole, CloudShare, CloudShareRequest, CloudStatus, InboxOutcome,
     InviteSetup, OwnerSetup, PendingBackup, RelaySignature, RequestStatus, RestoreReport,
@@ -72,6 +78,7 @@ pub use ssh::{
     DEFAULT_CERT_TTL_SECONDS, MAX_CERT_TTL_SECONDS, MAX_SESSION_BINDS, SSH_AGENT_RSA_SHA2_256,
     SSH_AGENT_RSA_SHA2_512, SshCertificate, SshIdentity, SshSessionBind, SshSignature,
 };
+pub use text_import::{TextImportReport, parse_dotenv};
 pub use trust::{ApprovalDecisionOutcome, EnrolledAgent};
 use trust::{VAULT_CONNECTION_ID, project_alias, vault_action_risk};
 

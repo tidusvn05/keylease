@@ -1221,6 +1221,13 @@ pub(crate) fn refuse_shared_copy(item: &VaultItem) -> Result<()> {
                     .into(),
         });
     }
+    if item.extensions.contains_key(bundle::BUNDLE_EXTENSION) {
+        return Err(KeyLeaseError::Denied {
+            reason: "this item was imported read-only from another node; change it there and \
+                     export it again"
+                .into(),
+        });
+    }
     Ok(())
 }
 

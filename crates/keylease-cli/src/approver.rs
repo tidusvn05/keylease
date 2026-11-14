@@ -191,7 +191,7 @@ async fn unlock_setup(
 ) -> ApiResult<Value> {
     let device = signed_device(&service, &method, &uri, &headers, &body)?;
     let secret = service.remote_unlock_setup(&device)?;
-    Ok(Json(json!({"secret": STANDARD.encode(secret.as_ref())})))
+    Ok(Json(json!({"secret": STANDARD.encode(&secret[..])})))
 }
 
 async fn unlock(
@@ -499,7 +499,7 @@ pub(crate) async fn remote_command(cli: &Cli, command: RemoteCommand) -> Result<
                 .mode(0o600)
                 .open(&key_path)
                 .map_err(|_| KeyLeaseError::Storage)?;
-            file.write_all(STANDARD.encode(seed.as_ref()).as_bytes())
+            file.write_all(STANDARD.encode(&seed[..]).as_bytes())
                 .and_then(|()| file.sync_all())
                 .map_err(|_| KeyLeaseError::Storage)?;
             write_atomic(

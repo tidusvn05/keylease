@@ -1998,3 +1998,252 @@ fn named_references_resolve_to_project_items() {
         Err(KeyLeaseError::NotFound { .. })
     ));
 }
+
+fn bare_vault() -> (tempfile::TempDir, KeyLeaseService) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(NativeStore::open(dir.path().join("vault.sqlite")).unwrap());
+    let service = KeyLeaseService::new(store).unwrap();
+    service.initialize(b"password", Duration::hours(1)).unwrap();
+    (dir, service)
+}
+
+#[test]
+fn bundles_move_a_project_between_nodes_and_keep_it_in_sync() {
+    let (_mac_dir, mac, owner, agent) = service_with_owner();
+    let (_vps_dir, vps) = bare_vault();
+    let (_other_dir, other) = bare_vault();
+    let group = mac.create_group("Servers", None).unwrap();
+    mac.create_project_agent(&owner, "shop", None, "project-shop")
+        .unwrap();
+    let mut input = login_input(&group, "Postgres");
+    input.project_slug = Some("shop".into());
+    input.environment = Some("production".into());
+    input.password = Some("db-password-1".into());
+    let item = mac.create_entry(&agent, input, "pg", false).unwrap();
+    let mut personal = login_input(&group, "Bank");
+    personal.personal = true;
+    personal.project_slug = Some("shop".into());
+    mac.create_entry(&owner, personal, "bank", false).unwrap();
+
+    let vps_id = vps.node_identity().unwrap();
+    assert!(vps_id.node_id.starts_with("age1"));
+    assert_eq!(
+        vps.node_identity().unwrap(),
+        vps_id,
+        "the identity is stable"
+    );
+    let selection = BundleSelection {
+        project_slug: Some("shop".into()),
+        item_ids: vec![],
+    };
+    let bundle = mac
+        .export_bundle(&vps_id.node_id, &selection, Some("mac"))
+        .unwrap();
+    assert!(bundle.starts_with("-----BEGIN AGE ENCRYPTED FILE-----"));
+    assert!(!bundle.contains("db-password-1"));
+
+    // Another node cannot open it.
+    assert!(other.import_bundle(&bundle, None, false).is_err());
+    // A first-time sender must be confirmed by fingerprint.
+    let preview = vps.preview_bundle(&bundle).unwrap();
+    assert!(!preview.known_sender);
+    assert_eq!(
+        preview.items,
+        vec!["Postgres".to_string()],
+        "personal items stay home"
+    );
+    assert!(vps.import_bundle(&bundle, None, false).is_err());
+    assert!(vps.import_bundle(&bundle, Some("00:11"), false).is_err());
+    let report = vps
+        .import_bundle(&bundle, Some(&preview.sender_fingerprint), false)
+        .unwrap();
+    assert_eq!((report.created, report.updated), (1, 0));
+    assert_eq!(report.projects_created, vec!["shop".to_string()]);
+    let (imported_id, environment) = vps
+        .with_vault(|vault| {
+            let items = vps.store.list_items(vault)?;
+            let project = vps.store.list_projects(vault)?.remove(0);
+            assert_eq!(
+                project.environment("production").map(|e| e.protected),
+                Some(true)
+            );
+            let item = items
+                .into_iter()
+                .find(|item| item.title == "Postgres")
+                .unwrap();
+            assert_eq!(item.project_id.as_ref(), Some(&project.id));
+            Ok((item.id, item.environment))
+        })
+        .unwrap();
+    assert_eq!(environment.as_deref(), Some("production"));
+    assert_eq!(
+        vps.reveal_field_for_human(&imported_id, "password")
+            .unwrap(),
+        "db-password-1"
+    );
+    // Read-only: edits are refused on the receiving node.
+    let (vps_agent, vps_token) = vps.register_client("vps-agent").unwrap();
+    let vps_actor = vps.authenticate(&vps_agent, &vps_token, "s").unwrap();
+    assert!(matches!(
+        vps.update_entry(
+            &vps_actor,
+            &imported_id,
+            EntryPatch {
+                title: Some("x".into()),
+                ..Default::default()
+            },
+            1,
+            "edit",
+            false
+        ),
+        Err(KeyLeaseError::Denied { .. })
+    ));
+
+    // The same bundle again changes nothing; a newer revision updates in place.
+    assert_eq!(
+        vps.import_bundle(&bundle, None, false).unwrap().unchanged,
+        1
+    );
+    mac.update_entry(
+        &agent,
+        &item.id,
+        EntryPatch {
+            password: Some("db-password-2".into()),
+            ..Default::default()
+        },
+        item.revision,
+        "rotate",
+        false,
+    )
+    .unwrap();
+    let newer = mac
+        .export_bundle(&vps_id.node_id, &selection, None)
+        .unwrap();
+    let report = vps.import_bundle(&newer, None, false).unwrap();
+    assert_eq!((report.created, report.updated), (0, 1));
+    assert_eq!(
+        vps.reveal_field_for_human(&imported_id, "password")
+            .unwrap(),
+        "db-password-2"
+    );
+    // Editable imports are independent copies.
+    let copy = vps.import_bundle(&newer, None, true).unwrap();
+    assert_eq!(copy.created, 1);
+}
+
+#[test]
+fn a_bundle_is_a_standard_age_file() {
+    if std::process::Command::new("age")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: the age CLI is not installed");
+        return;
+    }
+    let (_mac_dir, mac, owner, agent) = service_with_owner();
+    let (dir, vps) = bare_vault();
+    let group = mac.create_group("Servers", None).unwrap();
+    mac.create_project_agent(&owner, "shop", None, "project-shop")
+        .unwrap();
+    let mut input = login_input(&group, "API");
+    input.project_slug = Some("shop".into());
+    mac.create_entry(&agent, input, "api", false).unwrap();
+    let node = vps.node_identity().unwrap();
+    let bundle = mac
+        .export_bundle(
+            &node.node_id,
+            &BundleSelection {
+                project_slug: Some("shop".into()),
+                item_ids: vec![],
+            },
+            None,
+        )
+        .unwrap();
+    let identity_file = dir.path().join("identity.txt");
+    let secret = vps
+        .with_vault(|vault| Ok(vps.bundle_keys(vault)?.0.to_string()))
+        .unwrap();
+    use age::secrecy::ExposeSecret;
+    std::fs::write(&identity_file, secret.expose_secret()).unwrap();
+    let bundle_file = dir.path().join("bundle.age");
+    std::fs::write(&bundle_file, &bundle).unwrap();
+    let output = std::process::Command::new("age")
+        .arg("-d")
+        .arg("-i")
+        .arg(&identity_file)
+        .arg(&bundle_file)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let plaintext: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(plaintext["format"], BUNDLE_FORMAT);
+}
+
+#[test]
+fn env_files_and_csv_exports_import_as_items() {
+    let (_dir, service, owner, agent) = service_with_owner();
+    service
+        .create_project_agent(&owner, "shop", None, "project-shop")
+        .unwrap();
+    let item = service
+        .import_env_file(
+            "DATABASE_URL=postgres://u:p@db/shop\nexport STRIPE_KEY=\"sk_live_1\"\n",
+            "shop",
+            Some("production"),
+            ".env.production",
+            "/srv/shop/.env.production",
+        )
+        .unwrap();
+    assert_eq!(item.kind, "core.environment");
+    assert_eq!(item.environment.as_deref(), Some("production"));
+    assert!(
+        service
+            .import_env_file("A=1", "shop", Some("qa"), "x", "x")
+            .is_err()
+    );
+    let vault = service
+        .with_vault(|vault| Ok(vault.vault_id.0.clone()))
+        .unwrap();
+    grant(
+        &service,
+        &agent,
+        "entry:inject_secret",
+        format!("kl://{vault}"),
+    );
+    let values = service
+        .inject_fields_authorized(
+            &agent,
+            "env",
+            &[],
+            &[InjectRequest {
+                item_id: ItemId("ref:shop/production/.env.production".into()),
+                field: "STRIPE_KEY".into(),
+            }],
+        )
+        .unwrap();
+    assert_eq!(values, vec!["sk_live_1".to_string()]);
+
+    let report = service
+        .import_logins_csv(
+            "name,url,username,password,note\nBank,https://bank.example,me,pw1,\n,https://mail.example,me2,pw2,hi\nEmpty,,,,\n",
+            "Imported",
+        )
+        .unwrap();
+    assert_eq!((report.created, report.skipped), (2, 1));
+    let titles: Vec<String> = service
+        .search_entries(&owner, "")
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.personal)
+        .map(|item| item.title)
+        .collect();
+    assert!(titles.contains(&"Bank".to_string()));
+    assert!(titles.contains(&"mail.example".to_string()), "{titles:?}");
+    // Imported logins are personal: invisible to agents.
+    assert!(service.search_entries(&agent, "Bank").unwrap().is_empty());
+}

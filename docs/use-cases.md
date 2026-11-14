@@ -83,16 +83,19 @@ vault lives there too. Mode A of ADR 0005.
    The daemon accepts connections only from the Unix user that owns the
    vault, so run the daemon and the agents as the same user (here `deployer`).
 2. Create the vault and fill it. Typing secrets on the server is optional:
-   export from your Mac vault (`keylease vault export-kdbx`) and import, after
-   reading the migration report:
+   send a project from your Mac as an encrypted bundle you paste on the VPS
+   ([node-bundles.md](node-bundles.md)):
 
    ```sh
-   keylease vault init                                   # ~/.keylease/keylease.sqlite
-   keylease vault import-kdbx vps.kdbx                   # preview
-   keylease vault import-kdbx vps.kdbx --commit
+   keylease vault init                                   # VPS: ~/.keylease/keylease.sqlite
+   keylease node init                                    # VPS: prints its node ID (age1…)
+   keylease export --to age1… --project shop > shop.bundle   # Mac
+   keylease import shop.bundle --trust-sender FINGERPRINT     # VPS, first time
    ```
 
-   Or share items from your laptop through a cloud ([cloud-sharing.md](cloud-sharing.md)).
+   Or export a KDBX file from the Mac (`keylease vault export-kdbx`) and
+   `keylease vault import-kdbx`, or share items through a cloud
+   ([cloud-sharing.md](cloud-sharing.md)).
 
 3. Run the daemon under systemd, unlocked at boot with a host-sealed credential
    ([details](agent-approvals.md#unlocking-after-a-reboot)):
