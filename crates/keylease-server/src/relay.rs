@@ -54,20 +54,20 @@ pub(crate) fn router() -> Router<CloudApiState> {
         .route("/v1/relay/backups", put(put_backup).get(list_backups))
 }
 
-fn invalid(reason: impl Into<String>) -> ApiError {
+pub(crate) fn invalid(reason: impl Into<String>) -> ApiError {
     ApiError(KeyLeaseError::InvalidRequest {
         reason: reason.into(),
     })
 }
-fn denied(reason: impl Into<String>) -> ApiError {
+pub(crate) fn denied(reason: impl Into<String>) -> ApiError {
     ApiError(KeyLeaseError::Denied {
         reason: reason.into(),
     })
 }
-fn storage(_: sqlx::Error) -> ApiError {
+pub(crate) fn storage(_: sqlx::Error) -> ApiError {
     ApiError(KeyLeaseError::Storage)
 }
-fn parse<T: DeserializeOwned>(body: &[u8]) -> ApiResult<T> {
+pub(crate) fn parse<T: DeserializeOwned>(body: &[u8]) -> ApiResult<T> {
     serde_json::from_slice(body).map_err(|_| invalid("malformed relay request"))
 }
 
@@ -104,10 +104,10 @@ fn valid_tag(value: &str) -> bool {
 }
 
 /// The authenticated member of a signed request.
-struct Caller {
-    member_id: String,
-    account_id: String,
-    role: RelayRole,
+pub(crate) struct Caller {
+    pub(crate) member_id: String,
+    pub(crate) account_id: String,
+    pub(crate) role: RelayRole,
 }
 
 fn role_of(value: &str) -> RelayRole {
@@ -118,7 +118,7 @@ fn role_of(value: &str) -> RelayRole {
     }
 }
 
-async fn verify(
+pub(crate) async fn verify(
     state: &CloudApiState,
     method: &Method,
     uri: &OriginalUri,

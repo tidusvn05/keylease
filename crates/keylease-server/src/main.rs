@@ -51,6 +51,9 @@ async fn main() -> Result<()> {
                 .ok()
                 .filter(|value| !value.is_empty())
                 .map(Into::into),
+            public_url: env::var("KEYLEASE_SERVER_PUBLIC_URL")
+                .ok()
+                .filter(|value| !value.is_empty()),
         },
     )
     .map_err(|error| anyhow::anyhow!(error.to_string()))?;
