@@ -126,7 +126,7 @@ Details: [agent approvals and trust](agent-approvals.md).
 | `crates/keylease-core` | Domain, request, identity, trust and audit contracts |
 | `crates/keylease-crypto`, `keylease-store` | Envelope encryption, SQLite ciphertext store, journals |
 | `crates/keylease-policy` | Deny-by-default rules and approvals |
-| `crates/keylease-service` | The only orchestration layer: vault, policy, trust, SSH signing, SCRAM, injection, remote approvers |
+| `crates/keylease-service` | The only orchestration layer. Modules: `identity` (unlock, sessions, clients), `vault` (items, content, history), `connections`, `backup` (import/export), `leases` (requests, approvals, execution), `authorize` + `trust` (policy, approvals, time-boxed trust), `ssh`, `db` (SCRAM), `inject`, `remote` (paired approvers), `remote_mcp` (OAuth), `cloud` (relay) |
 | `crates/keylease-rpc` | The local RPC contract (frozen by `test-vectors/rpc/commands.json`) |
 | `crates/keylease-cli` | `keylease` CLI, daemon, brokers (`ssh`, `db`, `run`), MCP server (`mcp.rs`), remote MCP server HTTP + OAuth (`remote_mcp.rs`), approver HTTP API, cloud commands and sync loop (`cloud.rs`) |
 | `crates/keylease-mcp` | Streamable HTTP MCP adapter over the service (connector actions) |
