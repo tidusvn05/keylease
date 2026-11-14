@@ -2075,7 +2075,7 @@ dependencies = [
 
 [[package]]
 name = "keylease"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -2114,7 +2114,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-1pux"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2128,7 +2128,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-connector-sdk"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2149,7 +2149,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-connectors"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2166,7 +2166,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "schemars",
@@ -2180,7 +2180,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-credentials"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2206,7 +2206,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-crypto"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -2225,7 +2225,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-edge"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2259,7 +2259,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-kdbx"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "keepass",
@@ -2274,7 +2274,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-mcp"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "axum",
  "keylease-core",
@@ -2292,7 +2292,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-mobile"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "jni",
@@ -2308,7 +2308,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-policy"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "keylease-core",
@@ -2320,7 +2320,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-protocol"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2338,7 +2338,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-rpc"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2355,7 +2355,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-server"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2394,7 +2394,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-service"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "age",
  "base64 0.22.1",
@@ -2429,7 +2429,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-store"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2447,7 +2447,7 @@ dependencies = [
 
 [[package]]
 name = "keylease-sync"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "keylease-core",

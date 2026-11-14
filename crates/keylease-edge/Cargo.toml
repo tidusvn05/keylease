@@ -13,15 +13,15 @@ axum.workspace = true
 base64.workspace = true
 chrono.workspace = true
 chacha20poly1305.workspace = true
-keylease-core = { path = "../keylease-core", version = "0.2.1" }
-keylease-service = { path = "../keylease-service", version = "0.2.1" }
-keylease-store = { path = "../keylease-store", version = "0.2.1" }
-keylease-protocol = { path = "../keylease-protocol", version = "0.2.1" }
-keylease-connector-sdk = { path = "../keylease-connector-sdk", version = "0.2.1" }
-keylease-connectors = { path = "../keylease-connectors", version = "0.2.1" }
-keylease-credentials = { path = "../keylease-credentials", version = "0.2.1" }
-keylease-mcp = { path = "../keylease-mcp", version = "0.2.1" }
-keylease-policy = { path = "../keylease-policy", version = "0.2.1" }
+keylease-core = { path = "../keylease-core", version = "0.3.0" }
+keylease-service = { path = "../keylease-service", version = "0.3.0" }
+keylease-store = { path = "../keylease-store", version = "0.3.0" }
+keylease-protocol = { path = "../keylease-protocol", version = "0.3.0" }
+keylease-connector-sdk = { path = "../keylease-connector-sdk", version = "0.3.0" }
+keylease-connectors = { path = "../keylease-connectors", version = "0.3.0" }
+keylease-credentials = { path = "../keylease-credentials", version = "0.3.0" }
+keylease-mcp = { path = "../keylease-mcp", version = "0.3.0" }
+keylease-policy = { path = "../keylease-policy", version = "0.3.0" }
 rand.workspace = true
 reqwest.workspace = true
 rusqlite.workspace = true
