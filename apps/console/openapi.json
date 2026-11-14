@@ -866,7 +866,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/SecretWrite"
                 }
               }
             }
@@ -1096,6 +1096,94 @@
             }
           }
         ]
+      }
+    },
+    "/v1/orgs/{org}/projects/{slug}/change-requests": {
+      "get": {
+        "operationId": "changeRequests",
+        "summary": "Pending change requests",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeRequestList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orgs/{org}/projects/{slug}/change-requests/{request}/{decision}": {
+      "post": {
+        "operationId": "decideChangeRequest",
+        "summary": "Approve or reject",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "request",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "decision",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -1506,6 +1594,68 @@
                   "type": "string"
                 },
                 "created_at": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "SecretWrite": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "change_request_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ChangeRequestList": {
+        "type": "object",
+        "required": [
+          "change_requests"
+        ],
+        "properties": {
+          "change_requests": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "change_request_id",
+                "environment",
+                "name",
+                "action",
+                "requested_by",
+                "requested_at"
+              ],
+              "properties": {
+                "change_request_id": {
+                  "type": "string"
+                },
+                "environment": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string"
+                },
+                "restore_version": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "requested_by": {
+                  "type": "string"
+                },
+                "requested_at": {
                   "type": "string"
                 }
               }

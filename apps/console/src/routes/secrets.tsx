@@ -44,9 +44,32 @@ function Secrets() {
   const [shown, setShown] = useState<Record<string, string>>({});
   const [history, setHistory] = useState<{ name: string; versions: { version: number; deleted: boolean; created_at: string }[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const changesKey = ["changes", search.org, search.project];
+  const { data: changes = [] } = useQuery({
+    queryKey: changesKey,
+    enabled: project?.my_role === "write" || project?.my_role === "admin",
+    queryFn: async () => {
+      const { data } = await api.GET("/v1/orgs/{org}/projects/{slug}/change-requests", { params: { path: params } });
+      return data?.change_requests ?? [];
+    },
+  });
   const writable = project?.my_role === "write" || project?.my_role === "admin";
   const path = (name: string) => ({ path: { ...params, environment, name } });
-  const refresh = () => queryClient.invalidateQueries({ queryKey: listKey });
+  const refresh = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: listKey }),
+      queryClient.invalidateQueries({ queryKey: changesKey }),
+    ]);
+  const decide = async (request: string, decision: "approve" | "reject") => {
+    const { error } = await api.POST("/v1/orgs/{org}/projects/{slug}/change-requests/{request}/{decision}", {
+      params: { path: { ...params, request, decision } },
+    });
+    report(error);
+    await refresh();
+  };
+  const memberName = (account: string) =>
+    org?.members.find((member) => member.account_id === account)?.display_name ?? account;
   const report = (failure: unknown) => setError(failure ? JSON.stringify(failure) : null);
 
   const reveal = async (name: string) => {
@@ -64,11 +87,12 @@ function Secrets() {
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
-    const { error } = await api.PUT("/v1/orgs/{org}/projects/{slug}/secrets/{environment}/{name}", {
+    const { data: written, error } = await api.PUT("/v1/orgs/{org}/projects/{slug}/secrets/{environment}/{name}", {
       params: path(String(data.get("name"))),
       body: { value: String(data.get("value")) },
     });
     report(error);
+    setNotice(written?.status === "pending" ? t("secrets.pending") : null);
     if (!error) form.reset();
     await refresh();
   };
@@ -127,6 +151,42 @@ function Secrets() {
         </p>
       )}
       {!writable && <p className="text-muted-foreground text-sm">{t("secrets.readOnly")}</p>}
+      {notice && (
+        <p role="status" className="text-sm">
+          {notice}
+        </p>
+      )}
+      {changes.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">{t("secrets.changeRequests")}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="space-y-2 text-sm">
+              {changes.map((change) => (
+                <li key={change.change_request_id} className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline">{change.environment}</Badge>
+                  <span className="font-mono">{change.name}</span>
+                  <span>{change.action}</span>
+                  <span className="text-muted-foreground">
+                    {t("secrets.requestedBy", { name: memberName(change.requested_by) })}
+                  </span>
+                  {project.my_role === "admin" && (
+                    <>
+                      <Button size="sm" onClick={() => void decide(change.change_request_id, "approve")}>
+                        {t("secrets.approve")}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => void decide(change.change_request_id, "reject")}>
+                        {t("secrets.reject")}
+                      </Button>
+                    </>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
       <Table>
         <TableHeader>
           <TableRow>

@@ -53,3 +53,13 @@ with the project's data key, which the root key wraps
 head -c 32 /dev/urandom | base64 | tr -d '=' > kms_root_key && chmod 600 kms_root_key
 KEYLEASE_KMS_ROOT_KEY_FILE=/run/keylease-secrets/kms_root_key
 ```
+
+## Change requests in protected environments
+
+In a protected environment (production by default), a change by someone who
+is not a project admin (set, delete or restore) does not apply at once: it
+becomes a **change request**, shown on the Secrets page as "Waiting for
+approval". Another project admin approves it (the change is then recorded as
+the requester's) or rejects it. Nobody approves their own change, and
+project admins change protected environments directly. Proposals, approvals
+and rejections are in the project's audit.
