@@ -501,6 +501,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/orgs/{org}/projects/{slug}/machine-identities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Machine identities */
+        get: operations["machineIdentities"];
+        put?: never;
+        /** Create a machine identity */
+        post: operations["createMachineIdentity"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/orgs/{org}/projects/{slug}/machine-identities/{identity}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke */
+        delete: operations["revokeMachineIdentity"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1444,6 +1479,96 @@ export interface operations {
             header?: never;
             path: {
                 subject: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    machineIdentities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        identities: {
+                            identity_id: string;
+                            name: string;
+                            environment: string;
+                            issuer: string;
+                            audience: string;
+                            subject: string;
+                            created_at?: string;
+                        }[];
+                    };
+                };
+            };
+        };
+    };
+    createMachineIdentity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                    environment: string;
+                    issuer: string;
+                    audience: string;
+                    subject: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    revokeMachineIdentity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                slug: string;
+                identity: string;
             };
             cookie?: never;
         };

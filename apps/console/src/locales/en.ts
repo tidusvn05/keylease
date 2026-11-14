@@ -103,6 +103,13 @@ export const en = {
     approve: "Approve",
     reject: "Reject",
     requestedBy: "by {{name}}",
+    machines: "Machine identities (CI/CD)",
+    machinesHelp: "A CI job proves who it is with its platform's OIDC token and reads this environment. See docs/ci-cd.md.",
+    issuer: "Issuer",
+    audience: "Audience",
+    subject: "Subject",
+    addMachine: "Add",
+    revoke: "Revoke",
     readOnly: "You can read these secrets but not change them.",
   },
   approvals: {

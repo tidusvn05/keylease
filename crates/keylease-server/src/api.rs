@@ -270,6 +270,7 @@ pub fn router(state: CloudApiState) -> Router {
         .merge(crate::teams::router())
         .merge(crate::managed::router())
         .merge(crate::console_sso::router())
+        .merge(crate::machine::router())
         .layer(DefaultBodyLimit::max(maximum))
         .with_state(state)
 }

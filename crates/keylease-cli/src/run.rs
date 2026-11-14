@@ -235,7 +235,7 @@ pub(crate) fn scrub(buffer: &[u8], patterns: &[Zeroizing<Vec<u8>>]) -> Vec<u8> {
 }
 
 /// Copies a child stream to `sink`, scrubbing matches that span reads.
-async fn pump<R: AsyncRead + Unpin, W: std::io::Write>(
+pub(crate) async fn pump<R: AsyncRead + Unpin, W: std::io::Write>(
     mut source: R,
     mut sink: W,
     patterns: std::sync::Arc<Vec<Zeroizing<Vec<u8>>>>,

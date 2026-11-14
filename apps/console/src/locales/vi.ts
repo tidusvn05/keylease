@@ -105,6 +105,13 @@ export const vi: Messages = {
     approve: "Duyệt",
     reject: "Từ chối",
     requestedBy: "bởi {{name}}",
+    machines: "Machine identity (CI/CD)",
+    machinesHelp: "Job CI chứng minh danh tính bằng OIDC token của nền tảng và đọc environment này. Xem docs/ci-cd.md.",
+    issuer: "Issuer",
+    audience: "Audience",
+    subject: "Subject",
+    addMachine: "Thêm",
+    revoke: "Thu hồi",
     readOnly: "Bạn được đọc nhưng không được sửa các secret này.",
   },
   approvals: {

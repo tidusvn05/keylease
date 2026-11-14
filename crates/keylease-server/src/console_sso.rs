@@ -76,7 +76,7 @@ fn random_token() -> String {
 }
 
 /// https, or http to a loopback host (local providers and tests).
-fn allowed_url(url: &str) -> bool {
+pub(crate) fn allowed_url(url: &str) -> bool {
     let Ok(parsed) = url::Url::parse(url) else {
         return false;
     };
@@ -99,7 +99,7 @@ fn public_base(state: &CloudApiState) -> ApiResult<String> {
         .ok_or_else(|| invalid("single sign-on needs KEYLEASE_SERVER_PUBLIC_URL"))
 }
 
-fn http() -> ApiResult<reqwest::Client> {
+pub(crate) fn http() -> ApiResult<reqwest::Client> {
     reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(5))
         .timeout(std::time::Duration::from_secs(10))
@@ -108,7 +108,7 @@ fn http() -> ApiResult<reqwest::Client> {
         .map_err(|_| ApiError(KeyLeaseError::Storage))
 }
 
-async fn fetch_json(
+pub(crate) async fn fetch_json(
     client: &reqwest::Client,
     request: reqwest::RequestBuilder,
 ) -> ApiResult<Value> {
