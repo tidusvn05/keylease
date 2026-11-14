@@ -23,7 +23,7 @@ describe("ServerStatus", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
-        Response.json({ ok: true, service: "keylease-cloud", contract_version: "1" }),
+        Response.json({ ok: true, service: "keylease-server", contract_version: "1" }),
       ),
     );
     renderStatus();

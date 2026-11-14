@@ -43,38 +43,37 @@ async fn main() -> Result<()> {
         .json()
         .init();
 
-    if required_env("LEASEGATE_DEPLOYMENT_MODE")? != "self_hosted"
-        || required_env("LEASEGATE_EXECUTION_MODE")? != "local_gateway"
+    if required_env("KEYLEASE_DEPLOYMENT_MODE")? != "self_hosted"
+        || required_env("KEYLEASE_EXECUTION_MODE")? != "local_gateway"
     {
         bail!("this binary only supports self_hosted/local_gateway execution")
     }
 
-    let edge_id = EdgeId(required_env("LEASEGATE_EDGE_ID")?);
-    let organization_id = OrganizationId(required_env("LEASEGATE_ORGANIZATION_ID")?);
-    let project_id = ProjectId(required_env("LEASEGATE_PROJECT_ID")?);
-    let agent_id = AgentId(required_env("LEASEGATE_AGENT_ID")?);
-    let listen: SocketAddr = env::var("LEASEGATE_EDGE_LISTEN")
+    let edge_id = EdgeId(required_env("KEYLEASE_EDGE_ID")?);
+    let organization_id = OrganizationId(required_env("KEYLEASE_ORGANIZATION_ID")?);
+    let project_id = ProjectId(required_env("KEYLEASE_PROJECT_ID")?);
+    let agent_id = AgentId(required_env("KEYLEASE_AGENT_ID")?);
+    let listen: SocketAddr = env_compat("KEYLEASE_EDGE_LISTEN")
         .unwrap_or_else(|_| "127.0.0.1:8090".into())
         .parse()
-        .context("invalid LEASEGATE_EDGE_LISTEN")?;
-    let state_path = PathBuf::from(required_env("LEASEGATE_EDGE_STATE")?);
-    let vault_path = PathBuf::from(required_env("LEASEGATE_VAULT_DB")?);
-    let storage_key =
-        read_base64_key(Path::new(&required_env("LEASEGATE_EDGE_STORAGE_KEY_FILE")?))?;
+        .context("invalid KEYLEASE_EDGE_LISTEN")?;
+    let state_path = PathBuf::from(required_env("KEYLEASE_EDGE_STATE")?);
+    let vault_path = PathBuf::from(required_env("KEYLEASE_VAULT_DB")?);
+    let storage_key = read_base64_key(Path::new(&required_env("KEYLEASE_EDGE_STORAGE_KEY_FILE")?))?;
     let edge_credential = read_secret_text(
-        Path::new(&required_env("LEASEGATE_EDGE_CREDENTIAL_FILE")?),
+        Path::new(&required_env("KEYLEASE_EDGE_CREDENTIAL_FILE")?),
         4096,
     )?;
     let agent_credential = read_secret_text(
-        Path::new(&required_env("LEASEGATE_AGENT_CREDENTIAL_FILE")?),
+        Path::new(&required_env("KEYLEASE_AGENT_CREDENTIAL_FILE")?),
         4096,
     )?;
     let vault_password = read_secret_text(
-        Path::new(&required_env("LEASEGATE_VAULT_PASSWORD_FILE")?),
+        Path::new(&required_env("KEYLEASE_VAULT_PASSWORD_FILE")?),
         4096,
     )?;
-    let verifying_key = required_env("LEASEGATE_CONTROL_VERIFYING_KEY")?;
-    let cloud_url = required_env("LEASEGATE_CLOUD_URL")?;
+    let verifying_key = required_env("KEYLEASE_CONTROL_VERIFYING_KEY")?;
+    let cloud_url = required_env("KEYLEASE_CLOUD_URL")?;
 
     let edge_store = Arc::new(
         EdgeControlStore::open(
@@ -133,7 +132,7 @@ async fn main() -> Result<()> {
         cloud_connected.clone(),
     ));
     let credential_gateway = credential_gateway_from_config(
-        Path::new(&required_env("LEASEGATE_CREDENTIAL_BACKENDS_FILE")?),
+        Path::new(&required_env("KEYLEASE_CREDENTIAL_BACKENDS_FILE")?),
         edge_store.clone(),
         credential_authorizer,
     )
@@ -210,14 +209,14 @@ async fn main() -> Result<()> {
         organization_id,
         project_id,
     ));
-    let hosts = env::var("LEASEGATE_MCP_ALLOWED_HOSTS")
+    let hosts = env_compat("KEYLEASE_MCP_ALLOWED_HOSTS")
         .unwrap_or_else(|_| listen.to_string())
         .split(',')
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
         .collect();
-    let origins = env::var("LEASEGATE_MCP_ALLOWED_ORIGINS")
+    let origins = env_compat("KEYLEASE_MCP_ALLOWED_ORIGINS")
         .unwrap_or_default()
         .split(',')
         .map(str::trim)
@@ -229,8 +228,8 @@ async fn main() -> Result<()> {
     let discovery = Arc::new(EdgeToolDiscovery::built_in(edge_store.clone()));
     let identity = AgentEndpointIdentity {
         agent_id,
-        workload_id: env::var("LEASEGATE_WORKLOAD_ID").ok().map(WorkloadId),
-        on_behalf_of: env::var("LEASEGATE_ON_BEHALF_OF").ok(),
+        workload_id: env_compat("KEYLEASE_WORKLOAD_ID").ok().map(WorkloadId),
+        on_behalf_of: env_compat("KEYLEASE_ON_BEHALF_OF").ok(),
         client_session_id: format!("gateway-{}", std::process::id()),
     };
     let health_store = edge_store.clone();
@@ -320,10 +319,10 @@ async fn edge_readiness(
 }
 
 async fn local_healthcheck() -> Result<()> {
-    let listen: SocketAddr = env::var("LEASEGATE_EDGE_LISTEN")
+    let listen: SocketAddr = env_compat("KEYLEASE_EDGE_LISTEN")
         .unwrap_or_else(|_| "127.0.0.1:8090".into())
         .parse()
-        .context("invalid LEASEGATE_EDGE_LISTEN")?;
+        .context("invalid KEYLEASE_EDGE_LISTEN")?;
     let response = reqwest::Client::builder()
         .connect_timeout(StdDuration::from_secs(2))
         .timeout(StdDuration::from_secs(4))
@@ -352,29 +351,37 @@ async fn edge_metrics(
     let control_connected = u8::from(cloud_connected.load(Ordering::Acquire));
     let body = format!(
         concat!(
-            "# HELP leasegate_service_up Whether the Gateway process is serving requests.\n",
-            "# TYPE leasegate_service_up gauge\n",
-            "leasegate_service_up{{service=\"keylease-edge\"}} 1\n",
+            "# HELP keylease_service_up Whether the Gateway process is serving requests.\n",
+            "# TYPE keylease_service_up gauge\n",
+            "keylease_service_up{{service=\"keylease-edge\"}} 1\n",
             "# HELP keylease_protocol_connected Whether the Gateway currently reaches the Control Plane.\n",
             "# TYPE keylease_protocol_connected gauge\n",
             "keylease_protocol_connected {}\n",
             "# HELP keylease_policy_active Whether a verified policy is active.\n",
             "# TYPE keylease_policy_active gauge\n",
             "keylease_policy_active {}\n",
-            "# HELP leasegate_audit_spool_bytes Encrypted audit bytes waiting for upload.\n",
-            "# TYPE leasegate_audit_spool_bytes gauge\n",
-            "leasegate_audit_spool_bytes {}\n",
-            "# HELP leasegate_audit_spool_maximum_bytes Configured encrypted audit-spool ceiling.\n",
-            "# TYPE leasegate_audit_spool_maximum_bytes gauge\n",
-            "leasegate_audit_spool_maximum_bytes {}\n"
+            "# HELP keylease_audit_spool_bytes Encrypted audit bytes waiting for upload.\n",
+            "# TYPE keylease_audit_spool_bytes gauge\n",
+            "keylease_audit_spool_bytes {}\n",
+            "# HELP keylease_audit_spool_maximum_bytes Configured encrypted audit-spool ceiling.\n",
+            "# TYPE keylease_audit_spool_maximum_bytes gauge\n",
+            "keylease_audit_spool_maximum_bytes {}\n"
         ),
         control_connected, policy_active, spool_bytes, spool_maximum
     );
     ([(CONTENT_TYPE, "text/plain; version=0.0.4")], body)
 }
 
+/// Reads `KEYLEASE_X`, falling back to the pre-v0.3 name `LEASEGATE_X`.
+fn env_compat(name: &str) -> std::result::Result<String, env::VarError> {
+    env::var(name).or_else(|error| {
+        name.strip_prefix("KEYLEASE_")
+            .map_or(Err(error), |suffix| env::var(format!("LEASEGATE_{suffix}")))
+    })
+}
+
 fn required_env(name: &str) -> Result<String> {
-    let value = env::var(name).with_context(|| format!("{name} is required"))?;
+    let value = env_compat(name).with_context(|| format!("{name} is required"))?;
     if value.is_empty() {
         bail!("{name} must not be empty")
     }

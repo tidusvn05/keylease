@@ -1,5 +1,4 @@
 use chrono::{Duration, Utc};
-use keylease_cloud::{AuditQueryFilter, CloudRepository};
 use keylease_connector_sdk::{
     CONNECTOR_PACKAGE_VERSION, ConnectorPackagePayload, ConnectorPackageSigner,
 };
@@ -14,6 +13,7 @@ use keylease_protocol::{
     PolicyProposalStatus,
 };
 use keylease_protocol::{ControlSigner, verify_policy_bundle};
+use keylease_server::{AuditQueryFilter, CloudRepository};
 
 #[tokio::test]
 async fn phase4_registry_proposal_connections_and_audit_are_tenant_scoped() {

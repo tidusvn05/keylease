@@ -29,9 +29,9 @@ to use one.
 
 ## 1. Run a cloud
 
-The Cloud is `keylease-cloud` (PostgreSQL), as in the
+The Cloud is `keylease-server` (PostgreSQL), as in the
 [single-VPS install](self-hosted-vps.md), or the image
-`ghcr.io/tidusvn05/keylease-cloud`. Put it behind HTTPS. You need its admin
+`ghcr.io/tidusvn05/keylease-server`. Put it behind HTTPS. You need its admin
 token (`KEYLEASE_ADMIN_TOKEN_FILE`) once, to create your account.
 
 ## 2. Link your laptop as the owner

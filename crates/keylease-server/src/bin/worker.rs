@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use chrono::{Duration, Utc};
-use keylease_cloud::{CloudRepository, SiemExporter};
+use keylease_server::{CloudRepository, SiemExporter};
 use std::{env, fs, path::Path, time::Duration as StdDuration};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -27,7 +27,8 @@ async fn main() -> Result<()> {
         .parse::<u64>()
         .context("invalid worker interval")?
         .clamp(1, 300);
-    let holder_id = env::var("LEASEGATE_INSTANCE_ID")
+    let holder_id = env::var("KEYLEASE_INSTANCE_ID")
+        .or_else(|_| env::var("LEASEGATE_INSTANCE_ID"))
         .unwrap_or_else(|_| format!("worker-{}", uuid::Uuid::now_v7().simple()));
     let siem_exporter = env::var("KEYLEASE_SIEM_SECRETS_FILE")
         .ok()

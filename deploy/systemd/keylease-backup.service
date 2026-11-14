@@ -1,0 +1,15 @@
+[Unit]
+Description=KeyLease encrypted single-VPS backup and verification
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=@KEYLEASE_USER@
+Group=@KEYLEASE_GROUP@
+EnvironmentFile=/etc/keylease/operations.env
+WorkingDirectory=@KEYLEASE_ROOT@
+ExecStart=@KEYLEASE_ROOT@/deploy/compose/backup.sh ${KEYLEASE_BACKUP_DIR}
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077

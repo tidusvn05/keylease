@@ -4,15 +4,15 @@ set -eu
 script_dir=$(dirname -- "$0")
 root_dir=$(cd "$script_dir/../.." && pwd)
 compose_dir="$root_dir/deploy/compose"
-env_file=${LEASEGATE_ENV_FILE:-"$compose_dir/.env"}
-backup_dir=${LEASEGATE_BACKUP_DIR:-"$compose_dir/backups"}
-state_dir=${LEASEGATE_OPS_STATE_DIR:-"$compose_dir/.state"}
-metrics_file=${LEASEGATE_METRICS_FILE:-"$state_dir/leasegate.prom"}
-status_file=${LEASEGATE_STATUS_FILE:-"$state_dir/operations-status.json"}
-disk_warning_percent=${LEASEGATE_DISK_WARNING_PERCENT:-75}
-disk_critical_percent=${LEASEGATE_DISK_CRITICAL_PERCENT:-90}
-maximum_backup_age_seconds=${LEASEGATE_MAX_BACKUP_AGE_SECONDS:-90000}
-certificate_warning_days=${LEASEGATE_CERT_WARNING_DAYS:-21}
+env_file=${KEYLEASE_ENV_FILE:-"$compose_dir/.env"}
+backup_dir=${KEYLEASE_BACKUP_DIR:-"$compose_dir/backups"}
+state_dir=${KEYLEASE_OPS_STATE_DIR:-"$compose_dir/.state"}
+metrics_file=${KEYLEASE_METRICS_FILE:-"$state_dir/keylease.prom"}
+status_file=${KEYLEASE_STATUS_FILE:-"$state_dir/operations-status.json"}
+disk_warning_percent=${KEYLEASE_DISK_WARNING_PERCENT:-75}
+disk_critical_percent=${KEYLEASE_DISK_CRITICAL_PERCENT:-90}
+maximum_backup_age_seconds=${KEYLEASE_MAX_BACKUP_AGE_SECONDS:-90000}
+certificate_warning_days=${KEYLEASE_CERT_WARNING_DAYS:-21}
 
 for value in "$disk_warning_percent" "$disk_critical_percent" "$maximum_backup_age_seconds" "$certificate_warning_days"; do
   case "$value" in ''|*[!0-9]*) printf 'Monitor thresholds must be integers.\n' >&2; exit 1 ;; esac
@@ -50,7 +50,7 @@ for service in postgres object-store control-plane worker web gateway; do
 done
 
 control_ready=0
-if docker compose --env-file "$env_file" -f "$compose_dir/compose.yaml" exec -T control-plane keylease-cloud healthcheck >/dev/null 2>&1; then
+if docker compose --env-file "$env_file" -f "$compose_dir/compose.yaml" exec -T control-plane keylease-server healthcheck >/dev/null 2>&1; then
   control_ready=1
 else
   add_issue control_not_ready
@@ -78,7 +78,7 @@ else
   add_issue backup_missing
 fi
 
-domain=$(awk -F= '$1 == "LEASEGATE_DOMAIN" {print substr($0, index($0, "=") + 1)}' "$env_file")
+domain=$(awk -F= '$1 == "KEYLEASE_DOMAIN" {print substr($0, index($0, "=") + 1)}' "$env_file")
 case "$domain" in
   ''|*[!A-Za-z0-9.-]*) certificate_expiry_seconds=-1; add_issue certificate_domain_invalid ;;
   *)
@@ -121,31 +121,31 @@ chmod 600 "$temporary_soak"
 mv "$temporary_soak" "$soak_file"
 metrics_dir=$(dirname -- "$metrics_file")
 mkdir -p "$metrics_dir"
-temporary_metrics=$(mktemp "$metrics_dir/.leasegate.prom.XXXXXX")
+temporary_metrics=$(mktemp "$metrics_dir/.keylease.prom.XXXXXX")
 {
-  printf '# HELP leasegate_host_healthy Whether all local single-VPS checks passed.\n'
-  printf '# TYPE leasegate_host_healthy gauge\nleasegate_host_healthy %s\n' "$healthy"
-  printf '# HELP leasegate_host_disk_used_percent Root filesystem usage percentage.\n'
-  printf '# TYPE leasegate_host_disk_used_percent gauge\nleasegate_host_disk_used_percent %s\n' "$disk_used_percent"
-  printf '# HELP leasegate_backup_age_seconds Age of the latest encrypted backup checksum manifest; -1 means missing.\n'
-  printf '# TYPE leasegate_backup_age_seconds gauge\nleasegate_backup_age_seconds %s\n' "$backup_age"
-  printf '# HELP leasegate_certificate_expiry_seconds Seconds until the public TLS certificate expires; -1 means probe failure.\n'
-  printf '# TYPE leasegate_certificate_expiry_seconds gauge\nleasegate_certificate_expiry_seconds %s\n' "$certificate_expiry_seconds"
-  printf '# HELP leasegate_compose_services_running Number of expected services running.\n'
-  printf '# TYPE leasegate_compose_services_running gauge\nleasegate_compose_services_running %s\n' "$running_count"
-  printf '# HELP leasegate_control_plane_ready Whether the local Control Plane readiness probe passed.\n'
-  printf '# TYPE leasegate_control_plane_ready gauge\nleasegate_control_plane_ready %s\n' "$control_ready"
-  printf '# HELP leasegate_gateway_ready Whether the local Gateway readiness probe passed.\n'
-  printf '# TYPE leasegate_gateway_ready gauge\nleasegate_gateway_ready %s\n' "$gateway_ready"
-  printf '# HELP leasegate_soak_consecutive_seconds Consecutive healthy seconds observed by the Phase 8 monitor.\n'
-  printf '# TYPE leasegate_soak_consecutive_seconds gauge\nleasegate_soak_consecutive_seconds %s\n' "$soak_seconds"
-  printf '# HELP leasegate_soak_failures_total Number of monitor failures observed by this local state file.\n'
-  printf '# TYPE leasegate_soak_failures_total counter\nleasegate_soak_failures_total %s\n' "$soak_failures"
+  printf '# HELP keylease_host_healthy Whether all local single-VPS checks passed.\n'
+  printf '# TYPE keylease_host_healthy gauge\nkeylease_host_healthy %s\n' "$healthy"
+  printf '# HELP keylease_host_disk_used_percent Root filesystem usage percentage.\n'
+  printf '# TYPE keylease_host_disk_used_percent gauge\nkeylease_host_disk_used_percent %s\n' "$disk_used_percent"
+  printf '# HELP keylease_backup_age_seconds Age of the latest encrypted backup checksum manifest; -1 means missing.\n'
+  printf '# TYPE keylease_backup_age_seconds gauge\nkeylease_backup_age_seconds %s\n' "$backup_age"
+  printf '# HELP keylease_certificate_expiry_seconds Seconds until the public TLS certificate expires; -1 means probe failure.\n'
+  printf '# TYPE keylease_certificate_expiry_seconds gauge\nkeylease_certificate_expiry_seconds %s\n' "$certificate_expiry_seconds"
+  printf '# HELP keylease_compose_services_running Number of expected services running.\n'
+  printf '# TYPE keylease_compose_services_running gauge\nkeylease_compose_services_running %s\n' "$running_count"
+  printf '# HELP keylease_control_plane_ready Whether the local Control Plane readiness probe passed.\n'
+  printf '# TYPE keylease_control_plane_ready gauge\nkeylease_control_plane_ready %s\n' "$control_ready"
+  printf '# HELP keylease_gateway_ready Whether the local Gateway readiness probe passed.\n'
+  printf '# TYPE keylease_gateway_ready gauge\nkeylease_gateway_ready %s\n' "$gateway_ready"
+  printf '# HELP keylease_soak_consecutive_seconds Consecutive healthy seconds observed by the Phase 8 monitor.\n'
+  printf '# TYPE keylease_soak_consecutive_seconds gauge\nkeylease_soak_consecutive_seconds %s\n' "$soak_seconds"
+  printf '# HELP keylease_soak_failures_total Number of monitor failures observed by this local state file.\n'
+  printf '# TYPE keylease_soak_failures_total counter\nkeylease_soak_failures_total %s\n' "$soak_failures"
 } > "$temporary_metrics"
 chmod 644 "$temporary_metrics"
 mv "$temporary_metrics" "$metrics_file"
 
-release_id=$(awk -F= '$1 == "LEASEGATE_RELEASE_ID" {print substr($0, index($0, "=") + 1)}' "$state_dir/current-release.env" 2>/dev/null || true)
+release_id=$(awk -F= '$1 == "KEYLEASE_RELEASE_ID" {print substr($0, index($0, "=") + 1)}' "$state_dir/current-release.env" 2>/dev/null || true)
 case "$release_id" in ''|*[!A-Za-z0-9._-]*) release_id=unknown ;; esac
 generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 status_dir=$(dirname -- "$status_file")
@@ -176,8 +176,8 @@ jq -n \
 chmod 644 "$temporary_status"
 mv "$temporary_status" "$status_file"
 
-if [ -n "$issues" ] && [ -n "${LEASEGATE_ALERT_WEBHOOK_FILE:-}" ]; then
-  webhook_file=$LEASEGATE_ALERT_WEBHOOK_FILE
+if [ -n "$issues" ] && [ -n "${KEYLEASE_ALERT_WEBHOOK_FILE:-}" ]; then
+  webhook_file=$KEYLEASE_ALERT_WEBHOOK_FILE
   if [ ! -f "$webhook_file" ] || [ ! -s "$webhook_file" ]; then
     printf 'Alert webhook file is missing, not regular, or empty.\n' >&2
     exit 1
@@ -188,7 +188,7 @@ if [ -n "$issues" ] && [ -n "${LEASEGATE_ALERT_WEBHOOK_FILE:-}" ]; then
   case "$webhook" in https://*) ;; *) printf 'Alert webhook must use HTTPS.\n' >&2; exit 1 ;; esac
   curl --fail --silent --show-error --max-time 10 \
     --header 'content-type: application/json' \
-    --data "{\"service\":\"leasegate\",\"profile\":\"single_vps\",\"status\":\"critical\",\"codes\":\"$issues\"}" \
+    --data "{\"service\":\"keylease\",\"profile\":\"single_vps\",\"status\":\"critical\",\"codes\":\"$issues\"}" \
     "$webhook" >/dev/null
 fi
 

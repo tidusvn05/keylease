@@ -5,12 +5,12 @@ umask 077
 script_dir=$(dirname -- "$0")
 root_dir=$(cd "$script_dir/../.." && pwd)
 compose_dir="$root_dir/deploy/compose"
-env_file=${LEASEGATE_ENV_FILE:-"$compose_dir/.env"}
-state_dir=${LEASEGATE_OPS_STATE_DIR:-"$compose_dir/.state"}
-backup_dir=${LEASEGATE_BACKUP_DIR:-"$compose_dir/backups"}
-: "${LEASEGATE_AGE_RECIPIENT:?Set LEASEGATE_AGE_RECIPIENT before rollback}"
-[ "${LEASEGATE_ROLLBACK_CONFIRM:-}" = rollback-to-previous-images ] || {
-  printf 'Set LEASEGATE_ROLLBACK_CONFIRM=rollback-to-previous-images.\n' >&2
+env_file=${KEYLEASE_ENV_FILE:-"$compose_dir/.env"}
+state_dir=${KEYLEASE_OPS_STATE_DIR:-"$compose_dir/.state"}
+backup_dir=${KEYLEASE_BACKUP_DIR:-"$compose_dir/backups"}
+: "${KEYLEASE_AGE_RECIPIENT:?Set KEYLEASE_AGE_RECIPIENT before rollback}"
+[ "${KEYLEASE_ROLLBACK_CONFIRM:-}" = rollback-to-previous-images ] || {
+  printf 'Set KEYLEASE_ROLLBACK_CONFIRM=rollback-to-previous-images.\n' >&2
   exit 2
 }
 [ -f "$state_dir/current-release.env" ] || { printf 'Current release state is missing.\n' >&2; exit 1; }
@@ -18,7 +18,7 @@ backup_dir=${LEASEGATE_BACKUP_DIR:-"$compose_dir/backups"}
 
 load_release() {
   file=$1
-  for key in LEASEGATE_CONTROL_IMAGE LEASEGATE_WEB_IMAGE LEASEGATE_GATEWAY_IMAGE; do
+  for key in KEYLEASE_CONTROL_IMAGE KEYLEASE_WEB_IMAGE KEYLEASE_GATEWAY_IMAGE; do
     value=$(awk -F= -v key="$key" '$1 == key {print substr($0, index($0, "=") + 1)}' "$file")
     printf '%s\n' "$value" | grep -Eq '^sha256:[0-9a-f]{64}$' || {
       printf 'Invalid image ID in release state.\n' >&2
@@ -29,12 +29,12 @@ load_release() {
   done
 }
 
-LEASEGATE_ENV_FILE="$env_file" "$compose_dir/backup.sh" "$backup_dir"
+KEYLEASE_ENV_FILE="$env_file" "$compose_dir/backup.sh" "$backup_dir"
 load_release "$state_dir/previous-release.env"
 rollback_ok=1
 if ! docker compose --env-file "$env_file" -f "$compose_dir/compose.yaml" up -d --no-build --wait; then
   rollback_ok=0
-elif ! LEASEGATE_ENV_FILE="$env_file" "$compose_dir/single-vps-check.sh" runtime; then
+elif ! KEYLEASE_ENV_FILE="$env_file" "$compose_dir/single-vps-check.sh" runtime; then
   rollback_ok=0
 fi
 if [ "$rollback_ok" -ne 1 ]; then

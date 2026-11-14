@@ -1776,43 +1776,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "keylease-cloud"
-version = "0.2.1"
-dependencies = [
- "anyhow",
- "axum",
- "base64 0.22.1",
- "chrono",
- "ed25519-dalek 3.0.0",
- "hmac 0.12.1",
- "http-body-util",
- "jsonwebtoken",
- "keylease-connector-sdk",
- "keylease-connectors",
- "keylease-core",
- "keylease-credentials",
- "keylease-policy",
- "keylease-protocol",
- "rand 0.9.5",
- "reqwest",
- "serde",
- "serde_json",
- "serde_json_canonicalizer",
- "sha2 0.10.9",
- "sqlx",
- "subtle",
- "tempfile",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
- "zeroize",
-]
-
-[[package]]
 name = "keylease-connector-sdk"
 version = "0.2.1"
 dependencies = [
@@ -2036,6 +1999,43 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "zeroize",
+]
+
+[[package]]
+name = "keylease-server"
+version = "0.2.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "ed25519-dalek 3.0.0",
+ "hmac 0.12.1",
+ "http-body-util",
+ "jsonwebtoken",
+ "keylease-connector-sdk",
+ "keylease-connectors",
+ "keylease-core",
+ "keylease-credentials",
+ "keylease-policy",
+ "keylease-protocol",
+ "rand 0.9.5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_json_canonicalizer",
+ "sha2 0.10.9",
+ "sqlx",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
  "zeroize",
 ]
 

@@ -1,5 +1,4 @@
 use chrono::{Duration, Utc};
-use keylease_cloud::CloudRepository;
 use keylease_core::{
     AccountId, AgentId, ApprovalId, ApprovalSemanticSummary, ConnectionId, DeviceId, ItemId,
     PolicyBundleId, RequestId, RiskTier, SyncMutationId, VaultId,
@@ -9,6 +8,7 @@ use keylease_protocol::{
     PolicyBundlePayload, Revocation, RevocationScope, SyncMutationEnvelope, SyncMutationStatus,
 };
 use keylease_protocol::{ControlSigner, verify_policy_bundle};
+use keylease_server::CloudRepository;
 use sha2::{Digest, Sha256};
 
 fn hex(bytes: &[u8]) -> String {

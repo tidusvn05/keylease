@@ -16,7 +16,7 @@ members = [
   "crates/keylease-cli",
   "crates/keylease-protocol",
   "crates/keylease-credentials",
-  "crates/keylease-cloud",
+  "crates/keylease-server",
   "crates/keylease-edge",
   "crates/keylease-mcp",
 ]

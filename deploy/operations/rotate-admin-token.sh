@@ -5,11 +5,11 @@ umask 077
 script_dir=$(dirname -- "$0")
 root_dir=$(cd "$script_dir/../.." && pwd)
 compose_dir="$root_dir/deploy/compose"
-env_file=${LEASEGATE_ENV_FILE:-"$compose_dir/.env"}
+env_file=${KEYLEASE_ENV_FILE:-"$compose_dir/.env"}
 secret_file="$compose_dir/secrets/admin_token"
-confirmation=${LEASEGATE_ROTATE_ADMIN_CONFIRM:-${1:-}}
+confirmation=${KEYLEASE_ROTATE_ADMIN_CONFIRM:-${1:-}}
 [ "$confirmation" = rotate-bootstrap-admin-token ] || {
-  printf 'Set LEASEGATE_ROTATE_ADMIN_CONFIRM=rotate-bootstrap-admin-token to continue.\n' >&2
+  printf 'Set KEYLEASE_ROTATE_ADMIN_CONFIRM=rotate-bootstrap-admin-token to continue.\n' >&2
   exit 2
 }
 [ -f "$secret_file" ] || { printf 'Admin token file is missing.\n' >&2; exit 1; }

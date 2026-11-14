@@ -1,4 +1,4 @@
-# Self-host LeaseGate all-in-one on one VPS
+# Self-host KeyLease all-in-one on one VPS
 
 This profile runs on one Linux VPS with Docker Engine, Compose v2, a DNS name
 pointing to the VPS, and inbound TCP 80/443. It is suitable for a personal or
@@ -7,8 +7,8 @@ beta installation; it is not highly available.
 For a new installation, Phase 9 provides the guarded end-to-end path:
 
 ```sh
-deploy/leasegate install \
-  --domain leasegate.example.com \
+deploy/keylease install \
+  --domain vault.example.com \
   --age-recipient 'age1...' \
   --yes
 ```
@@ -31,7 +31,7 @@ cp .env.example .env
 ./bootstrap-secrets.sh
 ```
 
-Edit `.env`, set `LEASEGATE_DOMAIN`, and set `LEASEGATE_RUNTIME_UID/GID` to the
+Edit `.env`, set `KEYLEASE_DOMAIN`, and set `KEYLEASE_RUNTIME_UID/GID` to the
 output of `id -u` and `id -g`. This lets the unprivileged containers read the
 mode-0600 files without broadening their permissions. The generated `secrets/` directory is
 ignored by Git. Copy it to encrypted off-host backup storage before creating
@@ -39,7 +39,7 @@ production data.
 
 The deployment is explicitly `self_hosted/local_gateway`: Control Plane,
 operator UI, PostgreSQL and the credential-executing Gateway all run on this
-VPS. No LeaseGate-operated service holds or uses your provider keys.
+VPS. No vendor-operated service holds or uses your provider keys.
 
 ## 2. Start the control plane
 
@@ -47,7 +47,7 @@ VPS. No LeaseGate-operated service holds or uses your provider keys.
 docker compose build control-plane worker web
 docker compose up -d postgres object-store control-plane worker web
 docker compose ps
-curl --fail "https://${LEASEGATE_DOMAIN}/api/healthz"
+curl --fail "https://${KEYLEASE_DOMAIN}/api/healthz"
 ```
 
 Caddy obtains and renews the public TLS certificate. PostgreSQL and MinIO have
@@ -67,7 +67,7 @@ ID and save the returned organization, project, membership and human IDs:
 curl --fail-with-body -sS \
   -H "Authorization: Bearer ${KEYLEASE_ADMIN_TOKEN}" \
   -H 'Content-Type: application/json' \
-  "https://${LEASEGATE_DOMAIN}/api/v1/bootstrap" \
+  "https://${KEYLEASE_DOMAIN}/api/v1/bootstrap" \
   --data '{
     "account_id":"acct_selfhosted_primary",
     "organization_name":"My organization",
@@ -86,7 +86,7 @@ docker compose build web
 docker compose up -d web
 ```
 
-The web UI is now at `https://$LEASEGATE_DOMAIN`. Paste the admin credential
+The web UI is now at `https://$KEYLEASE_DOMAIN`. Paste the admin credential
 only in a trusted single-owner browser tab. For team/Internet use, put an OIDC
 identity-aware proxy in front of the UI/API and do not distribute the bootstrap
 credential.
@@ -102,7 +102,7 @@ returned by this call.
 curl --fail-with-body -sS \
   -H "Authorization: Bearer ${KEYLEASE_ADMIN_TOKEN}" \
   -H 'Content-Type: application/json' \
-  "https://${LEASEGATE_DOMAIN}/api/v1/policies/activate" \
+  "https://${KEYLEASE_DOMAIN}/api/v1/policies/activate" \
   --data @policy-v1.json
 ```
 
@@ -156,14 +156,14 @@ vault once, then start the mandatory local Gateway:
 docker compose run --rm --entrypoint keylease gateway \
   --db /var/lib/leasegate/vault.sqlite3 vault init
 docker compose up -d gateway
-curl --fail "https://${LEASEGATE_DOMAIN}/api/healthz"
+curl --fail "https://${KEYLEASE_DOMAIN}/api/healthz"
 ```
 
 The MCP endpoint and dynamic credential API are published only at VPS loopback
 `127.0.0.1:8090` by
 default. Connect an agent over SSH forwarding or a private VPN and send its
 individual bearer credential. If changing the host/listener, update
-`LEASEGATE_MCP_ALLOWED_HOSTS`; Host and Origin validation fail closed.
+`KEYLEASE_MCP_ALLOWED_HOSTS`; Host and Origin validation fail closed.
 
 ## 5. Configure local dynamic credential backends
 
@@ -260,10 +260,10 @@ deployment's authorization-code/PKCE login flow.
 To publish a Git policy file:
 
 ```sh
-export LEASEGATE_CLOUD_URL="https://${LEASEGATE_DOMAIN}/api"
-export LEASEGATE_ORGANIZATION_ID="org_..."
-export LEASEGATE_PROJECT_ID="project_..."
-export LEASEGATE_ADMIN_TOKEN_FILE="$PWD/secrets/admin_token"
+export KEYLEASE_CLOUD_URL="https://${KEYLEASE_DOMAIN}/api"
+export KEYLEASE_ORGANIZATION_ID="org_..."
+export KEYLEASE_PROJECT_ID="project_..."
+export KEYLEASE_ADMIN_TOKEN_FILE="$PWD/secrets/admin_token"
 deploy/policy/release.sh deploy/policy/policy-release.example.json "git:COMMIT_SHA"
 ```
 
@@ -274,7 +274,7 @@ enters PostgreSQL. SIEM endpoints must be HTTPS.
 Encrypted backup requires `age`:
 
 ```sh
-export LEASEGATE_AGE_RECIPIENT='age1...'
+export KEYLEASE_AGE_RECIPIENT='age1...'
 deploy/compose/backup.sh /encrypted/off-vps/path
 ```
 
@@ -282,7 +282,7 @@ Restore is intentionally guarded and replaces database/configuration state.
 Read `restore.sh` and use a disposable environment for the quarterly drill.
 For application-level HA, run multiple stateless Control Plane instances
 behind a load balancer and multiple workers with unique
-`LEASEGATE_INSTANCE_ID` values. PostgreSQL HA and the load balancer are
+`KEYLEASE_INSTANCE_ID` values. PostgreSQL HA and the load balancer are
 operator-managed infrastructure.
 
 ## 8. Phase 7 single-VPS release gate
@@ -336,9 +336,9 @@ encrypted backup and only then changes the running containers.
 Install the supplied timers only after editing the mode-0600 operations file:
 
 ```sh
-sudo deploy/systemd/install.sh /opt/leasegate --apply
-sudoedit /etc/leasegate/operations.env
-sudo systemctl enable --now leasegate-backup.timer leasegate-monitor.timer
+sudo deploy/systemd/install.sh /opt/keylease --apply
+sudoedit /etc/keylease/operations.env
+sudo systemctl enable --now keylease-backup.timer keylease-monitor.timer
 ```
 
 The monitor writes node-exporter-compatible text metrics and can send a bounded
@@ -351,10 +351,10 @@ any potentially sensitive log line with a redaction marker.
 Use the stable lifecycle entry point for ordinary operation:
 
 ```sh
-deploy/leasegate status
-deploy/leasegate backup
-deploy/leasegate diagnostics
-deploy/leasegate acceptance
+deploy/keylease status
+deploy/keylease backup
+deploy/keylease diagnostics
+deploy/keylease acceptance
 ```
 
 The monitor now publishes `deploy/compose/.state/operations-status.json` with
@@ -366,8 +366,8 @@ The Operations tab marks snapshots older than ten minutes unhealthy.
 Rotate the bootstrap administrator credential after initial setup:
 
 ```sh
-export LEASEGATE_ROTATE_ADMIN_CONFIRM=rotate-bootstrap-admin-token
-deploy/leasegate rotate-admin-token
+export KEYLEASE_ROTATE_ADMIN_CONFIRM=rotate-bootstrap-admin-token
+deploy/keylease rotate-admin-token
 ```
 
 The guarded command restores the previous credential if the Control Plane
@@ -375,3 +375,24 @@ cannot restart. Encryption and signing roots must not be replaced in place;
 they require a separately designed re-encryption or trust-transition drill.
 The complete Phase 9 checklist is
 `phase-9/single-vps-ga-and-onboarding.md`.
+
+## Upgrading an install that used the LeaseGate names
+
+Before v0.3 the deployment used `LEASEGATE_*` variables, `deploy/leasegate`,
+`leasegate-*` systemd units, `/etc/leasegate` and the `keylease-cloud` image.
+To move an existing VPS to the new names:
+
+```sh
+sed -i 's/^LEASEGATE_/KEYLEASE_/' deploy/compose/.env
+sudo systemctl disable --now leasegate-backup.timer leasegate-monitor.timer
+sudo mv /etc/leasegate /etc/keylease
+sudo sed -i 's/^LEASEGATE_/KEYLEASE_/' /etc/keylease/operations.env
+sudo deploy/systemd/install.sh "$PWD" --apply
+sudo systemctl enable --now keylease-backup.timer keylease-monitor.timer
+```
+
+`deploy/keylease` refuses to run while the `.env` file still has
+`LEASEGATE_*` names. The Compose project name (`leasegate`), its volumes, the
+PostgreSQL database and role, and paths inside the containers keep their old
+names, so data stays where it is. The edge node still reads the old
+`LEASEGATE_*` variables if the new ones are not set.

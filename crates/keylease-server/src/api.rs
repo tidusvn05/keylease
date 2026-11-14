@@ -274,15 +274,15 @@ async fn metrics(State(state): State<CloudApiState>) -> Response {
     let database_ready = u8::from(state.repository.readiness().await.is_ok());
     let body = format!(
         concat!(
-            "# HELP leasegate_service_up Whether the service process is serving requests.\n",
-            "# TYPE leasegate_service_up gauge\n",
-            "leasegate_service_up{{service=\"keylease-cloud\"}} 1\n",
-            "# HELP leasegate_database_ready Whether PostgreSQL passed a minimal readiness query.\n",
-            "# TYPE leasegate_database_ready gauge\n",
-            "leasegate_database_ready{{service=\"keylease-cloud\"}} {}\n",
-            "# HELP leasegate_contract_version Active Control Plane contract version.\n",
-            "# TYPE leasegate_contract_version gauge\n",
-            "leasegate_contract_version{{service=\"keylease-cloud\"}} {}\n"
+            "# HELP keylease_service_up Whether the service process is serving requests.\n",
+            "# TYPE keylease_service_up gauge\n",
+            "keylease_service_up{{service=\"keylease-server\"}} 1\n",
+            "# HELP keylease_database_ready Whether PostgreSQL passed a minimal readiness query.\n",
+            "# TYPE keylease_database_ready gauge\n",
+            "keylease_database_ready{{service=\"keylease-server\"}} {}\n",
+            "# HELP keylease_contract_version Active Control Plane contract version.\n",
+            "# TYPE keylease_contract_version gauge\n",
+            "keylease_contract_version{{service=\"keylease-server\"}} {}\n"
         ),
         database_ready, CONTROL_CONTRACT_VERSION
     );

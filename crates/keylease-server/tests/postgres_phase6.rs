@@ -1,7 +1,6 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{Duration, Utc};
 use ed25519_dalek::{Signer, SigningKey};
-use keylease_cloud::CloudRepository;
 use keylease_core::{
     AccessReviewId, AccountId, DeviceId, KeyProviderId, OrganizationId, PolicyBundleId,
     SiemDestinationId, WorkloadIdentityId,
@@ -13,6 +12,7 @@ use keylease_protocol::{
     SiemDestination, SiemFormat, WorkloadIdentityBinding,
 };
 use keylease_protocol::{ControlSigner, verify_operator_session};
+use keylease_server::CloudRepository;
 use std::collections::BTreeMap;
 
 #[tokio::test]

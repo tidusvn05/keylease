@@ -23,7 +23,7 @@ cargo test --workspace
 cargo deny check            # dependency advisories and licenses
 ```
 
-The PostgreSQL tests in `crates/keylease-cloud` run when
+The PostgreSQL tests in `crates/keylease-server` run when
 `KEYLEASE_TEST_DATABASE_URL` points at a disposable database; CI provides one.
 
 The Flutter packages and the Swift apps are checked separately; see the

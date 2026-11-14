@@ -5,12 +5,12 @@ umask 077
 script_dir=$(dirname -- "$0")
 root_dir=$(cd "$script_dir/../.." && pwd)
 compose_dir="$root_dir/deploy/compose"
-env_file=${LEASEGATE_ENV_FILE:-"$compose_dir/.env"}
+env_file=${KEYLEASE_ENV_FILE:-"$compose_dir/.env"}
 release_dir=${1:?Usage: migration-dry-run.sh RELEASE_DIRECTORY}
 release_env="$release_dir/release.env"
 [ -f "$release_env" ] || { printf 'Missing release.env.\n' >&2; exit 1; }
 (cd "$release_dir" && sha256sum -c SHA256SUMS >/dev/null)
-control_image=$(awk -F= '$1 == "LEASEGATE_CONTROL_IMAGE" {print substr($0, index($0, "=") + 1)}' "$release_env")
+control_image=$(awk -F= '$1 == "KEYLEASE_CONTROL_IMAGE" {print substr($0, index($0, "=") + 1)}' "$release_env")
 printf '%s\n' "$control_image" | grep -Eq '^sha256:[0-9a-f]{64}$' || {
   printf 'Invalid Control Plane image ID.\n' >&2
   exit 1
