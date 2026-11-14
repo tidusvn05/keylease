@@ -114,7 +114,7 @@ fn random_bytes() -> [u8; 32] {
     bytes
 }
 
-fn require_csrf(headers: &HeaderMap) -> ApiResult<()> {
+pub(crate) fn require_csrf(headers: &HeaderMap) -> ApiResult<()> {
     if headers
         .get(CSRF_HEADER)
         .and_then(|value| value.to_str().ok())
@@ -126,7 +126,7 @@ fn require_csrf(headers: &HeaderMap) -> ApiResult<()> {
 }
 
 /// The account of a valid session cookie.
-async fn session(state: &CloudApiState, headers: &HeaderMap) -> ApiResult<String> {
+pub(crate) async fn session(state: &CloudApiState, headers: &HeaderMap) -> ApiResult<String> {
     let token = headers
         .get_all(header::COOKIE)
         .iter()
