@@ -346,6 +346,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/orgs/{org}/projects/{slug}/secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Secrets of an environment */
+        get: operations["secrets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/orgs/{org}/projects/{slug}/secrets/{environment}/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Reveal a secret */
+        get: operations["revealSecret"];
+        /** Set a secret */
+        put: operations["setSecret"];
+        post?: never;
+        /** Delete a secret */
+        delete: operations["deleteSecret"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/orgs/{org}/projects/{slug}/secrets/{environment}/{name}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Versions */
+        get: operations["secretVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/orgs/{org}/projects/{slug}/secrets/{environment}/{name}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore a version */
+        post: operations["restoreSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -425,6 +495,29 @@ export interface components {
             code: string;
             role: string;
             expires_at: string;
+        };
+        SecretSummary: {
+            name: string;
+            version: number;
+            updated_by: string;
+            updated_at: string;
+        };
+        SecretList: {
+            environment: string;
+            secrets: components["schemas"]["SecretSummary"][];
+        };
+        SecretValue: {
+            name: string;
+            version: number;
+            value: string;
+        };
+        SecretVersions: {
+            versions: {
+                version: number;
+                deleted: boolean;
+                created_by: string;
+                created_at: string;
+            }[];
         };
     };
     responses: never;
@@ -972,6 +1065,168 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    secrets: {
+        parameters: {
+            query: {
+                environment: string;
+            };
+            header?: never;
+            path: {
+                org: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretList"];
+                };
+            };
+        };
+    };
+    revealSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                slug: string;
+                environment: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretValue"];
+                };
+            };
+        };
+    };
+    setSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                slug: string;
+                environment: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    value: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    deleteSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                slug: string;
+                environment: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    secretVersions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                slug: string;
+                environment: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretVersions"];
+                };
+            };
+        };
+    };
+    restoreSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                slug: string;
+                environment: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    version: number;
+                };
+            };
+        };
         responses: {
             /** @description OK */
             200: {

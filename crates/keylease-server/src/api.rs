@@ -50,6 +50,9 @@ pub struct CloudApiConfig {
     /// Passkeys are bound to its host; without it only device sign-in links
     /// work in the console.
     pub public_url: Option<String>,
+    /// The KMS root key that wraps Managed projects' data keys (32 bytes).
+    /// Without it, Managed projects are unavailable.
+    pub kms_root_key: Option<[u8; 32]>,
 }
 
 impl std::fmt::Debug for CloudApiConfig {
@@ -60,6 +63,7 @@ impl std::fmt::Debug for CloudApiConfig {
             .field("maximum_body_bytes", &self.maximum_body_bytes)
             .field("operations_status_file", &self.operations_status_file)
             .field("public_url", &self.public_url)
+            .field("kms_root_key", &self.kms_root_key.map(|_| "[REDACTED]"))
             .finish()
     }
 }
@@ -71,6 +75,7 @@ impl Default for CloudApiConfig {
             maximum_body_bytes: 4 * 1024 * 1024,
             operations_status_file: None,
             public_url: None,
+            kms_root_key: None,
         }
     }
 }
@@ -83,6 +88,7 @@ pub struct CloudApiState {
     maximum_body_bytes: usize,
     operations_status_file: Option<PathBuf>,
     pub(crate) console: crate::console::ConsoleConfig,
+    pub(crate) kms: Option<Arc<keylease_crypto::SecretKey>>,
 }
 
 impl std::fmt::Debug for CloudApiState {
@@ -114,6 +120,9 @@ impl CloudApiState {
             maximum_body_bytes: config.maximum_body_bytes.clamp(1024, 16 * 1024 * 1024),
             operations_status_file: config.operations_status_file,
             console: crate::console::ConsoleConfig::from_public_url(config.public_url.as_deref())?,
+            kms: config
+                .kms_root_key
+                .map(|key| Arc::new(keylease_crypto::SecretKey::from_bytes(key))),
         })
     }
 }
@@ -247,6 +256,7 @@ pub fn router(state: CloudApiState) -> Router {
         .merge(crate::console::router())
         .merge(crate::console_assets::router())
         .merge(crate::teams::router())
+        .merge(crate::managed::router())
         .layer(DefaultBodyLimit::max(maximum))
         .with_state(state)
 }

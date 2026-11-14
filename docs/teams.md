@@ -30,7 +30,26 @@ last owner.
 ## Projects
 
 Organization projects have environments like personal ones (dev, staging,
-production; production protected). Storing their secrets on the server
-(Managed projects, encrypted with the server's key) comes with the next step;
-until then, members keep a project's items in their own vaults and share them
-with bundles or the relay.
+production; production protected), and their secrets are stored on the server
+(see Managed secrets below).
+
+## Managed secrets
+
+With `KEYLEASE_KMS_ROOT_KEY_FILE` set on the server (32 random bytes, unpadded
+base64, mode 0600; back it up apart from the database), each organization
+project has **Secrets** in the console: KEY=VALUE per environment, encrypted
+with the project's data key, which the root key wraps
+([ADR 0010](adr/0010-managed-projects-and-kms.md)).
+
+- **read** lists and reveals (each reveal is audited), **write** sets,
+  deletes and restores old versions, **admin** rotates the data key and reads
+  the audit.
+- Every change is a new version: **History** shows them and **Restore** makes
+  an old one current again.
+- The server can decrypt Managed secrets; keep what its operator must not see
+  in a Private project.
+
+```sh
+head -c 32 /dev/urandom | base64 | tr -d '=' > kms_root_key && chmod 600 kms_root_key
+KEYLEASE_KMS_ROOT_KEY_FILE=/run/keylease-secrets/kms_root_key
+```

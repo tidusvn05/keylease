@@ -5,6 +5,7 @@ mod console;
 mod console_assets;
 mod enterprise;
 mod enterprise_api;
+mod managed;
 mod oidc;
 mod relay;
 mod siem;

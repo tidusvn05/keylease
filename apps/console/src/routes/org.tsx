@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
@@ -173,6 +173,9 @@ function OrgPage() {
                 <span className="font-medium">{project.name}</span>
                 <code className="text-muted-foreground text-xs">{project.slug}</code>
                 <Badge variant="outline">{t(`orgs.projectRoles.${project.my_role as "read"}`)}</Badge>
+                <Link to="/secrets" search={{ org: id, project: project.slug }} className="text-sm underline">
+                  {t("secrets.open")}
+                </Link>
                 {project.environments.map((environment) => (
                   <Badge key={environment.slug} variant={environment.protected ? "destructive" : "secondary"}>
                     {environment.name}
