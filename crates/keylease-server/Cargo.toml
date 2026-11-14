@@ -1,5 +1,6 @@
 [package]
-name = "keylease-cloud"
+name = "keylease-server"
+description = "Self-hosted KeyLease server: sync, sharing, organizations and the console"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -42,9 +43,9 @@ http-body-util = "0.1"
 tempfile.workspace = true
 
 [[bin]]
-name = "keylease-cloud"
+name = "keylease-server"
 path = "src/main.rs"
 
 [[bin]]
-name = "keylease-cloud-worker"
+name = "keylease-server-worker"
 path = "src/bin/worker.rs"

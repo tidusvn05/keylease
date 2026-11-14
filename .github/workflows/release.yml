@@ -114,8 +114,8 @@ jobs:
           if [ "${{ needs.check.outputs.prerelease }}" = false ]; then
             cat >> NOTES.md <<NOTES
 
-          Container images for KeyLease Cloud and Edge:
-          \`ghcr.io/${{ github.repository_owner }}/keylease-cloud:${{ needs.check.outputs.version }}\`,
+          Container images for keylease-server and the edge node:
+          \`ghcr.io/${{ github.repository_owner }}/keylease-server:${{ needs.check.outputs.version }}\`,
           \`ghcr.io/${{ github.repository_owner }}/keylease-edge:${{ needs.check.outputs.version }}\`.
           NOTES
           fi
@@ -136,7 +136,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { image: keylease-cloud, dockerfile: deploy/compose/Dockerfile.cloud }
+          - { image: keylease-server, dockerfile: deploy/compose/Dockerfile.server }
           - { image: keylease-edge, dockerfile: deploy/compose/Dockerfile.edge }
     runs-on: ubuntu-latest
     permissions:

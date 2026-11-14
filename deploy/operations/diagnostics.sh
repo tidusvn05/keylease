@@ -5,10 +5,10 @@ umask 077
 script_dir=$(dirname -- "$0")
 root_dir=$(cd "$script_dir/../.." && pwd)
 compose_dir="$root_dir/deploy/compose"
-env_file=${LEASEGATE_ENV_FILE:-"$compose_dir/.env"}
+env_file=${KEYLEASE_ENV_FILE:-"$compose_dir/.env"}
 output_dir=${1:-"$root_dir/deploy/diagnostics"}
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
-output="$output_dir/leasegate-diagnostics-$timestamp.tar.gz"
+output="$output_dir/keylease-diagnostics-$timestamp.tar.gz"
 [ ! -e "$output" ] || { printf 'Diagnostic output already exists.\n' >&2; exit 1; }
 mkdir -p "$output_dir"
 temporary_dir=$(mktemp -d)
@@ -31,7 +31,7 @@ docker compose --env-file "$env_file" -f "$compose_dir/compose.yaml" images \
   > "$temporary_dir/compose-images.txt" 2>&1 || true
 docker compose --env-file "$env_file" -f "$compose_dir/compose.yaml" logs --no-color --tail=500 \
   control-plane worker gateway 2>&1 | redact_logs > "$temporary_dir/redacted-logs.txt" || true
-LEASEGATE_ENV_FILE="$env_file" "$compose_dir/single-vps-check.sh" runtime \
+KEYLEASE_ENV_FILE="$env_file" "$compose_dir/single-vps-check.sh" runtime \
   > "$temporary_dir/runtime-check.txt" 2>&1 || true
 
 tar -C "$temporary_dir" -czf "$output" .

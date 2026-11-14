@@ -31,13 +31,13 @@ services:
     networks: [control]
 
   control-plane:
-    image: ${LEASEGATE_CONTROL_IMAGE:-leasegate-control-plane:local}
+    image: ${KEYLEASE_CONTROL_IMAGE:-keylease-server:local}
     build:
       context: ../..
-      dockerfile: deploy/compose/Dockerfile.cloud
+      dockerfile: deploy/compose/Dockerfile.server
       args:
-        LEASEGATE_RUNTIME_UID: ${LEASEGATE_RUNTIME_UID:-1000}
-        LEASEGATE_RUNTIME_GID: ${LEASEGATE_RUNTIME_GID:-1000}
+        KEYLEASE_RUNTIME_UID: ${KEYLEASE_RUNTIME_UID:-1000}
+        KEYLEASE_RUNTIME_GID: ${KEYLEASE_RUNTIME_GID:-1000}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -47,7 +47,7 @@ services:
       KEYLEASE_ADMIN_TOKEN_FILE: /run/leasegate-secrets/admin_token
       KEYLEASE_CONTROL_SIGNING_KEY_FILE: /run/leasegate-secrets/control_signing_key
       KEYLEASE_OPERATIONS_STATUS_FILE: /run/leasegate-ops/operations-status.json
-      KEYLEASE_CLOUD_LISTEN: 0.0.0.0:8080
+      KEYLEASE_SERVER_LISTEN: 0.0.0.0:8080
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       - ./secrets:/run/leasegate-secrets:ro
@@ -56,21 +56,21 @@ services:
     read_only: true
     tmpfs: [/tmp]
     healthcheck:
-      test: ["CMD", "keylease-cloud", "healthcheck"]
+      test: ["CMD", "keylease-server", "healthcheck"]
       interval: 10s
       timeout: 5s
       retries: 6
       start_period: 10s
 
   worker:
-    image: ${LEASEGATE_CONTROL_IMAGE:-leasegate-control-plane:local}
+    image: ${KEYLEASE_CONTROL_IMAGE:-keylease-server:local}
     build:
       context: ../..
-      dockerfile: deploy/compose/Dockerfile.cloud
+      dockerfile: deploy/compose/Dockerfile.server
       args:
-        LEASEGATE_RUNTIME_UID: ${LEASEGATE_RUNTIME_UID:-1000}
-        LEASEGATE_RUNTIME_GID: ${LEASEGATE_RUNTIME_GID:-1000}
-    entrypoint: ["keylease-cloud-worker"]
+        KEYLEASE_RUNTIME_UID: ${KEYLEASE_RUNTIME_UID:-1000}
+        KEYLEASE_RUNTIME_GID: ${KEYLEASE_RUNTIME_GID:-1000}
+    entrypoint: ["keylease-server-worker"]
     restart: unless-stopped
     depends_on:
       postgres:
@@ -81,7 +81,7 @@ services:
       # Empty by default for the single-VPS profile. Set the container path
       # explicitly only when the optional enterprise SIEM exporter is enabled.
       KEYLEASE_SIEM_SECRETS_FILE: ${KEYLEASE_SIEM_SECRETS_FILE:-}
-      LEASEGATE_INSTANCE_ID: ${LEASEGATE_INSTANCE_ID:-worker-1}
+      KEYLEASE_INSTANCE_ID: ${KEYLEASE_INSTANCE_ID:-worker-1}
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       - ./secrets:/run/leasegate-secrets:ro
@@ -90,22 +90,22 @@ services:
     tmpfs: [/tmp]
 
   web:
-    image: ${LEASEGATE_WEB_IMAGE:-leasegate-web:local}
+    image: ${KEYLEASE_WEB_IMAGE:-keylease-approval-web:local}
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.approval
       args:
-        KEYLEASE_CLOUD_URL: https://${LEASEGATE_DOMAIN}/api
+        KEYLEASE_CLOUD_URL: https://${KEYLEASE_DOMAIN}/api
         KEYLEASE_ORGANIZATION_ID: ${KEYLEASE_ORGANIZATION_ID:-}
         KEYLEASE_PROJECT_ID: ${KEYLEASE_PROJECT_ID:-}
         KEYLEASE_APPROVER_ID: ${KEYLEASE_APPROVER_ID:-}
-        KEYLEASE_AGENT_ID: ${LEASEGATE_AGENT_ID:-}
+        KEYLEASE_AGENT_ID: ${KEYLEASE_AGENT_ID:-}
     restart: unless-stopped
     depends_on:
       control-plane:
         condition: service_healthy
     environment:
-      LEASEGATE_DOMAIN: ${LEASEGATE_DOMAIN}
+      KEYLEASE_DOMAIN: ${KEYLEASE_DOMAIN}
     ports:
       - "80:80"
       - "443:443"
@@ -115,33 +115,33 @@ services:
     networks: [control]
 
   gateway:
-    image: ${LEASEGATE_GATEWAY_IMAGE:-leasegate-gateway:local}
+    image: ${KEYLEASE_GATEWAY_IMAGE:-keylease-edge:local}
     build:
       context: ../..
       dockerfile: deploy/compose/Dockerfile.edge
       args:
-        LEASEGATE_RUNTIME_UID: ${LEASEGATE_RUNTIME_UID:-1000}
-        LEASEGATE_RUNTIME_GID: ${LEASEGATE_RUNTIME_GID:-1000}
+        KEYLEASE_RUNTIME_UID: ${KEYLEASE_RUNTIME_UID:-1000}
+        KEYLEASE_RUNTIME_GID: ${KEYLEASE_RUNTIME_GID:-1000}
     restart: unless-stopped
     depends_on: [web]
     environment:
-      LEASEGATE_DEPLOYMENT_MODE: ${LEASEGATE_DEPLOYMENT_MODE:-self_hosted}
-      LEASEGATE_EXECUTION_MODE: ${LEASEGATE_EXECUTION_MODE:-local_gateway}
-      LEASEGATE_EDGE_ID: ${LEASEGATE_EDGE_ID}
-      LEASEGATE_ORGANIZATION_ID: ${KEYLEASE_ORGANIZATION_ID}
-      LEASEGATE_PROJECT_ID: ${KEYLEASE_PROJECT_ID}
-      LEASEGATE_AGENT_ID: ${LEASEGATE_AGENT_ID}
-      LEASEGATE_EDGE_STATE: /var/lib/leasegate/edge.sqlite3
-      LEASEGATE_VAULT_DB: /var/lib/leasegate/vault.sqlite3
-      LEASEGATE_EDGE_STORAGE_KEY_FILE: /run/leasegate-secrets/edge_storage_key
-      LEASEGATE_EDGE_CREDENTIAL_FILE: /run/leasegate-secrets/edge_credential
-      LEASEGATE_AGENT_CREDENTIAL_FILE: /run/leasegate-secrets/agent_credential
-      LEASEGATE_CREDENTIAL_BACKENDS_FILE: /run/leasegate-secrets/credential_backends.json
-      LEASEGATE_VAULT_PASSWORD_FILE: /run/leasegate-secrets/vault_password
-      LEASEGATE_CONTROL_VERIFYING_KEY: ${LEASEGATE_CONTROL_VERIFYING_KEY}
-      LEASEGATE_CLOUD_URL: https://${LEASEGATE_DOMAIN}/api
-      LEASEGATE_EDGE_LISTEN: 0.0.0.0:8090
-      LEASEGATE_MCP_ALLOWED_HOSTS: ${LEASEGATE_MCP_ALLOWED_HOSTS:-127.0.0.1:8090}
+      KEYLEASE_DEPLOYMENT_MODE: ${KEYLEASE_DEPLOYMENT_MODE:-self_hosted}
+      KEYLEASE_EXECUTION_MODE: ${KEYLEASE_EXECUTION_MODE:-local_gateway}
+      KEYLEASE_EDGE_ID: ${KEYLEASE_EDGE_ID}
+      KEYLEASE_ORGANIZATION_ID: ${KEYLEASE_ORGANIZATION_ID}
+      KEYLEASE_PROJECT_ID: ${KEYLEASE_PROJECT_ID}
+      KEYLEASE_AGENT_ID: ${KEYLEASE_AGENT_ID}
+      KEYLEASE_EDGE_STATE: /var/lib/leasegate/edge.sqlite3
+      KEYLEASE_VAULT_DB: /var/lib/leasegate/vault.sqlite3
+      KEYLEASE_EDGE_STORAGE_KEY_FILE: /run/leasegate-secrets/edge_storage_key
+      KEYLEASE_EDGE_CREDENTIAL_FILE: /run/leasegate-secrets/edge_credential
+      KEYLEASE_AGENT_CREDENTIAL_FILE: /run/leasegate-secrets/agent_credential
+      KEYLEASE_CREDENTIAL_BACKENDS_FILE: /run/leasegate-secrets/credential_backends.json
+      KEYLEASE_VAULT_PASSWORD_FILE: /run/leasegate-secrets/vault_password
+      KEYLEASE_CONTROL_VERIFYING_KEY: ${KEYLEASE_CONTROL_VERIFYING_KEY}
+      KEYLEASE_CLOUD_URL: https://${KEYLEASE_DOMAIN}/api
+      KEYLEASE_EDGE_LISTEN: 0.0.0.0:8090
+      KEYLEASE_MCP_ALLOWED_HOSTS: ${KEYLEASE_MCP_ALLOWED_HOSTS:-127.0.0.1:8090}
       RUST_LOG: ${RUST_LOG:-info}
     ports:
       - "127.0.0.1:8090:8090"

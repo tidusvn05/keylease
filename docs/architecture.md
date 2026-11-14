@@ -130,7 +130,7 @@ Details: [agent approvals and trust](agent-approvals.md).
 | `crates/keylease-rpc` | The local RPC contract (frozen by `test-vectors/rpc/commands.json`) |
 | `crates/keylease-cli` | `keylease` CLI, daemon, brokers (`ssh`, `db`, `run`), MCP server (`mcp.rs`), remote MCP server HTTP + OAuth (`remote_mcp.rs`), approver HTTP API, cloud commands and sync loop (`cloud.rs`) |
 | `crates/keylease-mcp` | Streamable HTTP MCP adapter over the service (connector actions) |
-| `crates/keylease-edge`, `keylease-cloud`, `keylease-credentials` | KeyLease edge node, Cloud control plane, dynamic credentials |
+| `crates/keylease-edge`, `keylease-server`, `keylease-credentials` | KeyLease edge node, Cloud control plane, dynamic credentials |
 | `apps/desktop-macos`, `apps/desktop-macos-app` | Native Swift client core and SwiftUI app |
 | `packages/leasegate_vault_ui` | Shared Flutter vault UI for the mobile app |
 | `apps/mobile-flutter`, `crates/keylease-mobile` | Android vault client and its in-process FFI |

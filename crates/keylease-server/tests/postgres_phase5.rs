@@ -1,5 +1,4 @@
 use chrono::{Duration, Utc};
-use keylease_cloud::{CloudRepository, CredentialLeaseFilter};
 use keylease_core::{
     AccountId, ConnectionHealth, ConnectionId, CredentialLeaseId, DeviceId, RotationId,
 };
@@ -8,6 +7,7 @@ use keylease_credentials::{
     CredentialLeaseRecord, CredentialLeaseState, RotationRecord, RotationState, SenderConstraint,
 };
 use keylease_protocol::{CONTROL_CONTRACT_VERSION, ConnectionDescriptor, RevocationScope};
+use keylease_server::{CloudRepository, CredentialLeaseFilter};
 
 #[tokio::test]
 async fn phase5_lease_posture_rotation_and_revocation_are_tenant_bound() {

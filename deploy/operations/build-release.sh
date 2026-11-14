@@ -5,7 +5,7 @@ umask 077
 script_dir=$(dirname -- "$0")
 root_dir=$(cd "$script_dir/../.." && pwd)
 compose_dir="$root_dir/deploy/compose"
-env_file=${LEASEGATE_ENV_FILE:-"$compose_dir/.env"}
+env_file=${KEYLEASE_ENV_FILE:-"$compose_dir/.env"}
 release_id=${1:-$(git -C "$root_dir" rev-parse --short=12 HEAD)}
 output_dir=${2:-"$root_dir/deploy/releases/$release_id"}
 
@@ -26,12 +26,12 @@ done
 [ ! -e "$output_dir" ] || { printf 'Release output already exists: %s\n' "$output_dir" >&2; exit 1; }
 mkdir -p "$output_dir"
 
-control_tag="leasegate-control-plane:$release_id"
-web_tag="leasegate-web:$release_id"
-gateway_tag="leasegate-gateway:$release_id"
-export LEASEGATE_CONTROL_IMAGE="$control_tag"
-export LEASEGATE_WEB_IMAGE="$web_tag"
-export LEASEGATE_GATEWAY_IMAGE="$gateway_tag"
+control_tag="keylease-server:$release_id"
+web_tag="keylease-approval-web:$release_id"
+gateway_tag="keylease-edge:$release_id"
+export KEYLEASE_CONTROL_IMAGE="$control_tag"
+export KEYLEASE_WEB_IMAGE="$web_tag"
+export KEYLEASE_GATEWAY_IMAGE="$gateway_tag"
 docker compose --env-file "$env_file" -f "$compose_dir/compose.yaml" \
   build --pull control-plane web gateway
 
@@ -52,10 +52,10 @@ docker save "$control_tag" "$web_tag" "$gateway_tag" | gzip -n > "$output_dir/im
 commit=$(git -C "$root_dir" rev-parse HEAD)
 created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 printf '%s\n' \
-  "LEASEGATE_RELEASE_ID=$release_id" \
-  "LEASEGATE_CONTROL_IMAGE=$control_image" \
-  "LEASEGATE_WEB_IMAGE=$web_image" \
-  "LEASEGATE_GATEWAY_IMAGE=$gateway_image" > "$output_dir/release.env"
+  "KEYLEASE_RELEASE_ID=$release_id" \
+  "KEYLEASE_CONTROL_IMAGE=$control_image" \
+  "KEYLEASE_WEB_IMAGE=$web_image" \
+  "KEYLEASE_GATEWAY_IMAGE=$gateway_image" > "$output_dir/release.env"
 printf '{"schema_version":1,"release_id":"%s","git_commit":"%s","created_at":"%s","images":{"control_plane":"%s","web":"%s","gateway":"%s"}}\n' \
   "$release_id" "$commit" "$created_at" "$control_image" "$web_image" "$gateway_image" \
   > "$output_dir/provenance.json"
@@ -64,12 +64,12 @@ printf '{"schema_version":1,"release_id":"%s","git_commit":"%s","created_at":"%s
   sha256sum release.env provenance.json images.tar.gz control-plane.spdx.json web.spdx.json gateway.spdx.json > SHA256SUMS
 )
 
-if [ -n "${LEASEGATE_COSIGN_KEY:-}" ]; then
+if [ -n "${KEYLEASE_COSIGN_KEY:-}" ]; then
   command -v cosign >/dev/null 2>&1 || { printf 'cosign is required for signing.\n' >&2; exit 1; }
-  cosign sign-blob --yes --key "$LEASEGATE_COSIGN_KEY" \
+  cosign sign-blob --yes --key "$KEYLEASE_COSIGN_KEY" \
     --output-signature "$output_dir/SHA256SUMS.sig" "$output_dir/SHA256SUMS"
-elif [ "${LEASEGATE_REQUIRE_SIGNATURE:-0}" = 1 ]; then
-  printf 'LEASEGATE_REQUIRE_SIGNATURE=1 but LEASEGATE_COSIGN_KEY is unset.\n' >&2
+elif [ "${KEYLEASE_REQUIRE_SIGNATURE:-0}" = 1 ]; then
+  printf 'KEYLEASE_REQUIRE_SIGNATURE=1 but KEYLEASE_COSIGN_KEY is unset.\n' >&2
   exit 1
 fi
 

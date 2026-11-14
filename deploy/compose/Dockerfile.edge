@@ -4,10 +4,10 @@ COPY . .
 RUN cargo build --locked --release -p keylease-edge -p keylease
 
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
-ARG LEASEGATE_RUNTIME_UID=1000
-ARG LEASEGATE_RUNTIME_GID=1000
+ARG KEYLEASE_RUNTIME_UID=1000
+ARG KEYLEASE_RUNTIME_GID=1000
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssh-client && rm -rf /var/lib/apt/lists/*
-RUN groupadd --gid ${LEASEGATE_RUNTIME_GID} leasegate && useradd --uid ${LEASEGATE_RUNTIME_UID} --gid leasegate --create-home leasegate && install -d -o leasegate -g leasegate /var/lib/leasegate
+RUN groupadd --gid ${KEYLEASE_RUNTIME_GID} leasegate && useradd --uid ${KEYLEASE_RUNTIME_UID} --gid leasegate --create-home leasegate && install -d -o leasegate -g leasegate /var/lib/leasegate
 COPY --from=build /src/target/release/keylease-edge /usr/local/bin/keylease-edge
 COPY --from=build /src/target/release/keylease /usr/local/bin/keylease
 USER leasegate

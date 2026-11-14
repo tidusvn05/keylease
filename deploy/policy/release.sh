@@ -3,15 +3,15 @@ set -eu
 
 policy_file=${1:?Usage: release.sh POLICY_JSON SOURCE_REVISION}
 source_revision=${2:?Usage: release.sh POLICY_JSON SOURCE_REVISION}
-: "${LEASEGATE_CLOUD_URL:?Set LEASEGATE_CLOUD_URL}"
-: "${LEASEGATE_ORGANIZATION_ID:?Set LEASEGATE_ORGANIZATION_ID}"
-: "${LEASEGATE_PROJECT_ID:?Set LEASEGATE_PROJECT_ID}"
-: "${LEASEGATE_ADMIN_TOKEN_FILE:?Set LEASEGATE_ADMIN_TOKEN_FILE}"
+: "${KEYLEASE_CLOUD_URL:?Set KEYLEASE_CLOUD_URL}"
+: "${KEYLEASE_ORGANIZATION_ID:?Set KEYLEASE_ORGANIZATION_ID}"
+: "${KEYLEASE_PROJECT_ID:?Set KEYLEASE_PROJECT_ID}"
+: "${KEYLEASE_ADMIN_TOKEN_FILE:?Set KEYLEASE_ADMIN_TOKEN_FILE}"
 command -v jq >/dev/null
 
-case "$LEASEGATE_CLOUD_URL" in
+case "$KEYLEASE_CLOUD_URL" in
   https://*) ;;
-  *) printf 'LEASEGATE_CLOUD_URL must use HTTPS.\n' >&2; exit 2 ;;
+  *) printf 'KEYLEASE_CLOUD_URL must use HTTPS.\n' >&2; exit 2 ;;
 esac
 
 if command -v sha256sum >/dev/null 2>&1; then
@@ -19,7 +19,7 @@ if command -v sha256sum >/dev/null 2>&1; then
 else
   source_digest=$(shasum -a 256 "$policy_file" | awk '{print $1}')
 fi
-token=$(tr -d '\r\n' < "$LEASEGATE_ADMIN_TOKEN_FILE")
+token=$(tr -d '\r\n' < "$KEYLEASE_ADMIN_TOKEN_FILE")
 request=$(jq \
   --arg revision "$source_revision" \
   --arg digest "$source_digest" \
@@ -30,5 +30,5 @@ curl --fail-with-body --silent --show-error \
   -H "authorization: Bearer $token" \
   -H 'content-type: application/json' \
   --data-binary "$request" \
-  "$LEASEGATE_CLOUD_URL/v1/organizations/$LEASEGATE_ORGANIZATION_ID/projects/$LEASEGATE_PROJECT_ID/policy/releases"
+  "$KEYLEASE_CLOUD_URL/v1/organizations/$KEYLEASE_ORGANIZATION_ID/projects/$KEYLEASE_PROJECT_ID/policy/releases"
 printf '\n'

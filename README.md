@@ -298,7 +298,7 @@ machine-readable acceptance report. See
   conformance checks and signed immutable connector packaging CLI/library.
 - `keylease-service`: the only mutation/policy/connector orchestration layer.
 - `keylease` (`crates/keylease-cli`): headless CLI and local Unix-socket daemon.
-- `keylease-cloud`: PostgreSQL-backed control API, connector registry, policy
+- `keylease-server`: PostgreSQL-backed control API, connector registry, policy
   proposals, dynamic-credential metadata, posture, rotation and worker.
 - `keylease-protocol`: versioned Cloud/Edge wire
   contracts and Ed25519/JCS signatures.

@@ -16,4 +16,4 @@ pub use store::{
     CloudRepository, CredentialLeaseFilter, EdgeEnrollmentSecret,
 };
 
-pub const SERVICE_NAME: &str = "keylease-cloud";
+pub const SERVICE_NAME: &str = "keylease-server";

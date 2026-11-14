@@ -8,7 +8,7 @@ configuration only; never bake an operator credential into the bundle.
 ```sh
 flutter pub get
 flutter build web --release \
-  --dart-define=KEYLEASE_CLOUD_URL=https://leasegate.example.com \
+  --dart-define=KEYLEASE_CLOUD_URL=https://vault.example.com \
   --dart-define=KEYLEASE_ORGANIZATION_ID=org_... \
   --dart-define=KEYLEASE_PROJECT_ID=project_... \
   --dart-define=KEYLEASE_APPROVER_ID=human_... \

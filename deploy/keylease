@@ -5,28 +5,35 @@ script_dir=$(dirname -- "$0")
 root_dir=$(cd "$script_dir/.." && pwd)
 compose_dir="$root_dir/deploy/compose"
 operations_dir="$root_dir/deploy/operations"
-env_file=${LEASEGATE_ENV_FILE:-"$compose_dir/.env"}
+env_file=${KEYLEASE_ENV_FILE:-${LEASEGATE_ENV_FILE:-"$compose_dir/.env"}}
 command_name=${1:-help}
 [ "$#" -eq 0 ] || shift
+
+# Variables were renamed from LEASEGATE_* to KEYLEASE_* in v0.3.
+if [ -f "$env_file" ] && grep -q '^LEASEGATE_' "$env_file"; then
+  printf '%s uses the old LEASEGATE_* variable names. Rename them once with:\n' "$env_file" >&2
+  printf "  sed -i 's/^LEASEGATE_/KEYLEASE_/' %s\n" "$env_file" >&2
+  exit 1
+fi
 
 # Load only the two non-secret operations values understood by this wrapper;
 # never source the Compose environment as shell code.
 if [ -f "$env_file" ]; then
-  if [ -z "${LEASEGATE_AGE_RECIPIENT:-}" ]; then
-    LEASEGATE_AGE_RECIPIENT=$(awk -F= '$1 == "LEASEGATE_AGE_RECIPIENT" {print substr($0, index($0, "=") + 1)}' "$env_file")
-    export LEASEGATE_AGE_RECIPIENT
+  if [ -z "${KEYLEASE_AGE_RECIPIENT:-}" ]; then
+    KEYLEASE_AGE_RECIPIENT=$(awk -F= '$1 == "KEYLEASE_AGE_RECIPIENT" {print substr($0, index($0, "=") + 1)}' "$env_file")
+    export KEYLEASE_AGE_RECIPIENT
   fi
-  if [ -z "${LEASEGATE_BACKUP_DIR:-}" ]; then
-    LEASEGATE_BACKUP_DIR=$(awk -F= '$1 == "LEASEGATE_BACKUP_DIR" {print substr($0, index($0, "=") + 1)}' "$env_file")
-    [ -z "$LEASEGATE_BACKUP_DIR" ] || export LEASEGATE_BACKUP_DIR
+  if [ -z "${KEYLEASE_BACKUP_DIR:-}" ]; then
+    KEYLEASE_BACKUP_DIR=$(awk -F= '$1 == "KEYLEASE_BACKUP_DIR" {print substr($0, index($0, "=") + 1)}' "$env_file")
+    [ -z "$KEYLEASE_BACKUP_DIR" ] || export KEYLEASE_BACKUP_DIR
   fi
 fi
 
 usage() {
   cat <<'EOF'
-LeaseGate single-VPS lifecycle CLI
+KeyLease single-VPS lifecycle CLI
 
-Usage: deploy/leasegate COMMAND [ARGUMENTS]
+Usage: deploy/keylease COMMAND [ARGUMENTS]
 
 Commands:
   install               Provision and bootstrap a new all-in-one VPS
@@ -41,7 +48,7 @@ Commands:
   rotate-admin-token    Rotate the bootstrap administrator credential
   help                  Show this help
 
-Run `deploy/leasegate install --help` for installer options.
+Run `deploy/keylease install --help` for installer options.
 EOF
 }
 

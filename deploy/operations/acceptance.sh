@@ -5,8 +5,8 @@ umask 077
 script_dir=$(dirname -- "$0")
 root_dir=$(cd "$script_dir/../.." && pwd)
 compose_dir="$root_dir/deploy/compose"
-env_file=${LEASEGATE_ENV_FILE:-"$compose_dir/.env"}
-state_dir=${LEASEGATE_OPS_STATE_DIR:-"$compose_dir/.state"}
+env_file=${KEYLEASE_ENV_FILE:-"$compose_dir/.env"}
+state_dir=${KEYLEASE_OPS_STATE_DIR:-"$compose_dir/.state"}
 output=${1:-"$state_dir/phase-9-acceptance.json"}
 command -v jq >/dev/null 2>&1 || { printf 'jq is required.\n' >&2; exit 1; }
 mkdir -p "$(dirname -- "$output")" "$state_dir"
@@ -25,13 +25,13 @@ run_check() {
 checks=$(mktemp "$state_dir/.acceptance-checks.XXXXXX")
 trap 'rm -f "$checks"' EXIT HUP INT TERM
 {
-  run_check preflight env LEASEGATE_ENV_FILE="$env_file" "$compose_dir/single-vps-check.sh" preflight
-  run_check runtime env LEASEGATE_ENV_FILE="$env_file" "$compose_dir/single-vps-check.sh" runtime
-  run_check monitor env LEASEGATE_ENV_FILE="$env_file" LEASEGATE_OPS_STATE_DIR="$state_dir" LEASEGATE_ALERT_WEBHOOK_FILE= "$script_dir/monitor.sh"
-  run_check soak env LEASEGATE_OPS_STATE_DIR="$state_dir" "$script_dir/soak-status.sh"
+  run_check preflight env KEYLEASE_ENV_FILE="$env_file" "$compose_dir/single-vps-check.sh" preflight
+  run_check runtime env KEYLEASE_ENV_FILE="$env_file" "$compose_dir/single-vps-check.sh" runtime
+  run_check monitor env KEYLEASE_ENV_FILE="$env_file" KEYLEASE_OPS_STATE_DIR="$state_dir" KEYLEASE_ALERT_WEBHOOK_FILE= "$script_dir/monitor.sh"
+  run_check soak env KEYLEASE_OPS_STATE_DIR="$state_dir" "$script_dir/soak-status.sh"
   if command -v systemctl >/dev/null 2>&1; then
-    run_check backup_timer systemctl is-enabled leasegate-backup.timer
-    run_check monitor_timer systemctl is-enabled leasegate-monitor.timer
+    run_check backup_timer systemctl is-enabled keylease-backup.timer
+    run_check monitor_timer systemctl is-enabled keylease-monitor.timer
   else
     jq -n '{name:"backup_timer",result:"fail",summary:"systemctl unavailable"}'
     jq -n '{name:"monitor_timer",result:"fail",summary:"systemctl unavailable"}'

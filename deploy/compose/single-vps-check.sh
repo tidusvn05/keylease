@@ -4,7 +4,7 @@ set -eu
 script_dir=$(dirname -- "$0")
 script_dir=$(cd "$script_dir" && pwd)
 compose_file="$script_dir/compose.yaml"
-env_file=${LEASEGATE_ENV_FILE:-"$script_dir/.env"}
+env_file=${KEYLEASE_ENV_FILE:-"$script_dir/.env"}
 mode=${1:-preflight}
 
 pass() {
@@ -31,16 +31,16 @@ docker compose version >/dev/null 2>&1 || fail 'Docker Compose v2 is unavailable
 [ -f "$env_file" ] || fail "environment file is missing: $env_file"
 [ -f "$compose_file" ] || fail 'compose.yaml is missing'
 
-deployment_mode=$(read_env_value LEASEGATE_DEPLOYMENT_MODE)
-execution_mode=$(read_env_value LEASEGATE_EXECUTION_MODE)
-[ "$deployment_mode" = self_hosted ] || fail 'LEASEGATE_DEPLOYMENT_MODE must be self_hosted'
-[ "$execution_mode" = local_gateway ] || fail 'LEASEGATE_EXECUTION_MODE must be local_gateway'
+deployment_mode=$(read_env_value KEYLEASE_DEPLOYMENT_MODE)
+execution_mode=$(read_env_value KEYLEASE_EXECUTION_MODE)
+[ "$deployment_mode" = self_hosted ] || fail 'KEYLEASE_DEPLOYMENT_MODE must be self_hosted'
+[ "$execution_mode" = local_gateway ] || fail 'KEYLEASE_EXECUTION_MODE must be local_gateway'
 pass 'deployment is locked to self_hosted/local_gateway'
 
 docker compose --env-file "$env_file" -f "$compose_file" config --quiet
 pass 'Docker Compose configuration is valid'
 
-secret_dir=${LEASEGATE_SECRET_DIR:-"$script_dir/secrets"}
+secret_dir=${KEYLEASE_SECRET_DIR:-"$script_dir/secrets"}
 [ -d "$secret_dir" ] || fail 'secrets directory is missing; run bootstrap-secrets.sh first'
 required_secrets='postgres_password admin_token control_signing_key edge_storage_key database_url credential_backends.json edge_credential agent_credential vault_password'
 for name in $required_secrets; do
@@ -50,9 +50,9 @@ unsafe_secret=$(find "$secret_dir" -type f -perm /077 -print -quit)
 [ -z "$unsafe_secret" ] || fail "secret has group/world permissions: $unsafe_secret"
 pass 'required secret files exist and are mode 0600 or stricter'
 
-minimum_free_mib=${LEASEGATE_MIN_FREE_MIB:-2048}
+minimum_free_mib=${KEYLEASE_MIN_FREE_MIB:-2048}
 case "$minimum_free_mib" in
-  ''|*[!0-9]*) fail 'LEASEGATE_MIN_FREE_MIB must be an integer' ;;
+  ''|*[!0-9]*) fail 'KEYLEASE_MIN_FREE_MIB must be an integer' ;;
 esac
 available_kib=$(df -Pk "$script_dir" | awk 'NR == 2 {print $4}')
 [ "$available_kib" -ge $((minimum_free_mib * 1024)) ] || fail "less than ${minimum_free_mib} MiB is free"
@@ -74,19 +74,19 @@ docker compose --env-file "$env_file" -f "$compose_file" exec -T postgres \
 pass 'PostgreSQL accepts connections'
 
 docker compose --env-file "$env_file" -f "$compose_file" exec -T control-plane \
-  keylease-cloud healthcheck
+  keylease-server healthcheck
 pass 'Control Plane readiness endpoint and database dependency are healthy'
 
 docker compose --env-file "$env_file" -f "$compose_file" exec -T gateway \
   keylease-edge healthcheck
 pass 'Gateway has an active policy and available audit-spool capacity'
 
-domain=$(read_env_value LEASEGATE_DOMAIN)
+domain=$(read_env_value KEYLEASE_DOMAIN)
 case "$domain" in
-  ''|*[!A-Za-z0-9.-]*) fail 'LEASEGATE_DOMAIN is invalid' ;;
+  ''|*[!A-Za-z0-9.-]*) fail 'KEYLEASE_DOMAIN is invalid' ;;
 esac
 command -v curl >/dev/null 2>&1 || fail 'curl is required for the public TLS check'
-health_url=${LEASEGATE_HEALTH_URL:-"https://$domain/api/readyz"}
+health_url=${KEYLEASE_HEALTH_URL:-"https://$domain/api/readyz"}
 curl --fail --silent --show-error --max-time 10 "$health_url" >/dev/null
 pass "public TLS readiness check succeeded: $health_url"
 

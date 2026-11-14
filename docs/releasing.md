@@ -6,7 +6,7 @@ One tag `vX.Y.Z` on `main` produces everything a release ships:
 |---|---|---|
 | **GitHub release**: release notes (no attached binaries) | people following releases | `Release` workflow, job `release` |
 | **crates.io**: `keylease` and the libraries it needs, at `X.Y.Z` | `cargo install --locked keylease`, and Rust code that embeds the vault | job `crates`, `scripts/release.py publish` with a short-lived Trusted Publishing token |
-| **Container images** `ghcr.io/tidusvn05/keylease-cloud:X.Y.Z` and `ghcr.io/tidusvn05/keylease-edge:X.Y.Z` (and `latest`) | the single-VPS KeyLease Cloud + Edge deployment ([self-hosted-vps.md](self-hosted-vps.md)) | job `image`, from `deploy/compose/Dockerfile.cloud` and `Dockerfile.edge` |
+| **Container images** `ghcr.io/tidusvn05/keylease-server:X.Y.Z` and `ghcr.io/tidusvn05/keylease-edge:X.Y.Z` (and `latest`) | the single-VPS KeyLease Cloud + Edge deployment ([self-hosted-vps.md](self-hosted-vps.md)) | job `image`, from `deploy/compose/Dockerfile.server` and `Dockerfile.edge` |
 
 crates.io is the primary output: users install with `cargo install --locked keylease`. GitHub
 attaches the source archives of the tag to the release. A pre-release tag `vX.Y.Z-rc.N` makes

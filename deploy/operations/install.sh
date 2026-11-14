@@ -20,7 +20,7 @@ confirmation=0
 
 usage() {
   cat <<'EOF'
-Usage: deploy/leasegate install --domain DOMAIN --age-recipient AGE_RECIPIENT --yes [OPTIONS]
+Usage: deploy/keylease install --domain DOMAIN --age-recipient AGE_RECIPIENT --yes [OPTIONS]
 
 Required:
   --domain DOMAIN              DNS name already pointing to this VPS
@@ -96,9 +96,9 @@ set_env() {
   mv "$temporary" "$env_file"
 }
 
-set_env LEASEGATE_DOMAIN "$domain"
-set_env LEASEGATE_RUNTIME_UID "$(id -u)"
-set_env LEASEGATE_RUNTIME_GID "$(id -g)"
+set_env KEYLEASE_DOMAIN "$domain"
+set_env KEYLEASE_RUNTIME_UID "$(id -u)"
+set_env KEYLEASE_RUNTIME_GID "$(id -g)"
 
 docker compose --env-file "$env_file" -f "$compose_dir/compose.yaml" build control-plane web gateway
 docker compose --env-file "$env_file" -f "$compose_dir/compose.yaml" \
@@ -194,9 +194,9 @@ chmod 600 "$secret_dir"/*
 set_env KEYLEASE_ORGANIZATION_ID "$organization_id"
 set_env KEYLEASE_PROJECT_ID "$project_id"
 set_env KEYLEASE_APPROVER_ID "$approver_id"
-set_env LEASEGATE_EDGE_ID "$edge_id"
-set_env LEASEGATE_AGENT_ID "$agent_id"
-set_env LEASEGATE_CONTROL_VERIFYING_KEY "$control_verifying_key"
+set_env KEYLEASE_EDGE_ID "$edge_id"
+set_env KEYLEASE_AGENT_ID "$agent_id"
+set_env KEYLEASE_CONTROL_VERIFYING_KEY "$control_verifying_key"
 
 docker compose --env-file "$env_file" -f "$compose_dir/compose.yaml" run --rm --no-deps \
   --entrypoint keylease gateway --db /var/lib/leasegate/vault.sqlite3 \
@@ -204,36 +204,36 @@ docker compose --env-file "$env_file" -f "$compose_dir/compose.yaml" run --rm --
 docker compose --env-file "$env_file" -f "$compose_dir/compose.yaml" build web
 docker compose --env-file "$env_file" -f "$compose_dir/compose.yaml" up -d --wait
 
-LEASEGATE_ENV_FILE="$env_file" "$compose_dir/single-vps-check.sh" runtime
+KEYLEASE_ENV_FILE="$env_file" "$compose_dir/single-vps-check.sh" runtime
 
 if [ "$enable_timers" -eq 1 ]; then
   command -v sudo >/dev/null 2>&1 || fail 'sudo is required to install systemd timers; use --no-systemd to defer'
   sudo "$root_dir/deploy/systemd/install.sh" "$root_dir" --apply
   operations_env=$(mktemp "$state_dir/.operations-env.XXXXXX")
   sed \
-    -e "s|^LEASEGATE_AGE_RECIPIENT=.*|LEASEGATE_AGE_RECIPIENT=$age_recipient|" \
-    -e 's|^LEASEGATE_AGE_IDENTITY=.*|LEASEGATE_AGE_IDENTITY=|' \
-    -e "s|^LEASEGATE_ENV_FILE=.*|LEASEGATE_ENV_FILE=$env_file|" \
-    -e "s|^LEASEGATE_OPS_STATE_DIR=.*|LEASEGATE_OPS_STATE_DIR=$state_dir|" \
-    -e "s|^LEASEGATE_METRICS_FILE=.*|LEASEGATE_METRICS_FILE=$state_dir/leasegate.prom|" \
-    "$root_dir/deploy/systemd/leasegate-operations.env.example" > "$operations_env"
-  sudo install -m 600 "$operations_env" /etc/leasegate/operations.env
+    -e "s|^KEYLEASE_AGE_RECIPIENT=.*|KEYLEASE_AGE_RECIPIENT=$age_recipient|" \
+    -e 's|^KEYLEASE_AGE_IDENTITY=.*|KEYLEASE_AGE_IDENTITY=|' \
+    -e "s|^KEYLEASE_ENV_FILE=.*|KEYLEASE_ENV_FILE=$env_file|" \
+    -e "s|^KEYLEASE_OPS_STATE_DIR=.*|KEYLEASE_OPS_STATE_DIR=$state_dir|" \
+    -e "s|^KEYLEASE_METRICS_FILE=.*|KEYLEASE_METRICS_FILE=$state_dir/keylease.prom|" \
+    "$root_dir/deploy/systemd/keylease-operations.env.example" > "$operations_env"
+  sudo install -m 600 "$operations_env" /etc/keylease/operations.env
   rm -f "$operations_env"
-  sudo install -d -o "$(id -un)" -g "$(id -gn)" -m 700 /var/backups/leasegate
-  initial_backup_dir=/var/backups/leasegate
+  sudo install -d -o "$(id -un)" -g "$(id -gn)" -m 700 /var/backups/keylease
+  initial_backup_dir=/var/backups/keylease
 else
   initial_backup_dir="$compose_dir/backups"
 fi
-set_env LEASEGATE_AGE_RECIPIENT "$age_recipient"
-set_env LEASEGATE_BACKUP_DIR "$initial_backup_dir"
+set_env KEYLEASE_AGE_RECIPIENT "$age_recipient"
+set_env KEYLEASE_BACKUP_DIR "$initial_backup_dir"
 
-LEASEGATE_ENV_FILE="$env_file" LEASEGATE_AGE_RECIPIENT="$age_recipient" \
+KEYLEASE_ENV_FILE="$env_file" KEYLEASE_AGE_RECIPIENT="$age_recipient" \
   "$compose_dir/backup.sh" "$initial_backup_dir"
-LEASEGATE_ENV_FILE="$env_file" LEASEGATE_BACKUP_DIR="$initial_backup_dir" \
-  LEASEGATE_OPS_STATE_DIR="$state_dir" "$script_dir/monitor.sh"
-LEASEGATE_ENV_FILE="$env_file" "$compose_dir/single-vps-check.sh" runtime
+KEYLEASE_ENV_FILE="$env_file" KEYLEASE_BACKUP_DIR="$initial_backup_dir" \
+  KEYLEASE_OPS_STATE_DIR="$state_dir" "$script_dir/monitor.sh"
+KEYLEASE_ENV_FILE="$env_file" "$compose_dir/single-vps-check.sh" runtime
 if [ "$enable_timers" -eq 1 ]; then
-  sudo systemctl enable --now leasegate-backup.timer leasegate-monitor.timer
+  sudo systemctl enable --now keylease-backup.timer keylease-monitor.timer
 fi
 
 jq -n --arg installed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -244,6 +244,6 @@ jq -n --arg installed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   > "$state_dir/installation.json"
 chmod 600 "$state_dir/installation.json"
 
-printf 'LeaseGate single-VPS installation completed at https://%s\n' "$domain"
+printf 'KeyLease single-VPS installation completed at https://%s\n' "$domain"
 printf 'Routing IDs are saved in %s; one-time credentials remain only in mode-0600 files.\n' "$env_file"
 printf 'Move backup ciphertext off this VPS and keep the age identity on a separate trusted system.\n'

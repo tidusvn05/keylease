@@ -4,11 +4,11 @@ umask 077
 
 script_dir=$(dirname -- "$0")
 script_dir=$(cd "$script_dir" && pwd)
-env_file=${LEASEGATE_ENV_FILE:-"$script_dir/.env"}
+env_file=${KEYLEASE_ENV_FILE:-"$script_dir/.env"}
 database_backup=${1:?Usage: verify-backup.sh POSTGRES_DUMP_AGE CONFIG_TAR_AGE EDGE_TAR_AGE}
 config_backup=${2:?Usage: verify-backup.sh POSTGRES_DUMP_AGE CONFIG_TAR_AGE EDGE_TAR_AGE}
 edge_backup=${3:?Usage: verify-backup.sh POSTGRES_DUMP_AGE CONFIG_TAR_AGE EDGE_TAR_AGE}
-: "${LEASEGATE_AGE_IDENTITY:?Set LEASEGATE_AGE_IDENTITY to an age identity file}"
+: "${KEYLEASE_AGE_IDENTITY:?Set KEYLEASE_AGE_IDENTITY to an age identity file}"
 
 command -v age >/dev/null
 command -v docker >/dev/null
@@ -33,9 +33,9 @@ fi
 
 temporary_dir=$(mktemp -d)
 trap 'rm -rf "$temporary_dir"' EXIT HUP INT TERM
-age -d -i "$LEASEGATE_AGE_IDENTITY" -o "$temporary_dir/database.dump" "$database_backup"
-age -d -i "$LEASEGATE_AGE_IDENTITY" -o "$temporary_dir/config.tar" "$config_backup"
-age -d -i "$LEASEGATE_AGE_IDENTITY" -o "$temporary_dir/edge.tar" "$edge_backup"
+age -d -i "$KEYLEASE_AGE_IDENTITY" -o "$temporary_dir/database.dump" "$database_backup"
+age -d -i "$KEYLEASE_AGE_IDENTITY" -o "$temporary_dir/config.tar" "$config_backup"
+age -d -i "$KEYLEASE_AGE_IDENTITY" -o "$temporary_dir/edge.tar" "$edge_backup"
 
 docker compose --env-file "$env_file" -f "$script_dir/compose.yaml" run --rm --no-deps --entrypoint pg_restore postgres \
   --list < "$temporary_dir/database.dump" >/dev/null

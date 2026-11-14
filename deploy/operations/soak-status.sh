@@ -3,11 +3,11 @@ set -eu
 
 script_dir=$(dirname -- "$0")
 root_dir=$(cd "$script_dir/../.." && pwd)
-state_dir=${LEASEGATE_OPS_STATE_DIR:-"$root_dir/deploy/compose/.state"}
+state_dir=${KEYLEASE_OPS_STATE_DIR:-"$root_dir/deploy/compose/.state"}
 soak_file="$state_dir/soak.state"
-required_seconds=${LEASEGATE_SOAK_REQUIRED_SECONDS:-604800}
-case "$required_seconds" in ''|*[!0-9]*) printf 'LEASEGATE_SOAK_REQUIRED_SECONDS must be an integer.\n' >&2; exit 1 ;; esac
-[ "$required_seconds" -ge 1 ] || { printf 'LEASEGATE_SOAK_REQUIRED_SECONDS must be positive.\n' >&2; exit 1; }
+required_seconds=${KEYLEASE_SOAK_REQUIRED_SECONDS:-604800}
+case "$required_seconds" in ''|*[!0-9]*) printf 'KEYLEASE_SOAK_REQUIRED_SECONDS must be an integer.\n' >&2; exit 1 ;; esac
+[ "$required_seconds" -ge 1 ] || { printf 'KEYLEASE_SOAK_REQUIRED_SECONDS must be positive.\n' >&2; exit 1; }
 [ -f "$soak_file" ] || { printf 'No soak state exists; run monitor.sh first.\n' >&2; exit 1; }
 consecutive=$(awk -F= '$1 == "SOAK_CONSECUTIVE_SECONDS" {print $2}' "$soak_file")
 last_check=$(awk -F= '$1 == "SOAK_LAST_CHECK_AT" {print $2}' "$soak_file")

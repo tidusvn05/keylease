@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
-use keylease_cloud::{CloudApiConfig, CloudApiState, CloudRepository, router};
 use keylease_protocol::ControlSigner;
+use keylease_server::{CloudApiConfig, CloudApiState, CloudRepository, router};
 use std::{env, fs, net::SocketAddr, path::Path};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -26,7 +26,8 @@ async fn main() -> Result<()> {
     let admin_token =
         read_secret_text(Path::new(&required_env("KEYLEASE_ADMIN_TOKEN_FILE")?), 4096)?;
     let signing_key_path = required_env("KEYLEASE_CONTROL_SIGNING_KEY_FILE")?;
-    let listen: SocketAddr = env::var("KEYLEASE_CLOUD_LISTEN")
+    let listen: SocketAddr = env::var("KEYLEASE_SERVER_LISTEN")
+        .or_else(|_| env::var("KEYLEASE_CLOUD_LISTEN"))
         .unwrap_or_else(|_| "127.0.0.1:8080".into())
         .parse()
         .context("invalid KEYLEASE_CLOUD_LISTEN")?;
@@ -81,7 +82,8 @@ async fn migrate_only() -> Result<()> {
 }
 
 async fn local_healthcheck() -> Result<()> {
-    let listen: SocketAddr = env::var("KEYLEASE_CLOUD_LISTEN")
+    let listen: SocketAddr = env::var("KEYLEASE_SERVER_LISTEN")
+        .or_else(|_| env::var("KEYLEASE_CLOUD_LISTEN"))
         .unwrap_or_else(|_| "127.0.0.1:8080".into())
         .parse()
         .context("invalid KEYLEASE_CLOUD_LISTEN")?;
