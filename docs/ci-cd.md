@@ -106,3 +106,27 @@ spec:
     - secretKey: DATABASE_URL
       remoteRef: { key: DATABASE_URL }
 ```
+
+
+## Dynamic PostgreSQL logins
+
+Instead of a standing database password, a project admin stores an admin URL
+as a Managed secret (e.g. `PG_ADMIN` in each environment) and configures
+
+```sh
+PUT /v1/orgs/ORG/projects/shop/dynamic/postgres/main
+{"admin_secret": "PG_ADMIN", "grant_role": "app_migrations", "max_ttl_seconds": 3600}
+```
+
+A job with a machine token (or access key) then gets its own login that joins
+`app_migrations` and expires (`VALID UNTIL`):
+
+```sh
+curl -X POST -H "Authorization: Bearer $KEYLEASE_MACHINE_TOKEN" \
+  -d '{"ttl_seconds": 900}' https://vault.example.com/api/v1/machine/dynamic/postgres/main
+# {"username": "kl_…", "password": "…", "url": "postgres://kl_…@db/app", "expires_at": …}
+```
+
+The role must exist and the admin URL's user must be able to create roles in
+it (`CREATEROLE`). Expired logins can no longer sign in; dropping them is left
+to a periodic `DROP ROLE` of `kl_%` roles past `rolvaliduntil`.

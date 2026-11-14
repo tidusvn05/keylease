@@ -33,6 +33,19 @@ Each call is in the project's audit as `gateway:CLIENT`. Revoking a client
 stops its token at once. Bodies are limited to 2 MiB each way and the text
 returned to the model to 256 KiB.
 
+## Base-URL proxy for tools and SDKs
+
+The same bindings work without MCP: a gateway client's tools use
+
+```text
+https://vault.example.com/api/v1/orgs/ORG/gateway/http/PROJECT/ENVIRONMENT/BINDING
+```
+
+as the API's base URL and send the gateway token in the
+`x-keylease-token` header (most SDKs take default headers). The gateway adds
+the credential, forwards the request and returns the API's answer with the
+secret scrubbed from the body and headers.
+
 Not yet: proxying other MCP servers (upstream MCP with OAuth) and per-call
 approvals; until then, give clients only the environments and write access
 they need.

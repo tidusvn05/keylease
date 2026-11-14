@@ -402,10 +402,18 @@ async fn exchange(State(state): State<CloudApiState>, body: Bytes) -> ApiResult<
 
 /// Every secret of the identity's environment, for the bearer of a machine
 /// token.
-async fn machine_secrets(
-    State(state): State<CloudApiState>,
-    headers: HeaderMap,
-) -> ApiResult<Response> {
+/// The machine identity behind a bearer machine token or access key.
+pub(crate) struct MachineCaller {
+    pub(crate) identity_id: String,
+    pub(crate) org: String,
+    pub(crate) slug: String,
+    pub(crate) environment: String,
+}
+
+pub(crate) async fn machine_caller(
+    state: &CloudApiState,
+    headers: &HeaderMap,
+) -> ApiResult<MachineCaller> {
     let token = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -423,9 +431,24 @@ async fn machine_secrets(
     .await
     .map_err(storage)?
     .ok_or_else(|| denied("the machine token is invalid or expired"))?;
-    let org: String = row.get("org_id");
-    let slug: String = row.get("slug");
-    let environment: String = row.get("environment");
+    Ok(MachineCaller {
+        identity_id: row.get("identity_id"),
+        org: row.get("org_id"),
+        slug: row.get("slug"),
+        environment: row.get("environment"),
+    })
+}
+
+async fn machine_secrets(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let caller = machine_caller(&state, &headers).await?;
+    let (org, slug, environment) = (
+        caller.org.clone(),
+        caller.slug.clone(),
+        caller.environment.clone(),
+    );
     let mut secrets = Map::new();
     for secret in current(&state, &org, &slug, &environment).await? {
         let name: String = secret.get("name");
@@ -442,7 +465,7 @@ async fn machine_secrets(
         Some(&environment),
         None,
         "machine_read",
-        &format!("machine:{}", row.get::<String, _>("identity_id")),
+        &format!("machine:{}", caller.identity_id),
     )
     .await?;
     let mut response =

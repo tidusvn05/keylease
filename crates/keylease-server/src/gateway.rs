@@ -65,6 +65,10 @@ pub(crate) fn router() -> Router<CloudApiState> {
             axum::routing::delete(revoke_client),
         )
         .route("/v1/orgs/{org}/mcp", post(mcp).get(mcp_stream))
+        .route(
+            "/v1/orgs/{org}/gateway/http/{project}/{environment}/{binding}/{*path}",
+            axum::routing::any(http_proxy),
+        )
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -575,30 +579,39 @@ fn scrub(body: &[u8], secrets: &[Vec<u8>]) -> Vec<u8> {
     out
 }
 
-async fn http_request(
+struct Forward {
+    project: String,
+    environment: String,
+    binding: String,
+    method: reqwest::Method,
+    path: String,
+    headers: Vec<(String, String)>,
+    body: Option<Vec<u8>>,
+}
+
+struct Forwarded {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+/// Checks the grant, adds the Managed secret, sends the request and scrubs
+/// the answer. Shared by the `http_request` tool and the base-URL proxy.
+async fn forward(
     state: &CloudApiState,
     org: &str,
     caller: &Client,
-    arguments: Value,
-) -> ApiResult<String> {
-    let text = |name: &str| {
-        arguments[name]
-            .as_str()
-            .map(str::to_owned)
-            .ok_or_else(|| invalid(format!("{name} is required")))
-    };
-    let (project, environment, binding_name, path) = (
-        text("project")?,
-        text("environment")?,
-        text("binding")?,
-        text("path")?,
-    );
-    let method = arguments["method"]
-        .as_str()
-        .unwrap_or("GET")
-        .to_ascii_uppercase();
-    let method =
-        reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| invalid("invalid method"))?;
+    request: Forward,
+) -> ApiResult<Forwarded> {
+    let Forward {
+        project,
+        environment,
+        binding: binding_name,
+        method,
+        path,
+        headers,
+        body,
+    } = request;
     let safe = matches!(
         method,
         reqwest::Method::GET | reqwest::Method::HEAD | reqwest::Method::OPTIONS
@@ -610,6 +623,9 @@ async fn http_request(
     }
     if method == reqwest::Method::CONNECT || method == reqwest::Method::TRACE {
         return Err(invalid("CONNECT and TRACE are not forwarded"));
+    }
+    if body.as_ref().is_some_and(|body| body.len() > MAX_BODY) {
+        return Err(invalid("the body is too large"));
     }
     let granted = sqlx::query("SELECT 1 FROM gateway_grants WHERE client_id=$1 AND org_id=$2 AND slug=$3 AND environment=$4")
         .bind(&caller.id)
@@ -695,49 +711,40 @@ async fn http_request(
         .build()
         .map_err(|_| ApiError(KeyLeaseError::Storage))?;
     let header_name: String = binding.get("header");
-    let mut request = http.request(method.clone(), url.clone());
-    if let Some(extra) = arguments["headers"].as_object() {
-        for (name, value) in extra {
-            let lower = name.to_ascii_lowercase();
-            if let Some(value) = value.as_str()
-                && valid_header_name(name)
-                && !HOP_BY_HOP.contains(&lower.as_str())
-                && lower != header_name.to_ascii_lowercase()
-                && !value.contains(['\r', '\n'])
-            {
-                request = request.header(name.as_str(), value);
-            }
+    let mut outgoing = http.request(method.clone(), url);
+    for (name, value) in &headers {
+        let lower = name.to_ascii_lowercase();
+        if valid_header_name(name)
+            && !HOP_BY_HOP.contains(&lower.as_str())
+            && lower != header_name.to_ascii_lowercase()
+            && lower != "x-keylease-token"
+            && !value.contains(['\r', '\n'])
+        {
+            outgoing = outgoing.header(name.as_str(), value.as_str());
         }
     }
-    request = request
+    outgoing = outgoing
         .header("accept-encoding", "identity")
         .header(header_name.as_str(), value.as_str());
-    if let Some(json_body) = arguments.get("json").filter(|value| !value.is_null()) {
-        let bytes =
-            serde_json::to_vec(json_body).map_err(|_| invalid("json is not serializable"))?;
-        if bytes.len() > MAX_BODY {
-            return Err(invalid("the body is too large"));
-        }
-        request = request
-            .header("content-type", "application/json")
-            .body(bytes);
-    } else if let Some(body) = arguments["body"].as_str() {
-        if body.len() > MAX_BODY {
-            return Err(invalid("the body is too large"));
-        }
-        request = request.body(body.to_owned());
+    if let Some(body) = body {
+        outgoing = outgoing.body(body);
     }
-    let mut response = request
+    let mut response = outgoing
         .send()
         .await
         .map_err(|_| ApiError(KeyLeaseError::ConnectorUnavailable { retryable: true }))?;
     let status = response.status().as_u16();
-    let content_type = response
+    let response_headers: Vec<(String, String)> = response
         .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .to_owned();
+        .iter()
+        .filter(|(name, _)| !HOP_BY_HOP.contains(&name.as_str()))
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_owned(), value.to_owned()))
+        })
+        .collect();
     let mut received = Vec::new();
     while let Some(chunk) = response
         .chunk()
@@ -756,16 +763,15 @@ async fn http_request(
             .into_bytes(),
         value.as_bytes().to_vec(),
     ];
-    let scrubbed = scrub(&received, &forms);
-    let mut text = String::from_utf8_lossy(&scrubbed).into_owned();
-    if text.len() > MAX_TOOL_TEXT {
-        let mut end = MAX_TOOL_TEXT;
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        text.truncate(end);
-        text.push_str("\n[truncated by KeyLease]");
-    }
+    let headers = response_headers
+        .into_iter()
+        .map(|(name, value)| {
+            (
+                name,
+                String::from_utf8_lossy(&scrub(value.as_bytes(), &forms)).into_owned(),
+            )
+        })
+        .collect();
     audit_event(
         state,
         org,
@@ -776,9 +782,159 @@ async fn http_request(
         &format!("gateway:{}", caller.id),
     )
     .await?;
+    Ok(Forwarded {
+        status,
+        headers,
+        body: scrub(&received, &forms),
+    })
+}
+
+async fn http_request(
+    state: &CloudApiState,
+    org: &str,
+    caller: &Client,
+    arguments: Value,
+) -> ApiResult<String> {
+    let text = |name: &str| {
+        arguments[name]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| invalid(format!("{name} is required")))
+    };
+    let method = arguments["method"]
+        .as_str()
+        .unwrap_or("GET")
+        .to_ascii_uppercase();
+    let method =
+        reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| invalid("invalid method"))?;
+    let mut headers: Vec<(String, String)> = arguments["headers"]
+        .as_object()
+        .map(|extra| {
+            extra
+                .iter()
+                .filter_map(|(name, value)| {
+                    value.as_str().map(|value| (name.clone(), value.to_owned()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let body = if let Some(json_body) = arguments.get("json").filter(|value| !value.is_null()) {
+        headers.push(("content-type".into(), "application/json".into()));
+        Some(serde_json::to_vec(json_body).map_err(|_| invalid("json is not serializable"))?)
+    } else {
+        arguments["body"]
+            .as_str()
+            .map(|body| body.as_bytes().to_vec())
+    };
+    let forwarded = forward(
+        state,
+        org,
+        caller,
+        Forward {
+            project: text("project")?,
+            environment: text("environment")?,
+            binding: text("binding")?,
+            method,
+            path: text("path")?,
+            headers,
+            body,
+        },
+    )
+    .await?;
+    let content_type = forwarded
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+        .map(|(_, value)| value.as_str())
+        .unwrap_or_default();
+    let mut text = String::from_utf8_lossy(&forwarded.body).into_owned();
+    if text.len() > MAX_TOOL_TEXT {
+        let mut end = MAX_TOOL_TEXT;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+        text.push_str("\n[truncated by KeyLease]");
+    }
     Ok(format!(
-        "HTTP {status}\ncontent-type: {content_type}\n\n{text}"
+        "HTTP {}\ncontent-type: {content_type}\n\n{text}",
+        forwarded.status
     ))
+}
+
+/// The base-URL proxy: `…/gateway/http/{project}/{environment}/{binding}` is
+/// a drop-in API base URL for tools and SDKs. The gateway token travels in
+/// `x-keylease-token`, so the tool's own `Authorization` slot stays free.
+async fn http_proxy(
+    State(state): State<CloudApiState>,
+    Path(segments): Path<Vec<(String, String)>>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let segment = |name: &str| {
+        segments
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.clone())
+            .unwrap_or_default()
+    };
+    let org = segment("org");
+    let token = headers
+        .get("x-keylease-token")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let mut auth = HeaderMap::new();
+    if let Ok(value) = format!("Bearer {token}").parse() {
+        auth.insert(header::AUTHORIZATION, value);
+    }
+    let caller = match client(&state, &org, &auth).await {
+        Ok(caller) => caller,
+        Err(error) => return error.into_response(),
+    };
+    let mut path = format!("/{}", segment("path"));
+    if let Some(query) = uri.query() {
+        path.push('?');
+        path.push_str(query);
+    }
+    let Ok(method) = reqwest::Method::from_bytes(method.as_str().as_bytes()) else {
+        return StatusCode::METHOD_NOT_ALLOWED.into_response();
+    };
+    let request = Forward {
+        project: segment("project"),
+        environment: segment("environment"),
+        binding: segment("binding"),
+        method,
+        path,
+        headers: headers
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|value| (name.as_str().to_owned(), value.to_owned()))
+            })
+            .collect(),
+        body: (!body.is_empty()).then(|| body.to_vec()),
+    };
+    match forward(&state, &org, &caller, request).await {
+        Ok(forwarded) => {
+            let mut response = Response::new(axum::body::Body::from(forwarded.body));
+            *response.status_mut() =
+                StatusCode::from_u16(forwarded.status).unwrap_or(StatusCode::BAD_GATEWAY);
+            for (name, value) in forwarded.headers {
+                if let (Ok(name), Ok(value)) = (
+                    axum::http::HeaderName::from_bytes(name.as_bytes()),
+                    axum::http::HeaderValue::from_str(&value),
+                ) {
+                    response.headers_mut().append(name, value);
+                }
+            }
+            response
+        }
+        Err(error) => error.into_response(),
+    }
 }
 
 #[cfg(test)]
