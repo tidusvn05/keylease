@@ -4,6 +4,7 @@ mod api;
 mod console;
 mod console_assets;
 mod console_sso;
+mod dynamic;
 mod enterprise;
 mod enterprise_api;
 mod gateway;
