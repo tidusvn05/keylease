@@ -98,6 +98,24 @@ function Secrets() {
     );
     await queryClient.invalidateQueries({ queryKey: machinesKey });
   };
+  const bindingsKey = ["bindings", search.org, search.project];
+  const { data: bindings = [] } = useQuery({
+    queryKey: bindingsKey,
+    queryFn: async () =>
+      (await api.GET("/v1/orgs/{org}/projects/{slug}/http-bindings", { params: { path: params } })).data?.bindings ?? [],
+  });
+  const addBinding = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const { error } = await api.PUT("/v1/orgs/{org}/projects/{slug}/http-bindings/{name}", {
+      params: { path: { ...params, name: String(data.get("name")) } },
+      body: { base_url: String(data.get("base_url")), secret_name: String(data.get("secret_name")) },
+    });
+    report(error);
+    if (!error) form.reset();
+    await queryClient.invalidateQueries({ queryKey: bindingsKey });
+  };
   const writable = project?.my_role === "write" || project?.my_role === "admin";
   const path = (name: string) => ({ path: { ...params, environment, name } });
   const refresh = () =>
@@ -275,6 +293,31 @@ function Secrets() {
           <Button type="submit">{t("secrets.set")}</Button>
         </form>
       )}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">{t("secrets.bindings")}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          <p className="text-muted-foreground">{t("secrets.bindingsHelp")}</p>
+          {bindings.map((binding) => (
+            <div key={binding.name} className="flex flex-wrap gap-2">
+              <code>{binding.name}</code>
+              <span>{binding.base_url}</span>
+              <span className="text-muted-foreground font-mono">{binding.secret_name}</span>
+            </div>
+          ))}
+          {project.my_role === "admin" && (
+            <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => void addBinding(event)}>
+              <input className={input} name="name" required pattern="[a-z][a-z0-9-]*" placeholder="stripe" aria-label={t("secrets.name")} />
+              <input className={input} name="base_url" type="url" required placeholder="https://api.stripe.com" aria-label={t("secrets.baseUrl")} />
+              <input className={`${input} font-mono`} name="secret_name" required placeholder="STRIPE_KEY" aria-label={t("secrets.secretName")} />
+              <Button type="submit" size="sm">
+                {t("secrets.set")}
+              </Button>
+            </form>
+          )}
+        </CardContent>
+      </Card>
       {project.my_role === "admin" && (
         <Card>
           <CardHeader>
