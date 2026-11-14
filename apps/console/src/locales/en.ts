@@ -92,6 +92,11 @@ export const en = {
     restore: "Restore",
     deleted: "deleted",
     empty: "No secrets in this environment yet.",
+    pending: "This environment is protected: your change waits for a project admin's approval.",
+    changeRequests: "Waiting for approval",
+    approve: "Approve",
+    reject: "Reject",
+    requestedBy: "by {{name}}",
     readOnly: "You can read these secrets but not change them.",
   },
   approvals: {

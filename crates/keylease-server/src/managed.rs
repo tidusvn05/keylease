@@ -55,6 +55,14 @@ pub(crate) fn router() -> Router<CloudApiState> {
             post(rotate_key),
         )
         .route("/v1/orgs/{org}/projects/{slug}/audit", get(audit))
+        .route(
+            "/v1/orgs/{org}/projects/{slug}/change-requests",
+            get(list_change_requests),
+        )
+        .route(
+            "/v1/orgs/{org}/projects/{slug}/change-requests/{request}/{decision}",
+            post(decide_change_request),
+        )
 }
 
 fn root(state: &CloudApiState) -> ApiResult<&SecretKey> {
@@ -468,6 +476,22 @@ async fn set_secret(
     if request.value.len() > MAX_VALUE_BYTES {
         return Err(invalid("a secret value is at most 64 KiB"));
     }
+    if needs_review(&state, &org, &slug, &environment, &account).await? {
+        return propose(
+            &state,
+            Proposal {
+                org: &org,
+                slug: &slug,
+                environment: &environment,
+                name: &name,
+                action: "set",
+                value: Some(request.value.as_bytes()),
+                restore_version: None,
+                account: &account,
+            },
+        )
+        .await;
+    }
     let version = write_version(
         &state,
         &org,
@@ -511,6 +535,22 @@ async fn delete_secret(
         .is_none_or(|row| row.get::<bool, _>("deleted"))
     {
         return Err(ApiError(KeyLeaseError::NotFound { resource: name }));
+    }
+    if needs_review(&state, &org, &slug, &environment, &account).await? {
+        return propose(
+            &state,
+            Proposal {
+                org: &org,
+                slug: &slug,
+                environment: &environment,
+                name: &name,
+                action: "delete",
+                value: None,
+                restore_version: None,
+                account: &account,
+            },
+        )
+        .await;
     }
     let version = write_version(&state, &org, &slug, &environment, &name, None, &account).await?;
     audit_event(
@@ -605,6 +645,22 @@ async fn restore(
             resource: format!("{name} version {}", request.version),
         })
     })?;
+    if needs_review(&state, &org, &slug, &environment, &account).await? {
+        return propose(
+            &state,
+            Proposal {
+                org: &org,
+                slug: &slug,
+                environment: &environment,
+                name: &name,
+                action: "restore",
+                value: None,
+                restore_version: Some(request.version),
+                account: &account,
+            },
+        )
+        .await;
+    }
     let value = decrypt(&state, &org, &slug, &environment, &name, &row).await?;
     let version = write_version(
         &state,
@@ -718,4 +774,260 @@ async fn audit(
             "at": row.get::<DateTime<Utc>, _>("at"),
         })).collect::<Vec<_>>()
     })))
+}
+
+// ---------------------------------------------------------------- change requests
+
+fn change_aad(request: &str) -> Vec<u8> {
+    format!("keylease-managed-change-v1\n{request}").into_bytes()
+}
+
+/// Whether a change by `account` must wait for an admin: it is in a protected
+/// environment and the account is not a project admin.
+async fn needs_review(
+    state: &CloudApiState,
+    org: &str,
+    slug: &str,
+    environment: &str,
+    account: &str,
+) -> ApiResult<bool> {
+    if project_role(state, org, slug, account).await? == Some(ProjectRole::Admin) {
+        return Ok(false);
+    }
+    let environments: Value =
+        sqlx::query("SELECT environments FROM team_projects WHERE org_id=$1 AND slug=$2")
+            .bind(org)
+            .bind(slug)
+            .fetch_one(state.repository.pool())
+            .await
+            .map_err(storage)?
+            .get("environments");
+    let environments: Vec<ProjectEnvironment> =
+        serde_json::from_value(environments).map_err(|_| ApiError(KeyLeaseError::Storage))?;
+    Ok(environments
+        .iter()
+        .any(|known| known.slug == environment && known.protected))
+}
+
+struct Proposal<'a> {
+    org: &'a str,
+    slug: &'a str,
+    environment: &'a str,
+    name: &'a str,
+    action: &'a str,
+    value: Option<&'a [u8]>,
+    restore_version: Option<i32>,
+    account: &'a str,
+}
+
+/// Records a change for an admin to approve instead of applying it.
+async fn propose(state: &CloudApiState, proposal: Proposal<'_>) -> ApiResult<Json<Value>> {
+    let request_id = format!("change_{}", uuid::Uuid::now_v7().simple());
+    let (sealed, key_version) = match proposal.value {
+        Some(value) => {
+            let (key_version, key) = data_key(state, proposal.org, proposal.slug).await?;
+            let sealed = seal_symmetric(&key, value, &change_aad(&request_id)).map_err(crypto)?;
+            (
+                Some(serde_json::to_string(&sealed).map_err(|_| ApiError(KeyLeaseError::Storage))?),
+                Some(key_version),
+            )
+        }
+        None => (None, None),
+    };
+    sqlx::query(
+        "INSERT INTO managed_change_requests(request_id,org_id,slug,environment,name,action,sealed_json,key_version,restore_version,requested_by,requested_at,status) \
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now(),'pending')",
+    )
+    .bind(&request_id)
+    .bind(proposal.org)
+    .bind(proposal.slug)
+    .bind(proposal.environment)
+    .bind(proposal.name)
+    .bind(proposal.action)
+    .bind(sealed)
+    .bind(key_version)
+    .bind(proposal.restore_version)
+    .bind(proposal.account)
+    .execute(state.repository.pool())
+    .await
+    .map_err(storage)?;
+    audit_event(
+        state,
+        proposal.org,
+        proposal.slug,
+        Some(proposal.environment),
+        Some(proposal.name),
+        &format!("propose_{}", proposal.action),
+        proposal.account,
+    )
+    .await?;
+    Ok(Json(json!({
+        "status": "pending",
+        "change_request_id": request_id,
+        "message": "This environment is protected: a project admin must approve the change.",
+    })))
+}
+
+async fn list_change_requests(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((org, slug)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    authorize(&state, &headers, &org, &slug, None, ProjectRole::Write).await?;
+    let rows = sqlx::query(
+        "SELECT request_id,environment,name,action,restore_version,requested_by,requested_at FROM managed_change_requests \
+         WHERE org_id=$1 AND slug=$2 AND status='pending' ORDER BY requested_at",
+    )
+    .bind(&org)
+    .bind(&slug)
+    .fetch_all(state.repository.pool())
+    .await
+    .map_err(storage)?;
+    Ok(Json(json!({
+        "change_requests": rows.iter().map(|row| json!({
+            "change_request_id": row.get::<String, _>("request_id"),
+            "environment": row.get::<String, _>("environment"),
+            "name": row.get::<String, _>("name"),
+            "action": row.get::<String, _>("action"),
+            "restore_version": row.get::<Option<i32>, _>("restore_version"),
+            "requested_by": row.get::<String, _>("requested_by"),
+            "requested_at": row.get::<DateTime<Utc>, _>("requested_at"),
+        })).collect::<Vec<_>>()
+    })))
+}
+
+/// A project admin other than the requester approves (applies) or rejects.
+async fn decide_change_request(
+    State(state): State<CloudApiState>,
+    headers: HeaderMap,
+    Path((org, slug, request_id, decision)): Path<(String, String, String, String)>,
+) -> ApiResult<Json<Value>> {
+    require_csrf(&headers)?;
+    let account = authorize(&state, &headers, &org, &slug, None, ProjectRole::Admin).await?;
+    let approve = match decision.as_str() {
+        "approve" => true,
+        "reject" => false,
+        _ => return Err(invalid("decide with approve or reject")),
+    };
+    let row = sqlx::query(
+        "SELECT environment,name,action,sealed_json,key_version,restore_version,requested_by FROM managed_change_requests \
+         WHERE request_id=$1 AND org_id=$2 AND slug=$3 AND status='pending'",
+    )
+    .bind(&request_id)
+    .bind(&org)
+    .bind(&slug)
+    .fetch_optional(state.repository.pool())
+    .await
+    .map_err(storage)?
+    .ok_or_else(|| ApiError(KeyLeaseError::NotFound { resource: format!("change request {request_id}") }))?;
+    let requester: String = row.get("requested_by");
+    if requester == account {
+        return Err(denied("another admin must decide on your own change"));
+    }
+    let environment: String = row.get("environment");
+    let name: String = row.get("name");
+    let claimed = sqlx::query(
+        "UPDATE managed_change_requests SET status=$2, decided_by=$3, decided_at=now() WHERE request_id=$1 AND status='pending'",
+    )
+    .bind(&request_id)
+    .bind(if approve { "approved" } else { "rejected" })
+    .bind(&account)
+    .execute(state.repository.pool())
+    .await
+    .map_err(storage)?
+    .rows_affected();
+    if claimed != 1 {
+        return Err(invalid("this change request was already decided"));
+    }
+    if !approve {
+        audit_event(
+            &state,
+            &org,
+            &slug,
+            Some(&environment),
+            Some(&name),
+            "reject_change",
+            &account,
+        )
+        .await?;
+        return Ok(Json(
+            json!({"change_request_id": request_id, "status": "rejected"}),
+        ));
+    }
+    let action: String = row.get("action");
+    let value: Option<Zeroizing<Vec<u8>>> = match action.as_str() {
+        "set" => {
+            let key = key_version(
+                &state,
+                &org,
+                &slug,
+                row.get::<Option<i32>, _>("key_version").unwrap_or(1),
+            )
+            .await?;
+            let sealed: SymmetricBox = serde_json::from_str(
+                &row.get::<Option<String>, _>("sealed_json")
+                    .unwrap_or_default(),
+            )
+            .map_err(|_| ApiError(KeyLeaseError::Crypto))?;
+            Some(open_symmetric(&key, &sealed, &change_aad(&request_id)).map_err(crypto)?)
+        }
+        "restore" => {
+            let version: i32 = row
+                .get::<Option<i32>, _>("restore_version")
+                .unwrap_or_default();
+            let old = sqlx::query(
+                "SELECT name,version,deleted,ciphertext_json,key_version FROM managed_secrets \
+                 WHERE org_id=$1 AND slug=$2 AND environment=$3 AND name=$4 AND version=$5",
+            )
+            .bind(&org)
+            .bind(&slug)
+            .bind(&environment)
+            .bind(&name)
+            .bind(version)
+            .fetch_optional(state.repository.pool())
+            .await
+            .map_err(storage)?
+            .filter(|old| !old.get::<bool, _>("deleted"))
+            .ok_or_else(|| {
+                ApiError(KeyLeaseError::NotFound {
+                    resource: format!("{name} version {version}"),
+                })
+            })?;
+            Some(decrypt(&state, &org, &slug, &environment, &name, &old).await?)
+        }
+        _ => None,
+    };
+    let version = write_version(
+        &state,
+        &org,
+        &slug,
+        &environment,
+        &name,
+        value.as_deref().map(|v| v.as_slice()),
+        &requester,
+    )
+    .await?;
+    audit_event(
+        &state,
+        &org,
+        &slug,
+        Some(&environment),
+        Some(&name),
+        &action,
+        &requester,
+    )
+    .await?;
+    audit_event(
+        &state,
+        &org,
+        &slug,
+        Some(&environment),
+        Some(&name),
+        "approve_change",
+        &account,
+    )
+    .await?;
+    Ok(Json(
+        json!({"change_request_id": request_id, "status": "approved", "version": version}),
+    ))
 }

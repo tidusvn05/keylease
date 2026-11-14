@@ -416,6 +416,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/orgs/{org}/projects/{slug}/change-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pending change requests */
+        get: operations["changeRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/orgs/{org}/projects/{slug}/change-requests/{request}/{decision}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve or reject */
+        post: operations["decideChangeRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -517,6 +551,22 @@ export interface components {
                 deleted: boolean;
                 created_by: string;
                 created_at: string;
+            }[];
+        };
+        SecretWrite: {
+            version?: number;
+            status?: string;
+            change_request_id?: string;
+        };
+        ChangeRequestList: {
+            change_requests: {
+                change_request_id: string;
+                environment: string;
+                name: string;
+                action: string;
+                restore_version?: number | null;
+                requested_by: string;
+                requested_at: string;
             }[];
         };
     };
@@ -1153,7 +1203,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": components["schemas"]["SecretWrite"];
                 };
             };
         };
@@ -1227,6 +1277,54 @@ export interface operations {
                 };
             };
         };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    changeRequests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeRequestList"];
+                };
+            };
+        };
+    };
+    decideChangeRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                slug: string;
+                request: string;
+                decision: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description OK */
             200: {

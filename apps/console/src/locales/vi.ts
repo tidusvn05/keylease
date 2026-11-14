@@ -94,6 +94,11 @@ export const vi: Messages = {
     restore: "Khôi phục",
     deleted: "đã xoá",
     empty: "Environment này chưa có secret nào.",
+    pending: "Environment này được bảo vệ: thay đổi của bạn đang chờ admin của project duyệt.",
+    changeRequests: "Đang chờ duyệt",
+    approve: "Duyệt",
+    reject: "Từ chối",
+    requestedBy: "bởi {{name}}",
     readOnly: "Bạn được đọc nhưng không được sửa các secret này.",
   },
   approvals: {
