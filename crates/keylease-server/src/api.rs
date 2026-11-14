@@ -245,6 +245,7 @@ pub fn router(state: CloudApiState) -> Router {
         .merge(crate::enterprise_api::router())
         .merge(crate::relay::router())
         .merge(crate::console::router())
+        .merge(crate::console_assets::router())
         .layer(DefaultBodyLimit::max(maximum))
         .with_state(state)
 }

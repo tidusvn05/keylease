@@ -1,6 +1,16 @@
+# The KeyLease Console (static files), embedded into keylease-server below.
+FROM node:26-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1 AS console
+WORKDIR /console
+RUN npm install --global pnpm@12.18.0
+COPY apps/console/package.json apps/console/pnpm-lock.yaml apps/console/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY apps/console/ ./
+RUN pnpm build
+
 FROM rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922 AS build
 WORKDIR /src
 COPY . .
+COPY --from=console /console/dist apps/console/dist
 RUN cargo build --locked --release -p keylease-server
 
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171

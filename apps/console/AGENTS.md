@@ -33,8 +33,13 @@ Much example code online targets older majors. Write code for these:
 - **Tailwind CSS 4**: configured in CSS (`src/styles.css`, `@theme`); there is
   no `tailwind.config.js`. Use theme tokens (`bg-background`, `text-muted-foreground`).
 - **shadcn/ui** (new-york, `radix-ui` umbrella package): add components with
-  `pnpm dlx shadcn@4.23.0 add <name>`, then check the files landed in
-  `src/components/ui/` and import `cn` from `@/lib/utils`.
+  `pnpm dlx shadcn@4.23.0 add <name>`. The CLI writes `import { cn } from "cn"`
+  and adds an unrelated `cn` package: change the import to `@/lib/utils` and
+  run `pnpm remove cn`.
+- The console is served at `/console/` by `keylease-server` (or below a proxy
+  prefix such as `/api/console/`): Vite uses `base: "./"`, the router's
+  basepath and the API prefix come from `src/lib/paths.ts`. Keep routes one
+  level deep so relative asset URLs resolve.
 - **Zod 4**, **React Hook Form 7** with `@hookform/resolvers/zod`.
 - **Vite 8**, **Vitest 5**, **ESLint 10** flat config, **TypeScript 6.0**
   (stay on 6.0 until typescript-eslint supports 7).

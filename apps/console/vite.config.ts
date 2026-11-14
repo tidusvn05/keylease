@@ -10,6 +10,8 @@ import { defineConfig } from "vite";
 const apiTarget = process.env.KEYLEASE_SERVER_URL ?? "http://127.0.0.1:8080";
 
 export default defineConfig({
+  // Served by keylease-server at /console/ (or /api/console/ behind a proxy).
+  base: "./",
   plugins: [
     // Must run before the React plugin.
     tanstackRouter({ target: "react", autoCodeSplitting: true }),

@@ -4,9 +4,14 @@ The web console for a self-hosted `keylease-server`: devices, approvals and the
 audit log. It is a static single-page app (React, TypeScript, Vite, TanStack
 Router and Query, shadcn/ui) that `keylease-server` serves from its own binary.
 
-Status: scaffold. The pages exist, but only the server health check is wired;
-the device, approval and audit APIs arrive with `keylease-server` (phase P2 in
-`docs/design/platform-v2-plan-vi.md`).
+Status: v1. Sign-in (device link or passkey), the account overview, devices
+(revoke nodes and devices) and passkeys work against `keylease-server`
+([docs/console.md](../../docs/console.md)). Approvals and the audit log stay on
+each node for now.
+
+`keylease-server` embeds `dist/` at build time (`crates/keylease-server/build.rs`):
+run `pnpm build` before building the server, or the server shows a page that
+says the console is missing.
 
 ## Develop
 
