@@ -21,6 +21,9 @@ use keylease_crypto::sealed::{
 use keylease_crypto::{SecretKey, keyed_digest};
 use keylease_store::cloud::record;
 
+mod sync;
+use sync::SyncObject;
+
 const LINK_ID: &str = "self";
 const SECRET_ID: &str = "secret";
 const SECRET_LABEL: &str = "cloud-relay-keys";
@@ -56,6 +59,30 @@ pub struct CloudLink {
 pub enum CloudRole {
     Owner,
     Node,
+    /// Another device of the owner, synced two-way with the owner device.
+    Device,
+}
+
+fn node_cloud_role() -> CloudRole {
+    CloudRole::Node
+}
+
+impl CloudRole {
+    fn relay(self) -> RelayRole {
+        match self {
+            CloudRole::Owner => RelayRole::Owner,
+            CloudRole::Node => RelayRole::Node,
+            CloudRole::Device => RelayRole::Device,
+        }
+    }
+
+    fn from_relay(role: RelayRole) -> Self {
+        match role {
+            RelayRole::Owner => CloudRole::Owner,
+            RelayRole::Node => CloudRole::Node,
+            RelayRole::Device => CloudRole::Device,
+        }
+    }
 }
 
 impl CloudLink {
@@ -110,6 +137,9 @@ pub struct CloudNode {
     pub fingerprint: String,
     pub verified_at: DateTime<Utc>,
     pub removed_at: Option<DateTime<Utc>>,
+    /// `node` (a workload host) or `device` (the owner's other device).
+    #[serde(default = "node_cloud_role")]
+    pub role: CloudRole,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -117,6 +147,8 @@ struct InviteRecord {
     name: String,
     expires_at: DateTime<Utc>,
     secret_sealed: String,
+    #[serde(default = "node_cloud_role")]
+    role: CloudRole,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq, Eq)]
@@ -256,6 +288,9 @@ enum MessagePayload {
         request_id: String,
         approved: bool,
         share_id: Option<String>,
+    },
+    Sync {
+        object: Box<SyncObject>,
     },
 }
 
@@ -591,8 +626,11 @@ impl KeyLeaseService {
 
     /// Owner: a one-time code for a new node. Send `request` to
     /// `POST /v1/relay/invites` (signed).
-    pub fn cloud_create_invite(&self, name: &str) -> Result<InviteSetup> {
+    pub fn cloud_create_invite(&self, name: &str, role: CloudRole) -> Result<InviteSetup> {
         valid_member_name(name)?;
+        if role == CloudRole::Owner {
+            return Err(invalid("invite a node or a device"));
+        }
         let link = self.require_owner()?;
         self.with_vault(|vault| {
             let lookup = random_base32(7)[..10].to_owned();
@@ -608,6 +646,7 @@ impl KeyLeaseService {
             let record = InviteRecord {
                 name: name.trim().into(),
                 expires_at,
+                role,
                 secret_sealed: self.store.seal_local_secret(
                     vault,
                     &format!("cloud-invite:{lookup_hash}"),
@@ -623,6 +662,7 @@ impl KeyLeaseService {
                     name: name.trim().into(),
                     expires_at,
                     owner_tag_b64: owner_tag,
+                    role: role.relay(),
                 },
             })
         })
@@ -667,16 +707,19 @@ impl KeyLeaseService {
         self.with_vault(|vault| {
             let keys = Keys::generate();
             let public = keys.public();
+            if invite.role == RelayRole::Owner {
+                return Err(invalid("the invite names no member role"));
+            }
             let node_tag = invite_tag(
                 secret,
-                &public.tag_material(&invite.account_id, &invite.name, RelayRole::Node),
+                &public.tag_material(&invite.account_id, &invite.name, invite.role),
             );
             self.save_keys(vault, &keys)?;
             self.save_link(&CloudLink {
                 url,
                 account_id: invite.account_id.clone(),
                 member_id: String::new(),
-                role: CloudRole::Node,
+                role: CloudRole::from_relay(invite.role),
                 name: invite.name.clone(),
                 sign_public_b64: public.sign_public_b64.clone(),
                 box_public_b64: public.box_public_b64.clone(),
@@ -699,7 +742,7 @@ impl KeyLeaseService {
         let mut link = self
             .cloud_link()?
             .ok_or_else(|| invalid("no pending node link"))?;
-        if link.role != CloudRole::Node
+        if link.role == CloudRole::Owner
             || link.account_id != joined.account_id
             || joined.member_id != link.keys().member_id()
         {
@@ -707,7 +750,15 @@ impl KeyLeaseService {
         }
         link.member_id = joined.member_id.clone();
         self.save_link(&link)?;
-        self.cloud_audit("cloud:link", "kl://cloud", "node")?;
+        self.cloud_audit(
+            "cloud:link",
+            "kl://cloud",
+            if link.role == CloudRole::Device {
+                "device"
+            } else {
+                "node"
+            },
+        )?;
         Ok(link)
     }
 
@@ -874,7 +925,10 @@ impl KeyLeaseService {
         let link = self.require_owner()?;
         let mut problems = Vec::new();
         self.with_vault_passive(|vault| {
-            for member in members.iter().filter(|m| m.role == RelayRole::Node) {
+            for member in members
+                .iter()
+                .filter(|m| matches!(m.role, RelayRole::Node | RelayRole::Device))
+            {
                 let known = self.store.cloud_get(record::NODE, &member.member_id)?;
                 if let Some(json) = known {
                     let node: CloudNode = from_json(&json)?;
@@ -921,9 +975,9 @@ impl KeyLeaseService {
                     &secret,
                     &member
                         .keys
-                        .tag_material(&link.account_id, &invite.name, RelayRole::Node),
+                        .tag_material(&link.account_id, &invite.name, invite.role.relay()),
                 );
-                if !tags_match(&expected, tag) {
+                if !tags_match(&expected, tag) || member.role != invite.role.relay() {
                     // Kept: a bogus entry must not burn the real node's invite.
                     problems.push(format!(
                         "{} registered keys that do not match the invite for {}; it is not trusted",
@@ -940,6 +994,7 @@ impl KeyLeaseService {
                     fingerprint: member.keys.fingerprint(),
                     verified_at: Utc::now(),
                     removed_at: None,
+                    role: invite.role,
                 };
                 self.store
                     .cloud_put(record::NODE, &node.member_id, &to_json(&node)?)?;
@@ -1504,10 +1559,11 @@ impl KeyLeaseService {
         if message.account_id != link.account_id || message.to_member_id != link.member_id {
             return Err(invalid("message is addressed to another member"));
         }
+        let mut sender_role = CloudRole::Owner;
         let sender_sign = match link.role {
-            CloudRole::Node => {
+            CloudRole::Node | CloudRole::Device => {
                 if message.from_member_id != link.owner_member_id {
-                    return Err(invalid("a node accepts messages only from the owner"));
+                    return Err(invalid("only the owner device sends to a node or a device"));
                 }
                 link.owner_sign_public_b64.clone()
             }
@@ -1523,6 +1579,7 @@ impl KeyLeaseService {
                 if node.removed_at.is_some() {
                     return Err(invalid("message from a removed node"));
                 }
+                sender_role = node.role;
                 node.sign_public_b64
             }
         };
@@ -1538,6 +1595,12 @@ impl KeyLeaseService {
         let payload: MessagePayload =
             serde_json::from_slice(&plain).map_err(|_| invalid("unreadable message payload"))?;
         match (link.role, message.kind.as_str(), payload) {
+            (CloudRole::Device, kind::SYNC, MessagePayload::Sync { object })
+            | (CloudRole::Owner, kind::SYNC, MessagePayload::Sync { object })
+                if link.role == CloudRole::Device || sender_role == CloudRole::Device =>
+            {
+                self.apply_sync(vault, link, &message.from_member_id, *object)
+            }
             (
                 CloudRole::Node,
                 kind::SHARE,
@@ -2389,8 +2452,17 @@ mod tests {
         node: &KeyLeaseService,
         name: &str,
     ) -> (RelayMember, InviteSetup) {
+        join_member_as(owner, node, name, CloudRole::Node)
+    }
+
+    fn join_member_as(
+        owner: &KeyLeaseService,
+        node: &KeyLeaseService,
+        name: &str,
+        role: CloudRole,
+    ) -> (RelayMember, InviteSetup) {
         let link = owner.cloud_link().unwrap().unwrap();
-        let invite = owner.cloud_create_invite(name).unwrap();
+        let invite = owner.cloud_create_invite(name, role).unwrap();
         let join = node
             .cloud_node_prepare(
                 "https://cloud.example",
@@ -2402,6 +2474,7 @@ mod tests {
                     name: name.into(),
                     owner_tag_b64: invite.request.owner_tag_b64.clone(),
                     expires_at: invite.request.expires_at,
+                    role: role.relay(),
                 },
             )
             .unwrap();
@@ -2414,7 +2487,7 @@ mod tests {
         (
             RelayMember {
                 member_id,
-                role: RelayRole::Node,
+                role: role.relay(),
                 name: name.into(),
                 keys: join.keys,
                 node_tag_b64: Some(join.node_tag_b64),
@@ -2469,7 +2542,7 @@ mod tests {
         let (_a, owner) = service();
         let (_b, node) = service();
         let setup = owner_linked(&owner);
-        let invite = owner.cloud_create_invite("vps").unwrap();
+        let invite = owner.cloud_create_invite("vps", CloudRole::Node).unwrap();
         let attacker = Keys::generate().public();
         let forged = RelayInvite {
             account_id: setup.request.account_id.clone(),
@@ -2478,6 +2551,7 @@ mod tests {
             name: "vps".into(),
             owner_tag_b64: invite.request.owner_tag_b64.clone(),
             expires_at: invite.request.expires_at,
+            role: RelayRole::Node,
         };
         assert!(matches!(
             node.cloud_node_prepare("https://cloud.example", &invite.code, &forged),
@@ -2511,6 +2585,7 @@ mod tests {
                     name: "vps".into(),
                     owner_tag_b64: invite.request.owner_tag_b64.clone(),
                     expires_at: invite.request.expires_at,
+                    role: RelayRole::Node,
                 },
             )
             .unwrap();
@@ -3017,5 +3092,139 @@ mod tests {
         assert_eq!(outcome.rejected.len(), 1);
         assert_eq!(outcome.acknowledged.len(), 1);
         assert_eq!(titles(&node), vec!["x"], "only the node's own item");
+    }
+
+    fn route(from: &KeyLeaseService, to: &[&KeyLeaseService]) -> usize {
+        let outbox = take_outbox(from);
+        for target in to {
+            let me = target.cloud_link().unwrap().unwrap().member_id;
+            let mine: Vec<RelayEnvelope> = outbox
+                .iter()
+                .filter(|message| message.to_member_id == me)
+                .cloned()
+                .collect();
+            let outcome = target.cloud_apply_inbox(&mine).unwrap();
+            assert!(outcome.rejected.is_empty(), "{:?}", outcome.rejected);
+        }
+        outbox.len()
+    }
+
+    fn title_of(service: &KeyLeaseService, id: &ItemId) -> Option<String> {
+        service
+            .with_vault(|vault| {
+                Ok(service
+                    .store
+                    .get_item(vault, id)
+                    .ok()
+                    .map(|item| item.title))
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn devices_sync_two_way_through_the_owner_and_the_newest_change_wins() {
+        let (_a, owner) = service();
+        let (_b, laptop) = service();
+        let (_c, phone) = service();
+        let (_d, vps) = service();
+        owner_linked(&owner);
+        for (device, name, role) in [
+            (&laptop, "laptop", CloudRole::Device),
+            (&phone, "phone", CloudRole::Device),
+            (&vps, "vps", CloudRole::Node),
+        ] {
+            let (member, _) = join_member_as(&owner, device, name, role);
+            assert!(owner.cloud_verify_members(&[member]).unwrap().is_empty());
+        }
+        assert_eq!(
+            laptop.cloud_link().unwrap().unwrap().role,
+            CloudRole::Device
+        );
+
+        // Owner → devices (never to a node).
+        let id = ItemId::new();
+        put_item(&owner, &id, "GitHub");
+        owner.cloud_publish_sync().unwrap();
+        let outbox = owner.cloud_outbox().unwrap();
+        let vps_member = vps.cloud_link().unwrap().unwrap().member_id;
+        assert!(
+            outbox
+                .iter()
+                .all(|message| message.to_member_id != vps_member)
+        );
+        route(&owner, &[&laptop, &phone]);
+        assert_eq!(title_of(&laptop, &id).as_deref(), Some("GitHub"));
+        assert_eq!(title_of(&phone, &id).as_deref(), Some("GitHub"));
+        // Nothing new: nothing to send.
+        assert_eq!(owner.cloud_publish_sync().unwrap(), 0);
+        assert_eq!(
+            laptop.cloud_publish_sync().unwrap(),
+            0,
+            "received versions are not echoed"
+        );
+
+        // Device → owner → other devices.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        put_item(&laptop, &id, "GitHub (work)");
+        laptop.cloud_publish_sync().unwrap();
+        route(&laptop, &[&owner]);
+        assert_eq!(title_of(&owner, &id).as_deref(), Some("GitHub (work)"));
+        owner.cloud_publish_sync().unwrap();
+        let laptop_member = laptop.cloud_link().unwrap().unwrap().member_id;
+        assert!(
+            owner
+                .cloud_outbox()
+                .unwrap()
+                .iter()
+                .all(|message| message.to_member_id != laptop_member || message.object_id != id.0),
+            "not sent back to the device it came from"
+        );
+        route(&owner, &[&laptop, &phone]);
+        assert_eq!(title_of(&phone, &id).as_deref(), Some("GitHub (work)"));
+
+        // Concurrent edits: the later one wins everywhere.
+        put_item(&owner, &id, "edited on the owner");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        put_item(&phone, &id, "edited on the phone, later");
+        owner.cloud_publish_sync().unwrap();
+        phone.cloud_publish_sync().unwrap();
+        route(&owner, &[&laptop, &phone]);
+        route(&phone, &[&owner]);
+        owner.cloud_publish_sync().unwrap();
+        route(&owner, &[&laptop, &phone]);
+        for device in [&owner, &laptop, &phone] {
+            assert_eq!(
+                title_of(device, &id).as_deref(),
+                Some("edited on the phone, later")
+            );
+        }
+
+        // A deletion on a device reaches every device.
+        phone
+            .with_vault(|vault| {
+                let current = phone.store.get_item(vault, &id)?;
+                phone.store.delete_item(
+                    vault,
+                    &id,
+                    current.revision,
+                    MutationContext {
+                        actor: "test",
+                        idempotency_key: "delete-on-phone",
+                        request_material: b"delete",
+                        audit_event: None,
+                    },
+                )
+            })
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        phone.cloud_publish_sync().unwrap();
+        route(&phone, &[&owner]);
+        owner.cloud_publish_sync().unwrap();
+        route(&owner, &[&laptop, &phone]);
+        for device in [&owner, &laptop, &phone] {
+            assert_eq!(title_of(device, &id), None);
+        }
+        // The node got nothing.
+        assert_eq!(title_of(&vps, &id), None);
     }
 }
