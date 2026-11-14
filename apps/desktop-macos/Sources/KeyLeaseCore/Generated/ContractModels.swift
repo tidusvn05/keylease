@@ -1026,6 +1026,7 @@ public struct ApprovalRecord: Codable, Equatable, Sendable {
     public let expiresAt: String
     public let id: String
     public let policyVersion: UInt64
+    public let projectId: String?
     public let purpose: String?
     public let requestDigestHex: String
     public let requestId: String?
@@ -1034,7 +1035,7 @@ public struct ApprovalRecord: Codable, Equatable, Sendable {
     public let semanticSummary: ApprovalSemanticSummary?
     public let state: ApprovalState
     public let taskId: String?
-    public init(action: String?, agentId: String?, connectionId: String?, createdAt: String?, expiresAt: String, id: String, policyVersion: UInt64, purpose: String?, requestDigestHex: String, requestId: String?, resource: String?, risk: RiskTier?, semanticSummary: ApprovalSemanticSummary?, state: ApprovalState, taskId: String?) {
+    public init(action: String?, agentId: String?, connectionId: String?, createdAt: String?, expiresAt: String, id: String, policyVersion: UInt64, projectId: String?, purpose: String?, requestDigestHex: String, requestId: String?, resource: String?, risk: RiskTier?, semanticSummary: ApprovalSemanticSummary?, state: ApprovalState, taskId: String?) {
         self.action = action
         self.agentId = agentId
         self.connectionId = connectionId
@@ -1042,6 +1043,7 @@ public struct ApprovalRecord: Codable, Equatable, Sendable {
         self.expiresAt = expiresAt
         self.id = id
         self.policyVersion = policyVersion
+        self.projectId = projectId
         self.purpose = purpose
         self.requestDigestHex = requestDigestHex
         self.requestId = requestId
@@ -1059,6 +1061,7 @@ public struct ApprovalRecord: Codable, Equatable, Sendable {
         case expiresAt = "expires_at"
         case id = "id"
         case policyVersion = "policy_version"
+        case projectId = "project_id"
         case purpose = "purpose"
         case requestDigestHex = "request_digest_hex"
         case requestId = "request_id"

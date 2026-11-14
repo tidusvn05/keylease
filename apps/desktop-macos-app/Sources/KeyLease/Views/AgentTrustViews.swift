@@ -270,7 +270,7 @@ struct ApprovalDecisionSheet: View {
             if allowed.count == 1 {
                 Text(
                     approval.risk == .r4
-                        ? "Revealing or injecting a secret is approved one "
+                        ? "Revealing a secret is approved one "
                             + "request at a time."
                         : "This request can only be approved once."
                 )
@@ -280,6 +280,9 @@ struct ApprovalDecisionSheet: View {
                 Picker("Covers", selection: $scope) {
                     Text("This exact resource").tag(TrustScope.resource)
                     Text("Every field of this item").tag(TrustScope.item)
+                    if approval.projectId != nil {
+                        Text("Everyday work in this project").tag(TrustScope.project)
+                    }
                 }
                 .pickerStyle(.radioGroup)
                 Text(
@@ -365,7 +368,9 @@ private struct TrustCard: View {
                 HStack(spacing: 4) {
                     Text(
                         trust.scope == .item
-                            ? "Every field of this item" : "This resource")
+                            ? "Every field of this item"
+                            : trust.scope == .project
+                                ? "Everyday work in this project" : "This resource")
                     Text("·")
                     if let expires = trust.expiresDate {
                         Text("ends ") + Text(expires, style: .relative)

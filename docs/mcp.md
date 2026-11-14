@@ -43,7 +43,7 @@ approvals.
 | `vault_request_item` | on a VPS linked to your [cloud](cloud-sharing.md): ask you for an item | the request id | you approve on your device |
 | `ssh_exec` | run a command over SSH with a vault key | exit status, stdout, stderr | `ssh:sign` (R2; R3 for production items) |
 | `db_query` | run SQL on a PostgreSQL item, read-only by default | CSV output | `db:connect` (R2; R3 for production) |
-| `run_with_secrets` | run a local program with vault values in its environment (opt-in) | output with the values scrubbed | every run (R4) |
+| `run_with_secrets` | run a local program with vault values in its environment (opt-in) | output with the values scrubbed | per run, or trusted up to 1h (R3) |
 
 There is deliberately **no tool that returns a secret**.
 

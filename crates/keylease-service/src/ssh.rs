@@ -162,6 +162,7 @@ impl KeyLeaseService {
         self.with_vault(|vault| {
             let resource = format!("kl://{}", vault.vault_id.0);
             self.authorize_vault(
+                vault,
                 actor,
                 "ssh:list_keys",
                 &resource,
@@ -231,6 +232,7 @@ impl KeyLeaseService {
                 _ => RiskTier::R2,
             };
             self.authorize_vault_at_risk(
+                vault,
                 actor,
                 "ssh:sign",
                 &resource,

@@ -64,6 +64,7 @@ impl KeyLeaseService {
                 fields.sort();
                 fields.dedup();
                 self.authorize_vault(
+                    vault,
                     actor,
                     "entry:inject_secret",
                     &format!("kl://{}/{}", vault.vault_id.0, item_id),
@@ -110,7 +111,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn injection_needs_one_approval_per_run_and_names_the_program() {
+    fn injection_is_approved_per_run_or_trusted_for_an_hour() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(NativeStore::open(dir.path().join("vault.sqlite")).unwrap());
         let service = KeyLeaseService::new(store).unwrap();
@@ -166,20 +167,23 @@ mod tests {
             .list_pending_approvals_authorized(&owner, 10)
             .unwrap();
         let record = pending.iter().find(|a| a.id.0 == id).unwrap();
-        assert_eq!(record.risk, Some(RiskTier::R4));
+        assert_eq!(record.risk, Some(RiskTier::R3));
+        let trust = |duration| {
+            Some(TrustDecision {
+                scope: TrustScope::Resource,
+                duration,
+            })
+        };
         assert!(
             service
                 .decide_approval_with_trust_authorized(
                     &owner,
                     &id,
                     true,
-                    Some(TrustDecision {
-                        scope: TrustScope::Resource,
-                        duration: TrustDuration::Minutes30,
-                    }),
+                    trust(TrustDuration::Hours6)
                 )
                 .is_err(),
-            "injection is never trustable"
+            "injection is trusted for an hour at most"
         );
         service
             .decide_approval_authorized(&owner, &id, true)
@@ -190,8 +194,8 @@ mod tests {
                 .unwrap(),
             vec!["sk_live_fixture".to_owned(), "ops".to_owned()]
         );
-        // A different program, or the same program with other arguments,
-        // is a different approval.
+        // A plain approval is one run: a different program, or the same program
+        // with other arguments, is a different approval.
         assert!(matches!(
             service.inject_fields_authorized(
                 &agent,
@@ -201,9 +205,20 @@ mod tests {
             ),
             Err(KeyLeaseError::ApprovalRequired { .. })
         ));
-        assert!(matches!(
-            service.inject_fields_authorized(&agent, "curl", &[], &requests),
-            Err(KeyLeaseError::ApprovalRequired { .. })
-        ));
+        let id = match service.inject_fields_authorized(&agent, "curl", &[], &requests) {
+            Err(KeyLeaseError::ApprovalRequired { approval_id }) => approval_id,
+            other => panic!("expected approval_required, got {other:?}"),
+        };
+        // An hour's trust covers every run on the item.
+        service
+            .decide_approval_with_trust_authorized(&owner, &id, true, trust(TrustDuration::Hour1))
+            .unwrap();
+        for program in ["curl", "stripe", "deploy"] {
+            assert!(
+                service
+                    .inject_fields_authorized(&agent, program, &[], &requests)
+                    .is_ok()
+            );
+        }
     }
 }

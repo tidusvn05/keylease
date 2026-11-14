@@ -53,7 +53,7 @@ pub use inject::InjectRequest;
 pub use remote::{APPROVER_SIGNATURE_CONTEXT, ApproverDevice, PairingCode, approver_signing_input};
 pub use ssh::{SSH_AGENT_RSA_SHA2_256, SSH_AGENT_RSA_SHA2_512, SshIdentity, SshSignature};
 pub use trust::{ApprovalDecisionOutcome, EnrolledAgent};
-use trust::{VAULT_CONNECTION_ID, vault_action_risk};
+use trust::{VAULT_CONNECTION_ID, project_alias, vault_action_risk};
 
 const AUTH_FAILURE_LIMIT: usize = 10;
 const AUTH_FAILURE_WINDOW: StdDuration = StdDuration::from_secs(60);
@@ -493,7 +493,7 @@ pub enum LeaseRequestOutcome {
 impl KeyLeaseService {
     pub fn new(store: Arc<NativeStore>) -> Result<Self> {
         let mut rules = store.load_policy_rules()?;
-        rules.extend(store.load_standing_rules(Utc::now())?);
+        rules.extend(trust::standing_rules(&store, Utc::now())?);
         let mut connectors: HashMap<String, Arc<dyn Connector>> = HashMap::new();
         connectors.insert("fake".into(), Arc::new(FakeConnector::default()));
         connectors.insert(
@@ -822,6 +822,7 @@ impl KeyLeaseService {
                 "parent_id":parent_id,
             }))?;
             self.authorize_vault(
+                vault,
                 actor,
                 "group:create",
                 &format!("kl://{}/groups", vault.vault_id.0),
@@ -883,6 +884,7 @@ impl KeyLeaseService {
     pub fn list_groups_authorized(&self, actor: &ActorContext) -> Result<Vec<VaultGroup>> {
         self.with_vault(|vault| {
             self.authorize_vault(
+                vault,
                 actor,
                 "entry:search",
                 &format!("kl://{}", vault.vault_id.0),
@@ -995,6 +997,7 @@ impl KeyLeaseService {
         self.with_vault(|vault| {
             validate_idempotency_key(idempotency_key)?;
             self.authorize_vault(
+                vault,
                 actor,
                 "group:update",
                 &format!("kl://{}/groups", vault.vault_id.0),
@@ -1127,6 +1130,7 @@ impl KeyLeaseService {
             }))?;
             let resource = format!("kl://{}/group/{}", vault.vault_id.0, id.0);
             self.authorize_vault(
+                vault,
                 actor,
                 "group:update",
                 &resource,
@@ -1208,6 +1212,7 @@ impl KeyLeaseService {
             }))?;
             let resource = format!("kl://{}/group/{}", vault.vault_id.0, id.0);
             self.authorize_vault(
+                vault,
                 actor,
                 "group:delete",
                 &resource,
@@ -1299,7 +1304,7 @@ impl KeyLeaseService {
                 "input":request_value,
             }))?;
             let resource = format!("kl://{}/group/{}", vault.vault_id.0, input.group_id.0);
-            self.authorize_vault(actor, "entry:create", &resource, request_value)?;
+            self.authorize_vault(vault, actor, "entry:create", &resource, request_value)?;
             if input.password.is_some()
                 || input.custom_fields.iter().any(|field| {
                     field.protected
@@ -1310,18 +1315,20 @@ impl KeyLeaseService {
                 })
             {
                 self.authorize_vault(
+                    vault,
                     actor,
                     "entry:update_protected_fields",
                     &resource,
-                    serde_json::json!({"operation":"set_new_protected_fields"}),
+                    serde_json::json!({"operation":"set_new_protected_fields","project_slug":input.project_slug}),
                 )?;
             }
             if input.totp.is_some() {
                 self.authorize_vault(
+                    vault,
                     actor,
                     "entry:update_totp",
                     &resource,
-                    serde_json::json!({"operation":"set_new_totp"}),
+                    serde_json::json!({"operation":"set_new_totp","project_slug":input.project_slug}),
                 )?;
             }
             if !dry_run
@@ -1569,7 +1576,13 @@ impl KeyLeaseService {
             .into_iter()
             .flatten()
             {
-                self.authorize_vault(actor, required_capability, &resource, arguments.clone())?;
+                self.authorize_vault(
+                    vault,
+                    actor,
+                    required_capability,
+                    &resource,
+                    arguments.clone(),
+                )?;
             }
             if !dry_run
                 && let Some(replay) =
@@ -1758,6 +1771,7 @@ impl KeyLeaseService {
                 project_slug,
             )?;
             self.authorize_vault(
+                vault,
                 actor,
                 "entry:search",
                 &format!("kl://{}", vault.vault_id.0),
@@ -1795,6 +1809,7 @@ impl KeyLeaseService {
     pub fn get_entry_metadata(&self, actor: &ActorContext, id: &ItemId) -> Result<ItemMetadata> {
         self.with_vault(|vault| {
             self.authorize_vault(
+                vault,
                 actor,
                 "entry:read_metadata",
                 &format!("kl://{}/{}", vault.vault_id.0, id.0),
@@ -2019,6 +2034,7 @@ impl KeyLeaseService {
         self.with_vault(|vault| {
             let resource = format!("kl://{}/{}", vault.vault_id.0, id.0);
             self.authorize_vault(
+                vault,
                 actor,
                 "entry:read_fields",
                 &resource,
@@ -2060,6 +2076,7 @@ impl KeyLeaseService {
         self.with_vault(|vault| {
             let resource = format!("kl://{}/{}/{}", vault.vault_id.0, id.0, field_id.0);
             self.authorize_vault(
+                vault,
                 actor,
                 "entry:read_secret",
                 &resource,
@@ -2115,6 +2132,7 @@ impl KeyLeaseService {
             for field_id in field_ids {
                 let resource = format!("kl://{}/{}/{}", vault.vault_id.0, id.0, field_id.0);
                 self.authorize_vault(
+                    vault,
                     actor,
                     "entry:read_secret",
                     &resource,
@@ -2787,7 +2805,13 @@ impl KeyLeaseService {
                 "entry:read_secret"
             };
             let resource = format!("kl://{}/{}", vault.vault_id.0, id.0);
-            self.authorize_vault(actor, action, &resource, serde_json::json!({"field":key}))?;
+            self.authorize_vault(
+                vault,
+                actor,
+                action,
+                &resource,
+                serde_json::json!({"field":key}),
+            )?;
             let item = self.store.get_item(vault, id)?;
             let value = if key == "notes" {
                 item.notes.filter(|notes| !notes.trim().is_empty())
@@ -2832,6 +2856,7 @@ impl KeyLeaseService {
         self.with_vault(|vault| {
             let resource = format!("kl://{}/{}", vault.vault_id.0, id.0);
             self.authorize_vault(
+                vault,
                 actor,
                 "entry:read_secret",
                 &resource,
@@ -2876,6 +2901,7 @@ impl KeyLeaseService {
         self.with_vault(|vault| {
             let resource = format!("kl://{}/{}", vault.vault_id.0, id.0);
             self.authorize_vault(
+                vault,
                 actor,
                 "entry:read_metadata",
                 &resource,
@@ -2919,6 +2945,7 @@ impl KeyLeaseService {
                 "expected_revision":expected_revision,
             }))?;
             self.authorize_vault(
+                vault,
                 actor,
                 "entry:delete",
                 &format!("kl://{}/{}", vault.vault_id.0, id.0),
@@ -3103,6 +3130,7 @@ impl KeyLeaseService {
         self.with_vault(|vault| {
             let resource = format!("kl://{}/connections", vault.vault_id.0);
             self.authorize_vault(
+                vault,
                 actor,
                 "connection:list",
                 &resource,
@@ -3130,6 +3158,7 @@ impl KeyLeaseService {
         let resource = self.with_vault(|vault| {
             let resource = format!("kl://{}/connections", vault.vault_id.0);
             self.authorize_vault(
+                vault,
                 actor,
                 "connection:add",
                 &resource,
@@ -3170,6 +3199,7 @@ impl KeyLeaseService {
         }
         self.with_vault(|vault| {
             self.authorize_vault(
+                vault,
                 actor,
                 "connection:add",
                 &format!("kl://{}/connections", vault.vault_id.0),
@@ -3968,6 +3998,7 @@ impl KeyLeaseService {
                             risk: Some(canonical.spec.risk.clone()),
                             semantic_summary: Some(approval_semantic_summary(&canonical)),
                             purpose: actor.purpose.clone(),
+                            project_id: None,
                         };
                         let event = self.action_audit_event(
                             actor,
@@ -4080,6 +4111,7 @@ impl KeyLeaseService {
         self.with_vault(|vault| {
             let resource = format!("kl://{}/approvals", vault.vault_id.0);
             self.authorize_vault(
+                vault,
                 actor,
                 "approval:list",
                 &resource,
@@ -4317,6 +4349,7 @@ impl KeyLeaseService {
         self.with_vault(|vault| {
             let resource = format!("kl://{}/audit", vault.vault_id.0);
             self.authorize_vault(
+                vault,
                 actor,
                 "audit:query",
                 &resource,
@@ -4400,7 +4433,7 @@ impl KeyLeaseService {
         // baselines and trusts) survive, but every use still needs an unlocked
         // vault, so they authorize nothing until the next unlock.
         *self.policy.write().map_err(|_| KeyLeaseError::Storage)? =
-            RulePolicyEngine::new(self.store.load_standing_rules(Utc::now())?);
+            RulePolicyEngine::new(trust::standing_rules(&self.store, Utc::now())?);
         self.agent_handoffs
             .lock()
             .map_err(|_| KeyLeaseError::Storage)?
@@ -4428,7 +4461,7 @@ impl KeyLeaseService {
     }
     fn reload_policy_for_client(&self, agent_id: &AgentId, vault_id: &VaultId) -> Result<()> {
         let mut rules = self.store.load_policy_rules()?;
-        rules.extend(self.store.load_standing_rules(Utc::now())?);
+        rules.extend(trust::standing_rules(&self.store, Utc::now())?);
         match self.store.local_owner_role(agent_id)? {
             Some(LocalOwnerRole::DesktopOwner) => {
                 rules.push(desktop_owner_rule(agent_id.clone(), vault_id))
@@ -4443,12 +4476,14 @@ impl KeyLeaseService {
     }
     fn authorize_vault(
         &self,
+        vault: &UnlockedVault,
         actor: &ActorContext,
         action: &str,
         resource: &str,
         arguments: Value,
     ) -> Result<()> {
         self.authorize_vault_at_risk(
+            vault,
             actor,
             action,
             resource,
@@ -4460,6 +4495,7 @@ impl KeyLeaseService {
     /// example a production database), not only on the action.
     fn authorize_vault_at_risk(
         &self,
+        vault: &UnlockedVault,
         actor: &ActorContext,
         action: &str,
         resource: &str,
@@ -4478,11 +4514,31 @@ impl KeyLeaseService {
             arguments,
             idempotency_key: "authorization-only".into(),
         };
-        let decision = self
-            .policy
-            .read()
-            .map_err(|_| KeyLeaseError::Storage)?
-            .evaluate(&request, risk.clone(), Utc::now());
+        let evaluate = |request: &ActionRequest| {
+            self.policy
+                .read()
+                .map(|engine| engine.evaluate(request, risk.clone(), Utc::now()))
+                .map_err(|_| KeyLeaseError::Storage)
+        };
+        let mut decision = evaluate(&request)?;
+        let mut project = None;
+        if matches!(decision, PolicyDecision::RequireApproval { .. }) {
+            // A project trust is a rule on the project's alias of the resource; it
+            // answers only for a request that would otherwise ask the approver.
+            project = self.resource_project(vault, resource, &request.arguments)?;
+            if let Some(project) = &project {
+                let alias = ActionRequest {
+                    resource: project_alias(&vault.vault_id, project, resource),
+                    ..request.clone()
+                };
+                let aliased = evaluate(&alias)?;
+                if matches!(&aliased, PolicyDecision::Allow { matched_rule, .. }
+                    if matched_rule.starts_with(TRUST_RULE_PREFIX))
+                {
+                    decision = aliased;
+                }
+            }
+        }
         match decision {
             PolicyDecision::Allow { matched_rule, .. } => {
                 self.confirm_standing_rule(&matched_rule)?;
@@ -4512,9 +4568,14 @@ impl KeyLeaseService {
                 policy_version,
                 request_digest_hex,
                 ..
-            } => {
-                self.vault_approval_gate(actor, &request, policy_version, &request_digest_hex, risk)
-            }
+            } => self.vault_approval_gate(
+                actor,
+                &request,
+                policy_version,
+                &request_digest_hex,
+                risk,
+                project,
+            ),
             PolicyDecision::Deny { reason, .. } => {
                 self.audit_vault(actor, action, resource, "deny", "denied", vec![])?;
                 Err(KeyLeaseError::Denied { reason })
@@ -4574,7 +4635,7 @@ impl KeyLeaseService {
     ) -> Result<String> {
         self.with_vault(|vault| {
             let resource = format!("kl://{}/connection/{}", vault.vault_id.0, id.0);
-            self.authorize_vault(actor, action, &resource, arguments)?;
+            self.authorize_vault(vault, actor, action, &resource, arguments)?;
             Ok(resource)
         })
     }

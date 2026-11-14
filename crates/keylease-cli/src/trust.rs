@@ -21,8 +21,9 @@ pub(crate) struct DecideArgs {
     /// Trust this agent for a window instead of one use.
     #[arg(long, value_parser = ["once", "30m", "1h", "6h", "1d", "3d", "7d"], requires = "approve")]
     trust: Option<String>,
-    /// What the trust covers: the exact resource, or every field of its item.
-    #[arg(long, default_value = "resource", value_parser = ["resource", "item"])]
+    /// What the trust covers: the exact resource, every field of its item, or everyday work
+    /// (up to R2) on every item of its project.
+    #[arg(long, default_value = "resource", value_parser = ["resource", "item", "project"])]
     scope: String,
 }
 
@@ -32,10 +33,10 @@ pub(crate) fn parse_trust(duration: Option<&str>, scope: &str) -> Option<TrustDe
     duration
         .and_then(TrustDuration::parse)
         .map(|duration| TrustDecision {
-            scope: if scope == "item" {
-                TrustScope::Item
-            } else {
-                TrustScope::Resource
+            scope: match scope {
+                "item" => TrustScope::Item,
+                "project" => TrustScope::Project,
+                _ => TrustScope::Resource,
             },
             duration,
         })

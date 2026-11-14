@@ -20,6 +20,10 @@ pub enum TrustScope {
     Resource,
     /// The same action on any field of the same vault item.
     Item,
+    /// Everyday work in one vault project: the approved action and every
+    /// action of at most R2 that an agent may request, on any item of the
+    /// project the approval's item belongs to.
+    Project,
 }
 
 /// The durations an approver may choose. Anything else is rejected, so a UI
@@ -122,6 +126,10 @@ pub struct TrustRecord {
     pub resource_prefix: String,
     pub connection_id: Option<String>,
     pub scope: TrustScope,
+    /// Every action a project trust covers; empty for the other scopes,
+    /// which cover only `action`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
     pub duration: TrustDuration,
     pub risk: RiskTier,
     pub approval_id: ApprovalId,
