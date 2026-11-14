@@ -28,6 +28,9 @@ from this directory: it uses this project's identity by itself.
   `NAME=kl://PROJECT/ENV/ITEM#FIELD`; `keylease run --project P --environment E -- COMMAND`
   sets every variable of the project's env files). The value is in the program's environment
   and scrubbed from its output; do not try to print it.
+- HTTP APIs without the secret: `keylease run --http NAME=ITEM -- COMMAND` sets NAME to a local
+  base URL that adds the item's key (`keylease http show ITEM`); a 403 with `approval_required`
+  means ask the user to approve, never for the key.
 - SSH and PostgreSQL without the secret: `keylease ssh HOST ...`, `keylease db query ITEM
   \"SQL\"` (read-only unless `--write`), `keylease db psql ITEM`.
 - Add: create the item without its secret (`keylease groups list`, `keylease templates list`):

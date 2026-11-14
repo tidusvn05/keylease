@@ -2247,3 +2247,138 @@ fn env_files_and_csv_exports_import_as_items() {
     // Imported logins are personal: invisible to agents.
     assert!(service.search_entries(&agent, "Bank").unwrap().is_empty());
 }
+
+/// A one-request HTTP server on loopback that echoes what it received,
+/// including the Authorization header (to check scrubbing).
+async fn echo_server() -> (u16, tokio::task::JoinHandle<String>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let read = socket.read(&mut buffer).await.unwrap();
+            request.extend_from_slice(&buffer[..read]);
+            if read == 0 || request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let text = String::from_utf8_lossy(&request).into_owned();
+        let authorization = text
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("authorization: ")
+                    .or_else(|| line.strip_prefix("Authorization: "))
+            })
+            .unwrap_or("")
+            .to_owned();
+        let body = format!("{{\"you_sent\":\"{authorization}\"}}");
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+        text
+    });
+    (port, handle)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn http_requests_get_the_credential_without_the_agent_seeing_it() {
+    let (_dir, service, _owner, agent) = service_with_owner();
+    let group = service.create_group("APIs", None).unwrap();
+    let mut input = login_input(&group, "Local API");
+    input.password = Some("sk_test_secret_123".into());
+    let item = service.create_entry(&agent, input, "api", false).unwrap();
+    let (port, server) = echo_server().await;
+    let binding = |allow_private: bool| HttpBinding {
+        base_url: format!("http://127.0.0.1:{port}/v1"),
+        header: "Authorization".into(),
+        template: "Bearer {secret}".into(),
+        field: Some("password".into()),
+        allow_private,
+    };
+    // Binding is a protected change; the fixture agent may make it.
+    service
+        .set_http_binding_authorized(&agent, &item.id, Some(binding(false)))
+        .unwrap();
+    let request = |path: &str| HttpForwardRequest {
+        item_id: item.id.clone(),
+        method: "GET".into(),
+        path: path.into(),
+        headers: vec![
+            ("Authorization".into(), "Bearer placeholder".into()),
+            ("x-trace".into(), "1".into()),
+        ],
+        body_b64: None,
+    };
+    // Without a grant (this agent is not enrolled) the request is denied.
+    assert!(matches!(
+        service
+            .http_forward_authorized(&agent, request("/charges"))
+            .await,
+        Err(KeyLeaseError::Denied { .. })
+    ));
+    let vault = group.vault_id.0.clone();
+    grant(&service, &agent, "http:request", format!("kl://{vault}"));
+    // Loopback is refused unless the binding allows private addresses.
+    assert!(matches!(
+        service
+            .http_forward_authorized(&agent, request("/charges"))
+            .await,
+        Err(KeyLeaseError::Denied { .. })
+    ));
+    service
+        .set_http_binding_authorized(&agent, &item.id, Some(binding(true)))
+        .unwrap();
+    assert!(
+        service
+            .http_forward_authorized(&agent, request("/../admin"))
+            .await
+            .is_err()
+    );
+    let response = service
+        .http_forward_authorized(&agent, request("/charges?limit=1"))
+        .await
+        .unwrap();
+    assert_eq!(response.status, 200);
+    let body = String::from_utf8(
+        base64::engine::general_purpose::STANDARD
+            .decode(&response.body_b64)
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(!body.contains("sk_test_secret_123"), "{body}");
+    assert!(body.contains("[REDACTED by keylease]"), "{body}");
+    let received = server.await.unwrap();
+    assert!(
+        received.starts_with("GET /v1/charges?limit=1 HTTP/1.1"),
+        "{received}"
+    );
+    assert!(
+        received.contains("Bearer sk_test_secret_123"),
+        "the upstream got the real credential"
+    );
+    assert!(
+        !received.contains("placeholder"),
+        "the agent's own header was replaced"
+    );
+    assert!(received.contains("x-trace: 1"));
+    // The binding is visible as metadata; only protected edits change it.
+    grant(
+        &service,
+        &agent,
+        "entry:read_metadata",
+        format!("kl://{vault}"),
+    );
+    assert_eq!(
+        service
+            .http_binding_authorized(&agent, &item.id)
+            .unwrap()
+            .unwrap()
+            .base_url,
+        format!("http://127.0.0.1:{port}/v1")
+    );
+}

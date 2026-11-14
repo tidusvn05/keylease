@@ -261,10 +261,15 @@ pub(crate) async fn run(
     cli: &Cli,
     daemon: &Path,
     bindings: Vec<String>,
+    http: Vec<String>,
     project: Option<String>,
     environment: Option<String>,
     command: Vec<String>,
 ) -> Result<()> {
+    let http = http
+        .iter()
+        .map(|binding| crate::http_proxy::parse_http_binding(binding))
+        .collect::<Result<Vec<_>>>()?;
     let explicit = bindings
         .iter()
         .map(|binding| parse_binding(binding))
@@ -284,24 +289,51 @@ pub(crate) async fn run(
             reason: "no command to run".into(),
         })?;
     let mut auth = auth(cli)?;
-    auth.purpose = Some(run_purpose(&command, auth.purpose.as_deref())?);
-    let value = rpc(
-        daemon,
-        RpcRequest::EntriesInject {
-            auth,
-            program: program.clone(),
-            fields: requests,
-            argv: command.clone(),
-        },
-    )
-    .await?;
-    let values: Vec<Zeroizing<String>> = serde_json::from_value::<Vec<String>>(value)
-        .map_err(|_| KeyLeaseError::Storage)?
-        .into_iter()
-        .map(Zeroizing::new)
-        .collect();
+    let purpose = run_purpose(&command, auth.purpose.as_deref())?;
+    auth.purpose = Some(purpose.clone());
+    let values: Vec<Zeroizing<String>> = if requests.is_empty() {
+        Vec::new()
+    } else {
+        let value = rpc(
+            daemon,
+            RpcRequest::EntriesInject {
+                auth,
+                program: program.clone(),
+                fields: requests,
+                argv: command.clone(),
+            },
+        )
+        .await?;
+        serde_json::from_value::<Vec<String>>(value)
+            .map_err(|_| KeyLeaseError::Storage)?
+            .into_iter()
+            .map(Zeroizing::new)
+            .collect()
+    };
     if values.len() != names.len() {
         return Err(KeyLeaseError::Storage);
+    }
+    // HTTP bindings: a loopback proxy in this process for the child's
+    // lifetime; the credential stays in the daemon.
+    let mut http_env = Vec::new();
+    if !http.is_empty() {
+        let backend = crate::backend::Backend::for_cli(cli, daemon)?.with_purpose(Some(purpose));
+        let (http_names, items): (Vec<String>, Vec<ItemId>) = http.into_iter().unzip();
+        let proxy = crate::http_proxy::LocalProxy::bind(
+            std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+            backend,
+            items,
+        )
+        .await?;
+        http_env = http_names
+            .into_iter()
+            .zip(proxy.base_urls().to_vec())
+            .collect();
+        tokio::spawn(async move {
+            if let Err(error) = proxy.serve().await {
+                eprintln!("KeyLease HTTP proxy stopped: {error:?}");
+            }
+        });
     }
     let patterns = std::sync::Arc::new(redaction_patterns(&values));
     let mut child = tokio::process::Command::new(program);
@@ -312,6 +344,9 @@ pub(crate) async fn run(
         .stderr(std::process::Stdio::piped());
     for (name, value) in names.iter().zip(&values) {
         child.env(name, value.as_str());
+    }
+    for (name, url) in &http_env {
+        child.env(name, url);
     }
     let mut child = child.spawn().map_err(|_| KeyLeaseError::InvalidRequest {
         reason: format!("cannot run {program}"),

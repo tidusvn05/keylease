@@ -45,6 +45,7 @@ const BASELINE_APPROVAL_ACTIONS: &[&str] = &[
     "ssh:sign",
     "ssh:issue_cert",
     "db:connect",
+    "http:request",
     "entry:supply_secret",
     "entry:generate_secret",
 ];
@@ -76,7 +77,8 @@ pub(crate) fn vault_action_risk(action: &str) -> RiskTier {
         | "entry:generate_secret"
         | "ssh:sign"
         | "ssh:issue_cert"
-        | "db:connect" => RiskTier::R2,
+        | "db:connect"
+        | "http:request" => RiskTier::R2,
         // `keylease run` puts a secret in a child process and scrubs it from
         // the output, so the agent never reads it: high impact, but trustable
         // for up to an hour, unlike a reveal.

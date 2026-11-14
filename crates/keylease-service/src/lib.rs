@@ -40,6 +40,7 @@ mod cloud;
 mod connections;
 mod db;
 mod environments;
+mod http;
 mod identity;
 mod inject;
 mod items;
@@ -65,6 +66,9 @@ pub use cloud::{
 };
 pub use db::{DbTarget, ScramClientFinal};
 use environments::*;
+pub use http::{
+    HTTP_EXTENSION, HttpBinding, HttpForwardRequest, HttpForwardResponse, MAX_HTTP_BODY_BYTES,
+};
 pub use inject::InjectRequest;
 use items::*;
 use owner_rules::*;

@@ -120,6 +120,7 @@ everyday work in the project for an hour; a reveal is approved once)
 Guides: [agent approvals and trust](docs/agent-approvals.md) ·
 [MCP clients](docs/mcp.md) · [remote MCP server](docs/remote-mcp.md) ·
 [SSH agent](docs/ssh-agent.md) · [PostgreSQL proxy](docs/db-proxy.md) ·
+[HTTP APIs](docs/http-proxy.md) ·
 [`keylease run`](docs/run-with-secrets.md) ·
 [projects, environments and the Personal area](docs/projects-and-environments.md) ·
 [Mac ↔ VPS bundles, `.env` and CSV import](docs/node-bundles.md) ·
