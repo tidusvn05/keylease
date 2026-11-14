@@ -1,12 +1,14 @@
 //! KeyLease Cloud modular control plane.
 
 mod api;
+mod console;
 mod enterprise;
 mod enterprise_api;
 mod oidc;
 mod relay;
 mod siem;
 mod store;
+mod webauthn;
 
 pub use api::{CloudApiConfig, CloudApiState, router};
 pub use enterprise::{AuditExportBatch, ScimTokenSecret};

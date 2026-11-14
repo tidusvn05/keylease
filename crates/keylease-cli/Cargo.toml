@@ -39,6 +39,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 serde_urlencoded = "0.7"
 signature = "2"
 ssh-key = { version = "0.6.7", default-features = false, features = ["std", "ed25519", "rand_core", "getrandom"] }

@@ -46,6 +46,10 @@ pub struct CloudApiConfig {
     /// Optional host-generated, redacted operations snapshot. The Control
     /// Plane receives this file read-only and never receives the Docker socket.
     pub operations_status_file: Option<PathBuf>,
+    /// The URL browsers use for this server (`https://vault.example.com`).
+    /// Passkeys are bound to its host; without it only device sign-in links
+    /// work in the console.
+    pub public_url: Option<String>,
 }
 
 impl std::fmt::Debug for CloudApiConfig {
@@ -55,6 +59,7 @@ impl std::fmt::Debug for CloudApiConfig {
             .field("admin_token", &"[REDACTED]")
             .field("maximum_body_bytes", &self.maximum_body_bytes)
             .field("operations_status_file", &self.operations_status_file)
+            .field("public_url", &self.public_url)
             .finish()
     }
 }
@@ -65,6 +70,7 @@ impl Default for CloudApiConfig {
             admin_token: String::new(),
             maximum_body_bytes: 4 * 1024 * 1024,
             operations_status_file: None,
+            public_url: None,
         }
     }
 }
@@ -76,6 +82,7 @@ pub struct CloudApiState {
     admin_token_digest: [u8; 32],
     maximum_body_bytes: usize,
     operations_status_file: Option<PathBuf>,
+    pub(crate) console: crate::console::ConsoleConfig,
 }
 
 impl std::fmt::Debug for CloudApiState {
@@ -106,6 +113,7 @@ impl CloudApiState {
             admin_token_digest: Sha256::digest(config.admin_token.as_bytes()).into(),
             maximum_body_bytes: config.maximum_body_bytes.clamp(1024, 16 * 1024 * 1024),
             operations_status_file: config.operations_status_file,
+            console: crate::console::ConsoleConfig::from_public_url(config.public_url.as_deref())?,
         })
     }
 }
@@ -236,6 +244,7 @@ pub fn router(state: CloudApiState) -> Router {
         )
         .merge(crate::enterprise_api::router())
         .merge(crate::relay::router())
+        .merge(crate::console::router())
         .layer(DefaultBodyLimit::max(maximum))
         .with_state(state)
 }

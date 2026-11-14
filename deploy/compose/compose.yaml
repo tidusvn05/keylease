@@ -48,6 +48,7 @@ services:
       KEYLEASE_CONTROL_SIGNING_KEY_FILE: /run/leasegate-secrets/control_signing_key
       KEYLEASE_OPERATIONS_STATUS_FILE: /run/leasegate-ops/operations-status.json
       KEYLEASE_SERVER_LISTEN: 0.0.0.0:8080
+      KEYLEASE_SERVER_PUBLIC_URL: https://${KEYLEASE_DOMAIN}
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       - ./secrets:/run/leasegate-secrets:ro
