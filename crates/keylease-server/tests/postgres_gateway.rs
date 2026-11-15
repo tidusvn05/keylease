@@ -237,3 +237,264 @@ async fn gateway_clients_call_granted_apis_without_seeing_credentials() {
         403
     );
 }
+
+#[tokio::test]
+async fn a_gateway_client_can_need_approval_per_call() {
+    let Some(database_url) = std::env::var("KEYLEASE_TEST_DATABASE_URL").ok() else {
+        eprintln!("skipping PostgreSQL gateway approval test; KEYLEASE_TEST_DATABASE_URL is unset");
+        return;
+    };
+    let repository = CloudRepository::connect(&database_url, 2).await.unwrap();
+    repository.migrate().await.unwrap();
+    let app = router(
+        CloudApiState::new(
+            repository.clone(),
+            ControlSigner::generate("gateway-approval-test").unwrap(),
+            CloudApiConfig {
+                admin_token: "gateway-test-administrator-token-at-least-32".into(),
+                kms_root_key: Some([6_u8; 32]),
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    );
+    let (_alice, a) = signed_in(&repository, "alice").await;
+    let (_bob, b) = signed_in(&repository, "bob").await;
+    let (_, created) = call(
+        &app,
+        "POST",
+        "/v1/orgs",
+        &a,
+        json!({"name": "Acme", "display_name": "Alice"}),
+    )
+    .await;
+    let org = created["org_id"].as_str().unwrap().to_owned();
+    call(
+        &app,
+        "POST",
+        &format!("/v1/orgs/{org}/projects"),
+        &a,
+        json!({"slug": "shop", "name": "Shop"}),
+    )
+    .await;
+    let base = format!("/v1/orgs/{org}/projects/shop");
+    call(
+        &app,
+        "PUT",
+        &format!("{base}/secrets/staging/ECHO_TOKEN"),
+        &a,
+        json!({"value": "test-secret-0123456789"}),
+    )
+    .await;
+    call(
+        &app,
+        "PUT",
+        &format!("{base}/http-bindings/echo"),
+        &a,
+        json!({"base_url": "https://httpbin.org", "secret_name": "ECHO_TOKEN"}),
+    )
+    .await;
+    assert_eq!(call(&app, "POST", &format!("/v1/orgs/{org}/gateway/clients"), &a, json!({
+        "name": "bad", "approval": "sometimes", "grants": [{"project": "shop", "environment": "staging"}]
+    })).await.0, 400);
+    let (status, client) = call(
+        &app,
+        "POST",
+        &format!("/v1/orgs/{org}/gateway/clients"),
+        &a,
+        json!({
+            "name": "Deploy bot", "allow_writes": true, "approval": "writes",
+            "grants": [{"project": "shop", "environment": "staging"}]
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{client:?}");
+    let token = client["token"].as_str().unwrap().to_owned();
+    let (_, clients) = call(
+        &app,
+        "GET",
+        &format!("/v1/orgs/{org}/gateway/clients"),
+        &a,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(clients["clients"][0]["approval"], "writes");
+
+    let refund = json!({"project": "shop", "environment": "staging", "binding": "echo",
+                        "method": "POST", "path": "/post", "json": {"amount": 5}});
+    // A write waits for a person; asking again does not make a second request.
+    let (_, first) = mcp(&app, &org, &token, tool("http_request", refund.clone())).await;
+    let text = first["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(first["result"]["isError"], true);
+    assert!(text.contains("approval required (gwa_"), "{text}");
+    let id = text
+        .split("approval required (")
+        .nth(1)
+        .unwrap()
+        .split(')')
+        .next()
+        .unwrap()
+        .to_owned();
+    let (_, again) = mcp(&app, &org, &token, tool("http_request", refund.clone())).await;
+    assert!(
+        again["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains(&id)
+    );
+    let (_, listed) = call(
+        &app,
+        "GET",
+        &format!("/v1/orgs/{org}/gateway/approvals"),
+        &a,
+        Value::Null,
+    )
+    .await;
+    let pending: Vec<&Value> = listed["approvals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|x| x["state"] == "pending")
+        .collect();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0]["approval_id"], id.as_str());
+    assert_eq!(pending[0]["method"], "POST");
+    assert_eq!(pending[0]["path"], "/post");
+    assert_eq!(pending[0]["client"], "Deploy bot");
+    // Someone without the project admin role neither sees nor decides it.
+    let (status, foreign) = call(
+        &app,
+        "GET",
+        &format!("/v1/orgs/{org}/gateway/approvals"),
+        &b,
+        Value::Null,
+    )
+    .await;
+    assert!(
+        status != 200 || foreign["approvals"] == json!([]),
+        "{status} {foreign:?}"
+    );
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("/v1/orgs/{org}/gateway/approvals/{id}"),
+            &b,
+            json!({"approve": true})
+        )
+        .await
+        .0,
+        404,
+        "not a member of the organization"
+    );
+
+    // Reads go through without approval (they fail later only for lack of network).
+    let (_, read) = mcp(
+        &app,
+        &org,
+        &token,
+        tool(
+            "http_request",
+            json!({"project": "shop", "environment": "staging", "binding": "echo", "path": "/get"}),
+        ),
+    )
+    .await;
+    assert!(
+        !read["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("approval required")
+    );
+
+    // Approved: the same call passes the gate once; a different body needs its own approval.
+    let (status, decided) = call(
+        &app,
+        "POST",
+        &format!("/v1/orgs/{org}/gateway/approvals/{id}"),
+        &a,
+        json!({"approve": true}),
+    )
+    .await;
+    assert_eq!(status, 200, "{decided:?}");
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &format!("/v1/orgs/{org}/gateway/approvals/{id}"),
+            &a,
+            json!({"approve": false})
+        )
+        .await
+        .0,
+        400
+    );
+    let mut other = refund.clone();
+    other["json"]["amount"] = json!(500);
+    let (_, changed) = mcp(&app, &org, &token, tool("http_request", other.clone())).await;
+    let changed_text = changed["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        changed_text.contains("approval required") && !changed_text.contains(&id),
+        "{changed_text}"
+    );
+    let (_, passed) = mcp(&app, &org, &token, tool("http_request", refund.clone())).await;
+    let passed_text = passed["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(!passed_text.contains("approval required"), "{passed_text}");
+    let (_, after) = mcp(&app, &org, &token, tool("http_request", refund.clone())).await;
+    assert!(
+        after["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("approval required"),
+        "used once"
+    );
+
+    // Denied: the same call is refused until the request expires.
+    let other_id = changed_text
+        .split("approval required (")
+        .nth(1)
+        .unwrap()
+        .split(')')
+        .next()
+        .unwrap()
+        .to_owned();
+    call(
+        &app,
+        "POST",
+        &format!("/v1/orgs/{org}/gateway/approvals/{other_id}"),
+        &a,
+        json!({"approve": false}),
+    )
+    .await;
+    let (_, refused) = mcp(&app, &org, &token, tool("http_request", other)).await;
+    assert!(
+        refused["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("denied"),
+        "{refused:?}"
+    );
+
+    // The base-URL proxy answers 403 approval_required.
+    let request = Request::builder()
+        .method("DELETE")
+        .uri(format!(
+            "/v1/orgs/{org}/gateway/http/shop/staging/echo/delete"
+        ))
+        .header("x-keylease-token", &token)
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status().as_u16(), 403);
+    let body: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["error"], "approval_required");
+}

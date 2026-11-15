@@ -395,7 +395,7 @@ cho tới khi PR trước được merge.
 | P2 | #23 đăng nhập console + passkey (ADR 0008), #24 sync thiết bị (ADR 0009), #25 console v1, #37 duyệt bằng passkey + audit của node trên console (ADR 0011), #38 Web Push | |
 | P3 | #26 tổ chức + phân quyền, #27 Managed + KMS (ADR 0010), #28 change request, #29 SSO OIDC | |
 | P4 | #30 machine identity + `keylease ci run`, #31 GitHub Action + access key cho ESO | |
-| P5 | #32 MCP Gateway, #33 proxy base-URL phía server + PostgreSQL động, #39 MySQL động + dọn login hết hạn | proxy MCP upstream (OAuth), duyệt từng lần gọi: chưa |
+| P5 | #32 MCP Gateway, #33 proxy base-URL phía server + PostgreSQL động, #39 MySQL động + dọn login hết hạn, #40 duyệt từng lần gọi qua gateway | proxy MCP upstream (OAuth): chưa |
 | P6 | #34 KMS API, xuất audit (JSONL/syslog), SCIM (thu hồi) | PKCS#11/HSM, KMS cloud, đẩy audit, managed node: chưa |
 
 Chưa làm vì cần môi trường khác: app macOS/mobile (Swift, Kotlin/Flutter không

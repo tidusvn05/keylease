@@ -13,9 +13,10 @@ claude.ai is the [remote MCP server](remote-mcp.md).)
    (`https://api.stripe.com`, https only) and the secret's name. The header
    defaults to `Authorization: Bearer {secret}`.
 2. On the organization page (owners and admins), **MCP Gateway → Create
-   client**: a name, the project environments it may use, and whether it may
-   write (anything but GET, HEAD and OPTIONS). The token is shown once with
-   the command to add it:
+   client**: a name, the project environments it may use, whether it may
+   write (anything but GET, HEAD and OPTIONS), and which calls need a
+   person's approval (none, writes, or every call). The token is shown once
+   with the command to add it:
 
 ```sh
 claude mcp add --transport http keylease https://vault.example.com/api/v1/orgs/ORG/mcp \
@@ -46,6 +47,25 @@ as the API's base URL and send the gateway token in the
 the credential, forwards the request and returns the API's answer with the
 secret scrubbed from the body and headers.
 
-Not yet: proxying other MCP servers (upstream MCP with OAuth) and per-call
-approvals; until then, give clients only the environments and write access
-they need.
+## Per-call approvals
+
+A client set to need approval for writes (or for every call) does not send
+such a call straight away:
+
+1. The first call fails with `approval required (gwa_…)`. The base-URL proxy
+   answers `403 {"error": "approval_required", "approval_id": "gwa_…"}`. The
+   organization's owners and admins and the project's admins get a Web Push
+   notification if they turned notifications on.
+2. In the console, **Approvals → MCP Gateway calls** shows the client, the
+   project environment, the method, binding and path, and the body size.
+   Approve or deny it there.
+3. The agent makes the same call again. An approval covers that exact call
+   once (client, environment, binding, method, path and body digest) and
+   lasts 15 minutes. A changed body needs a new approval. After a denial, the
+   same call is refused until the request expires.
+
+Decisions are in the project's audit (`gateway_call_approve`,
+`gateway_call_deny`).
+
+Not yet: proxying other MCP servers (upstream MCP with OAuth). Until then, give
+clients only the environments and write access they need.
