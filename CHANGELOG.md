@@ -5,6 +5,37 @@ All notable changes to KeyLease are listed here. The format follows
 [Semantic Versioning](https://semver.org/) (see docs/releasing.md). This file is
 generated from commit messages by git-cliff.
 
+## [0.4.0] - 2026-11-15
+
+### Features
+
+- Decide node approvals in the console with a passkey; node audit (ADR 0011) (#37) (edbf6b8)
+- **console:** Web Push notifications for new pending approvals (767a7ee)
+- **server:** Dynamic MySQL logins and a reaper for expired logins (79da14a)
+- **gateway:** Per-call approvals for MCP Gateway clients (7c41017)
+- **gateway:** Upstream MCP servers, with OAuth, behind the MCP Gateway (9936b41)
+- **server:** Push the organization audit to SIEM collectors (6de5cf2)
+- **server:** KMS root key wrapped by AWS KMS, Cloud KMS or a PKCS#11 HSM (9504add)
+- Managed nodes apply their organization's signed policy (ADR 0012) (5176c09)
+- **macos:** Server page for the cloud link, console approvals and managed nodes (b76aad0)
+- **server:** Keylease-server setup, a one-command install (1ee444b)
+- Prebuilt binaries and a one-line install for OSS users (687f2ee)
+
+### Bug fixes
+
+- **release:** Let CI publish up to a new crate, then publish it by hand (#36) (1683697)
+- **server:** Accept an already initialized PKCS#11 module (15b9e67)
+- **macos:** Add the http_forward and http_binding requests to the Swift client (e6bd52f)
+
+### Documentation
+
+- **plan:** Console approvals, audit and Web Push are done (1d72acf)
+
+### Other
+
+- **console:** Match the language button exactly (65cc908)
+- Remove the Flutter apps; mobile goes native (01efd69)
+
 ## [0.3.0] - 2026-11-14
 
 ### Features
@@ -61,42 +92,7 @@ generated from commit messages by git-cliff.
 
 ### Other
 
-- Merge pull request #11 from tidusvn05/feat/project-trust (7ea5dc9)
-- Merge branch 'feat/ssh-certs' into feat/agent-next (ab82aae)
-- Merge branch 'feat/signed-client-identity' into feat/agent-next (a262cfb)
-- Merge pull request #12 from tidusvn05/feat/agent-next (a97e441)
-- Merge pull request #13 from tidusvn05/docs/platform-v2 (dac97ae)
-- Merge pull request #14 from tidusvn05/refactor/drop-leasegate (335a702)
-- Merge pull request #15 from tidusvn05/refactor/remote-mcp-names (5a798f6)
-- Merge pull request #16 from tidusvn05/refactor/keylease-server (40e3e56)
-- Merge pull request #17 from tidusvn05/refactor/service-modules (29d6055)
-- Merge pull request #18 from tidusvn05/feat/environments-and-secrets (b36be8c)
-- Merge pull request #19 from tidusvn05/feat/age-bundles (d259d33)
-- Merge pull request #20 from tidusvn05/chore/deps-advisories (f0efd0a)
-- Merge pull request #21 from tidusvn05/feat/http-proxy (1eb99fc)
-- Merge pull request #22 from tidusvn05/feat/http-proxy-mitm (0895a9b)
-- Merge pull request #23 from tidusvn05/feat/server-identity (c79c596)
-- Merge pull request #24 from tidusvn05/feat/server-sync (e8395af)
 - **console:** Mock the API in the Playwright smoke test (af40248)
-- Merge pull request #25 from tidusvn05/feat/console-v1 (d6e67de)
-- Merge branch 'feat/console-v1' into feat/orgs-rbac (4558d72)
-- Merge pull request #26 from tidusvn05/feat/orgs-rbac (2426ed9)
-- Merge branch 'feat/orgs-rbac' into feat/managed-projects-kms (9081e2c)
-- Merge pull request #27 from tidusvn05/feat/managed-projects-kms (548de01)
-- Merge branch 'feat/managed-projects-kms' into feat/change-requests (cf13c84)
-- Merge pull request #28 from tidusvn05/feat/change-requests (cf45860)
-- Merge branch 'feat/change-requests' into feat/console-sso (e28785d)
-- Merge pull request #29 from tidusvn05/feat/console-sso (67d86b7)
-- Merge branch 'feat/console-sso' into feat/machine-identity (c69efd0)
-- Merge pull request #30 from tidusvn05/feat/machine-identity (b2f314a)
-- Merge branch 'feat/machine-identity' into feat/ci-integrations (e55da23)
-- Merge pull request #31 from tidusvn05/feat/ci-integrations (075d37a)
-- Merge branch 'feat/ci-integrations' into feat/mcp-gateway (020764d)
-- Merge pull request #32 from tidusvn05/feat/mcp-gateway (dbb78f2)
-- Merge branch 'feat/mcp-gateway' into feat/server-brokers (2fd73aa)
-- Merge pull request #33 from tidusvn05/feat/server-brokers (207b484)
-- Merge branch 'feat/server-brokers' into feat/enterprise (2547620)
-- Merge pull request #34 from tidusvn05/feat/enterprise (851b7a7)
 
 ## [0.2.1] - 2026-10-27
 
