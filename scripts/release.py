@@ -6,16 +6,18 @@
     scripts/release.py order               print the publishable crates in publishing order
     scripts/release.py pending             print the crates whose version is not on crates.io yet,
                                            and check names and ownership
-    scripts/release.py publish [--dry-run [--allow-dirty] | --no-new]
+    scripts/release.py publish [--dry-run [--allow-dirty] | --no-new | --crates a,b]
                                            publish every publishable crate to crates.io, in order
+                                           (with --crates, only those)
     scripts/release.py trustpub OWNER/REPO [--workflow F] [--environment E] [--crates a,b] [--only]
                                            set up crates.io Trusted Publishing for the crates
 
 `publish` can be run again after a failure: versions already on crates.io are skipped, and a
 yanked version is never reused. When crates.io rate-limits (HTTP 429, about one new crate every
 10 minutes after a short burst) it waits for the time crates.io gives and retries. With
-`--no-new` (the release workflow, whose Trusted Publishing token cannot create crates) it stops
-before publishing anything if a crate is not on crates.io yet.
+`--no-new` (the release workflow, whose Trusted Publishing token cannot create crates) it
+publishes in order and stops at the first crate that is not on crates.io yet, naming the
+commands that publish it by hand; re-running the job then carries on after it.
 
 `trustpub` needs a crates.io API token with the `trusted-publishing` scope: CRATES_IO_TOKEN, or
 the token saved by `cargo login`. It never prints the token. Running it again changes nothing.
@@ -262,8 +264,14 @@ def retry_after(output):
     return 600
 
 
-def publish(dry_run, allow_dirty=False, no_new=False):
+def publish(dry_run, allow_dirty=False, no_new=False, only=None):
     order, version = publish_order()
+    if only is not None:
+        unknown = sorted(set(only) - set(order))
+        if unknown:
+            sys.exit(f"not a publishable crate: {' '.join(unknown)}")
+        # Keep the publishing order; dependencies must already be on crates.io.
+        order = [name for name in order if name in only]
     if dry_run:
         # Before the first publish the dependencies are not on crates.io: cargo packages the
         # whole workspace against a local registry instead.
@@ -283,12 +291,15 @@ def publish(dry_run, allow_dirty=False, no_new=False):
     yanked = [n for n, e in entries.items() if e and e.get(version) is True]
     if yanked:
         sys.exit(f"{version} is yanked for {yanked}: release a new version instead")
-    new = [n for n, e in entries.items() if e is None]
-    if new and no_new:
-        sys.exit(f"not on crates.io yet: {' '.join(new)}. Trusted Publishing cannot create a "
-                 f"crate: publish them by hand first (docs/releasing.md, 'A new crate'), then "
-                 f"re-run this job")
     for name in order:
+        if entries[name] is None and no_new:
+            # The crates before this one are published, so a person can publish it by hand
+            # against them and re-run the job, which then carries on after it.
+            sys.exit(f"{name} is not on crates.io yet. Trusted Publishing cannot create a crate: "
+                     f"publish it by hand (docs/releasing.md, 'A new crate'):\n"
+                     f"  scripts/release.py publish --crates {name}\n"
+                     f"  scripts/release.py trustpub tidusvn05/keylease --crates {name} --only\n"
+                     f"then re-run this job")
         if version in (entries[name] or {}):
             print(f"= {name} {version} is already on crates.io")
             continue
@@ -322,6 +333,8 @@ def main():
         print(f"{version}: " + " ".join(order))
     elif args == ["pending"]:
         pending()
+    elif args[:1] == ["publish"] and len(args) == 3 and args[1] == "--crates":
+        publish(dry_run=False, only=args[2].split(","))
     elif args[:1] == ["publish"] and args[1:] in ([], ["--dry-run"], ["--dry-run", "--allow-dirty"],
                                                   ["--no-new"]):
         publish(dry_run="--dry-run" in args, allow_dirty="--allow-dirty" in args,

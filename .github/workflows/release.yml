@@ -185,11 +185,6 @@ jobs:
       - name: Crates to publish
         id: pending
         run: scripts/release.py pending
-      - name: No new crates
-        if: steps.pending.outputs.new != ''
-        run: |
-          echo "::error::not on crates.io yet: ${{ steps.pending.outputs.new }}. Trusted Publishing cannot create a crate; publish it by hand first (docs/releasing.md, 'A new crate'), then re-run this job."
-          exit 1
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
         if: steps.pending.outputs.count != '0'
