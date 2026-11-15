@@ -15,6 +15,9 @@ async fn main() -> Result<()> {
     if env::args().nth(1).as_deref() == Some("migrate") {
         return migrate_only().await;
     }
+    if env::args().nth(1).as_deref() == Some("kms") {
+        return kms_command(env::args().skip(2).collect()).await;
+    }
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .json()
@@ -54,17 +57,18 @@ async fn main() -> Result<()> {
             public_url: env::var("KEYLEASE_SERVER_PUBLIC_URL")
                 .ok()
                 .filter(|value| !value.is_empty()),
-            kms_root_key: match env::var("KEYLEASE_KMS_ROOT_KEY_FILE") {
-                Ok(path) if !path.is_empty() => {
-                    let key =
-                        read_signing_key(Path::new(&path)).context("read the KMS root key")?;
-                    Some(
-                        key.as_slice()
-                            .try_into()
-                            .context("the KMS root key must be 32 bytes")?,
-                    )
+            kms_root_key: match keylease_server::kms_root::settings_from_env()? {
+                Some(settings) => {
+                    let key = keylease_server::kms_root::load_root_key(&settings)
+                        .await
+                        .context("load the KMS root key")?;
+                    info!(
+                        fingerprint = keylease_server::kms_root::fingerprint(&key),
+                        "KMS root key loaded"
+                    );
+                    Some(*key)
                 }
-                _ => None,
+                None => None,
             },
             allow_private_network: env::var("KEYLEASE_GATEWAY_ALLOW_PRIVATE")
                 .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true")),
@@ -187,4 +191,94 @@ fn read_secret_text(path: &Path, maximum: u64) -> Result<Zeroizing<String>> {
     Ok(Zeroizing::new(
         fs::read_to_string(path).context("read secret file")?,
     ))
+}
+
+/// `keylease-server kms init|wrap FILE|check`: manage the wrapped KMS root
+/// key with the provider from the environment (docs/enterprise.md).
+async fn kms_command(args: Vec<String>) -> Result<()> {
+    use keylease_server::kms_root;
+    let settings = kms_root::settings_from_env()?
+        .context("set KEYLEASE_KMS_PROVIDER (aws, gcp or pkcs11) and its settings")?;
+    let wrapped_path = || {
+        settings
+            .wrapped_file
+            .clone()
+            .context("set KEYLEASE_KMS_WRAPPED_ROOT_KEY_FILE")
+    };
+    let write_new = |path: &Path, wrapped: &str| -> Result<()> {
+        use std::io::Write;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(path)
+            .with_context(|| format!("create {} (it must not exist yet)", path.display()))?;
+        writeln!(file, "{wrapped}").context("write the wrapped root key")
+    };
+    match args.first().map(String::as_str) {
+        Some("init") => {
+            use rand::RngCore;
+            let path = wrapped_path()?;
+            if path.exists() {
+                bail!(
+                    "{} exists already; init never replaces a root key",
+                    path.display()
+                );
+            }
+            let mut key = Zeroizing::new([0_u8; 32]);
+            rand::rng().fill_bytes(key.as_mut_slice());
+            let wrapped = kms_root::wrap_root_key(&settings, &key).await?;
+            write_new(&path, &wrapped)?;
+            // Check that the provider gives the key back.
+            let loaded = kms_root::load_root_key(&settings).await?;
+            if *loaded != *key {
+                bail!(
+                    "the provider did not give the same key back; {} is unusable",
+                    path.display()
+                );
+            }
+            println!(
+                "Wrote a new wrapped root key to {} (fingerprint {}).",
+                path.display(),
+                kms_root::fingerprint(&key)
+            );
+            Ok(())
+        }
+        Some("wrap") => {
+            let source = args
+                .get(1)
+                .context("usage: keylease-server kms wrap ROOT_KEY_FILE")?;
+            let key = kms_root::read_root_key_file(Path::new(source))?;
+            let path = wrapped_path()?;
+            write_new(&path, &kms_root::wrap_root_key(&settings, &key).await?)?;
+            let loaded = kms_root::load_root_key(&settings).await?;
+            if *loaded != *key {
+                bail!(
+                    "the provider did not give the same key back; {} is unusable",
+                    path.display()
+                );
+            }
+            println!(
+                "Wrapped {} into {} (fingerprint {}). Switch the server to the provider, check it starts, then delete {} and its backups only if another copy of the key is kept offline.",
+                source,
+                path.display(),
+                kms_root::fingerprint(&key),
+                source
+            );
+            Ok(())
+        }
+        Some("check") => {
+            let key = kms_root::load_root_key(&settings).await?;
+            println!(
+                "The root key loads (fingerprint {}).",
+                kms_root::fingerprint(&key)
+            );
+            Ok(())
+        }
+        _ => bail!("usage: keylease-server kms init | wrap ROOT_KEY_FILE | check"),
+    }
 }
