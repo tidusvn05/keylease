@@ -7,6 +7,7 @@ pub mod console;
 mod domain;
 mod error;
 mod identity;
+pub mod managed;
 mod policy;
 pub mod relay;
 mod template;

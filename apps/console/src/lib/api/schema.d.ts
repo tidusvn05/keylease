@@ -850,6 +850,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/orgs/{org}/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["managedNodes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/orgs/{org}/nodes/enrollments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createNodeEnrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/orgs/{org}/nodes/{member}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["removeManagedNode"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/orgs/{org}/node-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setNodePolicy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1085,6 +1149,15 @@ export interface components {
             next_attempt_at?: string | null;
             last_success_at?: string | null;
             last_error?: string | null;
+        };
+        ManagedRule: {
+            id: string;
+            /** @enum {string} */
+            effect: "deny" | "require_approval";
+            actions: string[];
+            resource_prefix?: string;
+            agent_id?: string | null;
+            connection_id?: string | null;
         };
     };
     responses: never;
@@ -2710,6 +2783,122 @@ export interface operations {
                     "application/json": {
                         ok: boolean;
                         error?: string;
+                    };
+                };
+            };
+        };
+    };
+    managedNodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        policy: {
+                            version: number;
+                            rules: components["schemas"]["ManagedRule"][];
+                        };
+                        nodes: {
+                            member_id: string;
+                            name: string;
+                            revoked: boolean;
+                            joined_at: string;
+                            applied_version?: number | null;
+                            last_seen_at?: string | null;
+                        }[];
+                    };
+                };
+            };
+        };
+    };
+    createNodeEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        code: string;
+                        command: string;
+                        expires_at: string;
+                    };
+                };
+            };
+        };
+    };
+    removeManagedNode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                member: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        removed?: number;
+                    };
+                };
+            };
+        };
+    };
+    setNodePolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    rules: components["schemas"]["ManagedRule"][];
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        version: number;
                     };
                 };
             };

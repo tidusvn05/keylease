@@ -238,6 +238,8 @@ pub(crate) fn standing_rules(store: &NativeStore, now: DateTime<Utc>) -> Result<
         };
         rule.actions = actions.iter().map(|action| (*action).to_owned()).collect();
     }
+    // The organization's rules (managed nodes) stand like the vault's own.
+    rules.extend(crate::org_policy::managed_rules(store, now)?);
     Ok(rules)
 }
 

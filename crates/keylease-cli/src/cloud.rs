@@ -69,6 +69,10 @@ pub(crate) enum CloudCommand {
     /// with one of your passkeys) and list its audit.
     #[command(subcommand)]
     ConsoleApprovals(crate::console_approvals::ConsoleApprovalsCommand),
+    /// Make this vault a managed node of an organization: its signed rules
+    /// (deny, require approval) then apply here.
+    #[command(subcommand)]
+    Org(crate::org::OrgCommand),
     /// Owner: the nodes this device verified.
     Nodes,
     /// Owner: remove a node; its shares end and it can no longer sync.
@@ -548,6 +552,7 @@ pub(crate) async fn cloud_command(cli: &Cli, socket: &Path, command: CloudComman
         CloudCommand::ConsoleApprovals(command) => {
             crate::console_approvals::command(&service, command).await
         }
+        CloudCommand::Org(command) => crate::org::command(&service, command).await,
         CloudCommand::Nodes => print_json(&service.cloud_nodes()?),
         CloudCommand::Remove { node } => {
             let link = require_link(&service)?;

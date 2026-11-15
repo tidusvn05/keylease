@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import { AuditDestinations } from "@/components/audit-destinations";
 import { GatewayClients } from "@/components/gateway-clients";
+import { ManagedNodes } from "@/components/managed-nodes";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -231,6 +232,7 @@ function OrgPage() {
           )}
         />
       )}
+      {manager && <ManagedNodes org={id} />}
       {manager && <AuditDestinations org={id} />}
     </div>
   );

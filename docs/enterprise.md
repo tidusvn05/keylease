@@ -103,7 +103,39 @@ provider and check that the fingerprint is unchanged. Then keep an offline
 copy of the old file key somewhere separate (losing both it and the
 provider's key loses every Managed secret), and remove it from the server.
 
-## Not yet
+## Managed nodes
 
-- Managed nodes: nodes receiving signed policy from the server (the earlier
-  edge node covers part of this).
+A vault that runs agents (a VPS with `keylease serve`, or a Mac) can join an
+organization. It then applies the organization's rules, signed by the server
+([ADR 0012](adr/0012-managed-nodes.md)).
+
+1. **Enroll the node.** On the organization page, **Managed nodes → New
+   enrollment code** (owners and admins). On the node, which must be linked to
+   the server (`keylease cloud init` / `join`):
+
+   ```sh
+   keylease cloud org join --code klnode_…     # master password; pins the server's key
+   keylease cloud org status
+   ```
+
+2. **Write the rules.** They are a JSON list, edited on the same page or with
+   `PUT /v1/orgs/ORG/node-policy`:
+
+   ```json
+   {"rules": [
+     {"id": "no-delete", "effect": "deny", "actions": ["entry:delete"]},
+     {"id": "ask-secrets", "effect": "require_approval", "actions": ["entry:read_secret", "entry:inject_secret"]},
+     {"id": "ci-no-ssh", "effect": "deny", "actions": ["ssh:sign"], "agent_id": "agent_ci"}
+   ]}
+   ```
+
+   Rules only tighten: `deny`, or `require_approval`, which outranks the
+   vault's own grants and trusts. An empty `resource_prefix` covers every
+   item. Publishing signs a new version.
+
+3. **Watch the nodes.** Nodes pick a new version up within a minute. The page
+   shows which version each node runs and when it was last seen.
+
+`keylease cloud org leave` (master password) removes the organization's rules
+from a vault. Removing a node on the page only stops new versions, so the rules
+in force stay until the owner leaves.

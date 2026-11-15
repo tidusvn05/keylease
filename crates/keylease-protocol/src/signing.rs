@@ -67,6 +67,12 @@ impl ControlSigner {
         STANDARD_NO_PAD.encode(self.key.verifying_key().to_bytes())
     }
 
+    /// An Ed25519 signature (unpadded base64) over raw bytes, for artifacts
+    /// that published crates verify without this crate (managed node policy).
+    pub fn sign_bytes(&self, bytes: &[u8]) -> String {
+        STANDARD_NO_PAD.encode(self.key.sign(bytes).to_bytes())
+    }
+
     pub fn sign_policy(&self, payload: PolicyBundlePayload) -> Result<SignedPolicyBundle> {
         let bytes = canonical_bytes(&payload)?;
         Ok(SignedPolicyBundle {

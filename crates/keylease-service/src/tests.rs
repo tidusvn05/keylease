@@ -2382,3 +2382,95 @@ async fn http_requests_get_the_credential_without_the_agent_seeing_it() {
         format!("http://127.0.0.1:{port}/v1")
     );
 }
+
+#[test]
+fn an_organizations_managed_rules_tighten_what_agents_may_do() {
+    use base64::engine::general_purpose::STANDARD_NO_PAD;
+    use ed25519_dalek::{Signer, SigningKey};
+    use keylease_core::managed::{
+        ManagedPolicy, OrgNodeJoined, SignedManagedPolicy, managed_policy_signing_input,
+    };
+    let (_dir, service, _owner, agent) = service_with_owner();
+    assert!(service.search_entries(&agent, "").is_ok());
+    let server = SigningKey::from_bytes(&[9; 32]);
+    service
+        .org_join_commit(&OrgNodeJoined {
+            org_id: "org_1".into(),
+            org_name: "Acme".into(),
+            key_id: "k".into(),
+            verifying_key: STANDARD_NO_PAD.encode(server.verifying_key().to_bytes()),
+        })
+        .unwrap();
+    let policy = |version: u64, effect: PolicyEffect| {
+        let payload = serde_json::to_string(&ManagedPolicy {
+            v: 1,
+            org_id: "org_1".into(),
+            version,
+            issued_at: Utc::now(),
+            expires_at: Utc::now() + Duration::days(30),
+            rules: vec![PolicyRule {
+                id: "search".into(),
+                version: 0,
+                effect,
+                agent_id: None,
+                connection_id: None,
+                resource_prefix: String::new(),
+                actions: vec!["entry:search".into()],
+                argument_equals: Default::default(),
+                not_before: None,
+                expires_at: None,
+                max_lease_ttl_seconds: 300,
+                max_uses: 1,
+                budget: Default::default(),
+            }],
+        })
+        .unwrap();
+        SignedManagedPolicy {
+            signature: STANDARD_NO_PAD.encode(
+                server
+                    .sign(&managed_policy_signing_input(&payload))
+                    .to_bytes(),
+            ),
+            key_id: "k".into(),
+            payload,
+        }
+    };
+    // A managed deny wins over the agent's own grant.
+    service
+        .org_apply_policy(&policy(1, PolicyEffect::Deny))
+        .unwrap();
+    assert!(matches!(
+        service.search_entries(&agent, ""),
+        Err(KeyLeaseError::Denied { .. })
+    ));
+    // A managed approval requirement outranks the grant too.
+    service
+        .org_apply_policy(&policy(2, PolicyEffect::RequireApproval))
+        .unwrap();
+    assert!(matches!(
+        service.search_entries(&agent, ""),
+        Err(KeyLeaseError::ApprovalRequired { .. })
+    ));
+    // Locking and unlocking keeps the organization's rules.
+    service.revoke_session_authority().unwrap();
+    assert!(
+        service
+            .policy
+            .read()
+            .unwrap()
+            .rules()
+            .iter()
+            .any(|rule| rule.id == "managed_search")
+    );
+    // Leaving the organization removes its rules.
+    assert!(service.org_leave().unwrap());
+    assert!(
+        service
+            .policy
+            .read()
+            .unwrap()
+            .rules()
+            .iter()
+            .all(|rule| !rule.id.starts_with("managed_"))
+    );
+}
