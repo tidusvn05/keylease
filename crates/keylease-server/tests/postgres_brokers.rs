@@ -60,18 +60,17 @@ async fn machines_get_expiring_postgres_logins_and_gateway_clients_a_base_url() 
         .execute(repository.pool())
         .await
         .unwrap();
-    let app = router(
-        CloudApiState::new(
-            repository.clone(),
-            ControlSigner::generate("broker-test").unwrap(),
-            CloudApiConfig {
-                admin_token: "broker-test-administrator-token-at-least-32".into(),
-                kms_root_key: Some([3_u8; 32]),
-                ..Default::default()
-            },
-        )
-        .unwrap(),
-    );
+    let state = CloudApiState::new(
+        repository.clone(),
+        ControlSigner::generate("broker-test").unwrap(),
+        CloudApiConfig {
+            admin_token: "broker-test-administrator-token-at-least-32".into(),
+            kms_root_key: Some([3_u8; 32]),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let app = router(state.clone());
     let (_alice, a) = signed_in(&repository, "alice").await;
     let (_, created) = call(
         &app,
@@ -150,7 +149,6 @@ async fn machines_get_expiring_postgres_logins_and_gateway_clients_a_base_url() 
     .await
     .unwrap();
     assert_eq!(who, (role.clone(), true));
-    connection.close().await.unwrap();
     let until: (Option<chrono::DateTime<chrono::Utc>>,) =
         sqlx::query_as("SELECT rolvaliduntil FROM pg_roles WHERE rolname=$1")
             .bind(&role)
@@ -162,10 +160,53 @@ async fn machines_get_expiring_postgres_logins_and_gateway_clients_a_base_url() 
         left > chrono::Duration::seconds(60) && left <= chrono::Duration::seconds(125),
         "{left:?}"
     );
-    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP ROLE \"{role}\"")))
+
+    // Once it expires, the reaper ends its session and drops it.
+    // Other runs may have left expired leases in a shared database; this
+    // login has not expired, so it stays.
+    keylease_server::reap_expired_logins(&state).await;
+    sqlx::query("SELECT 1")
+        .execute(&mut connection)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE managed_dynamic_leases SET expires_at=now() - interval '1 second' WHERE role_name=$1")
+        .bind(&role)
         .execute(repository.pool())
         .await
         .unwrap();
+    let (dropped, _) = keylease_server::reap_expired_logins(&state).await;
+    assert!(dropped >= 1);
+    assert!(
+        sqlx::query("SELECT 1")
+            .execute(&mut connection)
+            .await
+            .is_err(),
+        "the expired login's session was ended"
+    );
+    let gone: Option<(String,)> =
+        sqlx::query_as("SELECT rolname::text FROM pg_roles WHERE rolname=$1")
+            .bind(&role)
+            .fetch_optional(repository.pool())
+            .await
+            .unwrap();
+    assert!(gone.is_none());
+    let (status, leases) = call(
+        &app,
+        "GET",
+        &format!("{base}/dynamic/leases"),
+        &a,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, 200, "{leases:?}");
+    let lease = leases["leases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["username"] == role.as_str())
+        .unwrap();
+    assert!(lease["revoked_at"].is_string());
+    assert_eq!(lease["engine"], "postgres");
 
     // The gateway's base-URL proxy (needs the network for a public API).
     if std::env::var("KEYLEASE_TEST_NETWORK").is_ok() {

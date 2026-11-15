@@ -108,25 +108,40 @@ spec:
 ```
 
 
-## Dynamic PostgreSQL logins
+## Dynamic database logins (PostgreSQL, MySQL)
 
 Instead of a standing database password, a project admin stores an admin URL
-as a Managed secret (e.g. `PG_ADMIN` in each environment) and configures
+as a Managed secret (e.g. `PG_ADMIN` or `MYSQL_ADMIN` in each environment) and
+configures a broker for the engine, `postgres` or `mysql`:
 
 ```sh
 PUT /v1/orgs/ORG/projects/shop/dynamic/postgres/main
 {"admin_secret": "PG_ADMIN", "grant_role": "app_migrations", "max_ttl_seconds": 3600}
+
+PUT /v1/orgs/ORG/projects/shop/dynamic/mysql/reports
+{"admin_secret": "MYSQL_ADMIN", "grant_role": "app_readers", "max_ttl_seconds": 3600}
 ```
 
-A job with a machine token (or access key) then gets its own login that joins
-`app_migrations` and expires (`VALID UNTIL`):
+A job with a machine token (or access key) then gets its own login that has
+the granted role and expires:
 
 ```sh
 curl -X POST -H "Authorization: Bearer $KEYLEASE_MACHINE_TOKEN" \
   -d '{"ttl_seconds": 900}' https://vault.example.com/api/v1/machine/dynamic/postgres/main
-# {"username": "kl_…", "password": "…", "url": "postgres://kl_…@db/app", "expires_at": …}
+# {"engine": "postgres", "username": "kl_…", "password": "…", "url": "postgres://kl_…@db/app", "expires_at": …}
 ```
 
-The role must exist and the admin URL's user must be able to create roles in
-it (`CREATEROLE`). Expired logins can no longer sign in; dropping them is left
-to a periodic `DROP ROLE` of `kl_%` roles past `rolvaliduntil`.
+The role must exist.
+- **PostgreSQL:** the admin URL's user needs `CREATEROLE` and membership in the
+  role with `ADMIN OPTION`. The login carries `VALID UNTIL`.
+- **MySQL 8 (MariaDB 10.5+):** the admin user needs `CREATE USER`, the role
+  with `WITH ADMIN OPTION`, and `CONNECTION_ADMIN` (or `SUPER`) to end
+  sessions. The login gets the role as its default role.
+
+keylease-server drops expired logins every minute. It first stops new sign-ins
+(`NOLOGIN` / `ACCOUNT LOCK`), then ends the login's open sessions, and then
+drops it. On PostgreSQL, objects the login created are reassigned to the
+granted role first. `GET /v1/orgs/ORG/projects/shop/dynamic/leases` (project
+admins) lists the logins handed out, when they were dropped, and why a drop
+failed. After ten failed attempts the reaper leaves a login alone; drop it by
+hand.
