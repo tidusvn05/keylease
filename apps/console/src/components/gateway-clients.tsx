@@ -35,7 +35,12 @@ export function GatewayClients({
       .map(([project, environment]) => ({ project: project ?? "", environment: environment ?? "" }));
     const { data: client } = await api.POST("/v1/orgs/{org}/gateway/clients", {
       params: { path: { org } },
-      body: { name: String(data.get("name")), allow_writes: data.get("allow_writes") === "on", grants },
+      body: {
+        name: String(data.get("name")),
+        allow_writes: data.get("allow_writes") === "on",
+        approval: String(data.get("approval") ?? "none") as "none" | "writes" | "all",
+        grants,
+      },
     });
     if (client) {
       setCreated({ token: client.token, url: client.url });
@@ -61,6 +66,9 @@ export function GatewayClients({
             <span className="text-muted-foreground">
               {client.grants.map((grant) => `${grant.project}/${grant.environment}`).join(", ")}
             </span>
+            {client.approval !== "none" && (
+              <span className="text-muted-foreground text-xs">{t(`orgs.approvalModes.${client.approval}`)}</span>
+            )}
             <Button size="sm" variant="ghost" onClick={() => void revoke(client.client_id)}>
               {t("orgs.remove")}
             </Button>
@@ -87,6 +95,14 @@ export function GatewayClients({
           <label className="flex items-center gap-1">
             <input type="checkbox" name="allow_writes" />
             {t("orgs.allowWrites")}
+          </label>
+          <label className="flex items-center gap-2">
+            {t("orgs.approval")}
+            <select name="approval" className={input} defaultValue="none">
+              <option value="none">{t("orgs.approvalModes.none")}</option>
+              <option value="writes">{t("orgs.approvalModes.writes")}</option>
+              <option value="all">{t("orgs.approvalModes.all")}</option>
+            </select>
           </label>
           <Button type="submit" size="sm">
             {t("orgs.createClient")}

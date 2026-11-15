@@ -7,6 +7,7 @@
 
 use crate::api::{ApiError, ApiResult, CloudApiState};
 use crate::console::{require_csrf, session};
+use crate::gateway_approvals::ApprovalMode;
 use crate::managed::{audit_event, authorize, current, decrypt};
 use crate::relay::{denied, invalid, parse, storage};
 use crate::teams::{ProjectRole, org_role};
@@ -228,6 +229,10 @@ struct CreateClient {
     name: String,
     #[serde(default)]
     allow_writes: bool,
+    /// `none` (default), `writes` or `all`: which calls need a project
+    /// admin's approval.
+    #[serde(default)]
+    approval: Option<String>,
     grants: Vec<Grant>,
 }
 
@@ -259,19 +264,26 @@ async fn create_client(
     {
         return Err(invalid("a client needs a name and 1-50 grants"));
     }
+    let approval = match request.approval.as_deref() {
+        None => ApprovalMode::None,
+        Some(value) => {
+            ApprovalMode::parse(value).ok_or_else(|| invalid("approval is none, writes or all"))?
+        }
+    };
     let mut bytes = [0_u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     let token = format!("klgw_{}", URL_SAFE_NO_PAD.encode(bytes));
     let client = format!("gwc_{}", uuid::Uuid::now_v7().simple());
     let mut tx = state.repository.pool().begin().await.map_err(storage)?;
     sqlx::query(
-        "INSERT INTO gateway_clients(client_id,org_id,name,token_hash,allow_writes,created_by,created_at) VALUES($1,$2,$3,$4,$5,$6,now())",
+        "INSERT INTO gateway_clients(client_id,org_id,name,token_hash,allow_writes,approval,created_by,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,now())",
     )
     .bind(&client)
     .bind(&org)
     .bind(request.name.trim())
     .bind(sha256_hex(token.as_bytes()))
     .bind(request.allow_writes)
+    .bind(approval.name())
     .bind(&account)
     .execute(&mut *tx)
     .await
@@ -303,7 +315,7 @@ async fn list_clients(
 ) -> ApiResult<Json<Value>> {
     require_org_manager(&state, &headers, &org).await?;
     let clients = sqlx::query(
-        "SELECT client_id,name,allow_writes,created_at FROM gateway_clients WHERE org_id=$1 AND revoked_at IS NULL ORDER BY created_at",
+        "SELECT client_id,name,allow_writes,approval,created_at FROM gateway_clients WHERE org_id=$1 AND revoked_at IS NULL ORDER BY created_at",
     )
     .bind(&org)
     .fetch_all(state.repository.pool())
@@ -322,6 +334,7 @@ async fn list_clients(
                 "client_id": id,
                 "name": row.get::<String, _>("name"),
                 "allow_writes": row.get::<bool, _>("allow_writes"),
+                "approval": row.get::<String, _>("approval"),
                 "created_at": row.get::<DateTime<Utc>, _>("created_at"),
                 "grants": grants.iter().filter(|grant| grant.get::<String, _>("client_id") == id)
                     .map(|grant| json!({"project": grant.get::<String, _>("slug"), "environment": grant.get::<String, _>("environment")}))
@@ -352,6 +365,7 @@ async fn revoke_client(
 struct Client {
     id: String,
     allow_writes: bool,
+    approval: ApprovalMode,
 }
 
 async fn client(state: &CloudApiState, org: &str, headers: &HeaderMap) -> ApiResult<Client> {
@@ -361,7 +375,7 @@ async fn client(state: &CloudApiState, org: &str, headers: &HeaderMap) -> ApiRes
         .and_then(|value| value.strip_prefix("Bearer "))
         .ok_or_else(|| denied("a gateway token is required"))?;
     let row = sqlx::query(
-        "SELECT client_id,allow_writes FROM gateway_clients WHERE token_hash=$1 AND org_id=$2 AND revoked_at IS NULL",
+        "SELECT client_id,allow_writes,approval FROM gateway_clients WHERE token_hash=$1 AND org_id=$2 AND revoked_at IS NULL",
     )
     .bind(sha256_hex(token.trim().as_bytes()))
     .bind(org)
@@ -372,6 +386,8 @@ async fn client(state: &CloudApiState, org: &str, headers: &HeaderMap) -> ApiRes
     Ok(Client {
         id: row.get("client_id"),
         allow_writes: row.get("allow_writes"),
+        approval: ApprovalMode::parse(row.get::<String, _>("approval").as_str())
+            .unwrap_or(ApprovalMode::All),
     })
 }
 
@@ -475,6 +491,9 @@ fn explain(error: &KeyLeaseError) -> String {
             reason.clone()
         }
         KeyLeaseError::NotFound { resource } => format!("{resource} not found"),
+        KeyLeaseError::ApprovalRequired { approval_id } => format!(
+            "approval required ({approval_id}): a project admin approves this exact call in the KeyLease Console (Approvals → Gateway). Make the same call again once it is approved; an approval is valid for 15 minutes and one call."
+        ),
         KeyLeaseError::ConnectorUnavailable { .. } => "the API could not be reached".into(),
         _ => "internal error".into(),
     }
@@ -648,6 +667,22 @@ async fn forward(
         .await
         .map_err(storage)?
         .ok_or_else(|| ApiError(KeyLeaseError::NotFound { resource: format!("binding {binding_name}") }))?;
+    crate::gateway_approvals::gate(
+        state,
+        org,
+        caller.approval,
+        safe,
+        crate::gateway_approvals::Call {
+            client_id: &caller.id,
+            project: &project,
+            environment: &environment,
+            binding: &binding_name,
+            method: method.as_str(),
+            path: &path,
+            body: body.as_deref(),
+        },
+    )
+    .await?;
     let secret_name: String = binding.get("secret_name");
     let secret_row = current(state, org, &project, &environment)
         .await?
@@ -933,6 +968,15 @@ async fn http_proxy(
             }
             response
         }
+        Err(ApiError(KeyLeaseError::ApprovalRequired { approval_id })) => (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "approval_required",
+                "approval_id": approval_id,
+                "reason": "a project admin approves this exact request in the KeyLease Console; send it again once approved",
+            })),
+        )
+            .into_response(),
         Err(error) => error.into_response(),
     }
 }

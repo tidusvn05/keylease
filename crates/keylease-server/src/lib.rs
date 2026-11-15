@@ -10,6 +10,7 @@ mod enterprise;
 mod enterprise_api;
 mod enterprise_v2;
 mod gateway;
+mod gateway_approvals;
 mod machine;
 mod managed;
 mod oidc;

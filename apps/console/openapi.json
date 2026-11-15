@@ -1772,7 +1772,8 @@
                           "client_id",
                           "name",
                           "allow_writes",
-                          "grants"
+                          "grants",
+                          "approval"
                         ],
                         "properties": {
                           "client_id": {
@@ -1801,6 +1802,14 @@
                                 }
                               }
                             }
+                          },
+                          "approval": {
+                            "type": "string",
+                            "enum": [
+                              "none",
+                              "writes",
+                              "all"
+                            ]
                           }
                         }
                       }
@@ -1858,6 +1867,14 @@
                         }
                       }
                     }
+                  },
+                  "approval": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "writes",
+                      "all"
+                    ]
                   }
                 }
               }
@@ -2221,6 +2238,107 @@
                   "properties": {
                     "removed": {
                       "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orgs/{org}/gateway/approvals": {
+      "get": {
+        "operationId": "gatewayApprovals",
+        "summary": "Gateway calls waiting for (or decided by) a project admin",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "approvals"
+                  ],
+                  "properties": {
+                    "approvals": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/GatewayApproval"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orgs/{org}/gateway/approvals/{approval}": {
+      "post": {
+        "operationId": "decideGatewayApproval",
+        "summary": "Approve or deny one gateway call",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "approval",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "approve"
+                ],
+                "properties": {
+                  "approve": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "approval_id": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
                     }
                   }
                 }
@@ -3049,6 +3167,86 @@
             }
           },
           "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "GatewayApproval": {
+        "type": "object",
+        "required": [
+          "approval_id",
+          "client_id",
+          "client",
+          "project",
+          "environment",
+          "binding",
+          "method",
+          "path",
+          "body_bytes",
+          "state",
+          "created_at",
+          "expires_at"
+        ],
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "client_id": {
+            "type": "string"
+          },
+          "client": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "binding": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "body_bytes": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "denied",
+              "consumed",
+              "expired"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "decided_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decided_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "consumed_at": {
             "type": [
               "string",
               "null"

@@ -720,6 +720,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/orgs/{org}/gateway/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Gateway calls waiting for (or decided by) a project admin */
+        get: operations["gatewayApprovals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/orgs/{org}/gateway/approvals/{approval}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve or deny one gateway call */
+        post: operations["decideGatewayApproval"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -914,6 +948,24 @@ export interface components {
         NodeAuditPage: {
             events: components["schemas"]["NodeAuditEvent"][];
             next: string | null;
+        };
+        GatewayApproval: {
+            approval_id: string;
+            client_id: string;
+            client: string;
+            project: string;
+            environment: string;
+            binding: string;
+            method: string;
+            path: string;
+            body_bytes: number;
+            /** @enum {string} */
+            state: "pending" | "approved" | "denied" | "consumed" | "expired";
+            created_at: string;
+            expires_at: string;
+            decided_by?: string | null;
+            decided_at?: string | null;
+            consumed_at?: string | null;
         };
     };
     responses: never;
@@ -1992,6 +2044,8 @@ export interface operations {
                                 project: string;
                                 environment: string;
                             }[];
+                            /** @enum {string} */
+                            approval: "none" | "writes" | "all";
                         }[];
                     };
                 };
@@ -2016,6 +2070,8 @@ export interface operations {
                         project: string;
                         environment: string;
                     }[];
+                    /** @enum {string} */
+                    approval?: "none" | "writes" | "all";
                 };
             };
         };
@@ -2243,6 +2299,62 @@ export interface operations {
                 content: {
                     "application/json": {
                         removed?: number;
+                    };
+                };
+            };
+        };
+    };
+    gatewayApprovals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        approvals: components["schemas"]["GatewayApproval"][];
+                    };
+                };
+            };
+        };
+    };
+    decideGatewayApproval: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                approval: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    approve: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        approval_id?: string;
+                        state?: string;
                     };
                 };
             };

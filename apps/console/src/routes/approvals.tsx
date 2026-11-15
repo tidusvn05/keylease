@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { GatewayApprovals } from "@/components/gateway-approvals";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -48,6 +49,7 @@ function Approvals() {
         </div>
         <NotifyToggle />
       </div>
+      <GatewayApprovals />
       {data !== undefined && nodes.length === 0 && (
         <Card>
           <CardHeader>
