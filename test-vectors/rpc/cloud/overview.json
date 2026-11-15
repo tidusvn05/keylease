@@ -1,0 +1,25 @@
+{
+  "linked": true,
+  "url": "https://keys.example.com",
+  "role": "owner",
+  "name": "owner",
+  "fingerprint": "ab12-cd34",
+  "last_sync_at": "2026-11-15T08:30:00.123456Z",
+  "nodes": 2,
+  "active_shares": 3,
+  "pending_requests": 1,
+  "console_approvals": {
+    "enabled": true,
+    "origin": "https://keys.example.com",
+    "passkeys": ["MacBook Touch ID"],
+    "share_audit": true,
+    "enabled_at": "2026-11-15T08:00:00Z"
+  },
+  "org": {
+    "org_id": "org_1",
+    "org_name": "Acme",
+    "key_id": "k1",
+    "joined_at": "2026-11-15T07:00:00Z",
+    "policy_version": null
+  }
+}

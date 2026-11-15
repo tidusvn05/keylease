@@ -359,6 +359,32 @@ pub enum RpcRequest {
         #[serde(default)]
         hint: Option<String>,
     },
+    /// The owner's view of the cloud link, console approvals and the
+    /// organization (desktop app, Server page).
+    CloudOverview {
+        auth: RpcAuth,
+    },
+    /// Owner: a one-time link that signs in to the KeyLease Console.
+    CloudConsoleSignIn {
+        auth: RpcAuth,
+    },
+    /// Pin the account's passkeys and let the console decide approvals
+    /// (ADR 0011).
+    ConsoleApprovalsEnable {
+        auth: RpcAuth,
+        share_audit: bool,
+    },
+    ConsoleApprovalsDisable {
+        auth: RpcAuth,
+    },
+    /// Join an organization as a managed node (ADR 0012).
+    OrgJoin {
+        auth: RpcAuth,
+        code: SecretValue,
+    },
+    OrgLeave {
+        auth: RpcAuth,
+    },
     AgentEnroll {
         auth: RpcAuth,
         name: String,
@@ -988,6 +1014,38 @@ pub async fn handle_rpc(
                 hint.as_deref(),
             )?)
             .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::CloudOverview { auth } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.cloud_overview_authorized(&actor)?)
+                .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::CloudConsoleSignIn { auth } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.cloud_console_sign_in_authorized(&actor).await?)
+                .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::ConsoleApprovalsEnable { auth, share_audit } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(
+                service
+                    .console_approvals_enable_authorized(&actor, share_audit)
+                    .await?,
+            )
+            .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::ConsoleApprovalsDisable { auth } => {
+            let actor = actor(service, &auth)?;
+            Ok(json!({"disabled": service.console_approvals_disable_authorized(&actor)?}))
+        }
+        RpcRequest::OrgJoin { auth, code } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.org_join_authorized(&actor, &code.0).await?)
+                .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::OrgLeave { auth } => {
+            let actor = actor(service, &auth)?;
+            Ok(json!({"left": service.org_leave_authorized(&actor)?}))
         }
         RpcRequest::EntriesInject {
             auth,

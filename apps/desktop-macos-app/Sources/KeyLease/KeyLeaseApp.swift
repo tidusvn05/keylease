@@ -39,6 +39,9 @@ struct KeyLeaseApp: App {
                 Button("Remote Vaults") { app.section = .remoteVaults }
                     .keyboardShortcut("6", modifiers: .command)
                     .disabled(app.phase != .ready)
+                Button("Server") { app.section = .server }
+                    .keyboardShortcut("7", modifiers: .command)
+                    .disabled(app.phase != .ready)
             }
             CommandMenu("Vault") {
                 // Dart shortcuts.dart: meta-F search, meta-N new item,

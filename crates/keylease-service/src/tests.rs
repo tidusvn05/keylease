@@ -1343,6 +1343,47 @@ fn desktop_owner_authority_is_rebuilt_after_every_unlock() {
 }
 
 #[test]
+fn only_the_desktop_owner_manages_the_cloud_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(NativeStore::open(dir.path().join("vault.sqlite")).unwrap());
+    let service = KeyLeaseService::new(store).unwrap();
+    service.initialize(b"password", Duration::hours(1)).unwrap();
+    let (owner, owner_token) = service.register_desktop_client().unwrap();
+    service.lock().unwrap();
+    service
+        .unlock_for_client(&owner, b"password", Duration::hours(1))
+        .unwrap();
+    let owner = service
+        .authenticate(&owner, &owner_token, "desktop-session")
+        .unwrap();
+    let (agent, agent_token) = service.register_client("agent").unwrap();
+    let agent = service
+        .authenticate(&agent, &agent_token, "agent-session")
+        .unwrap();
+
+    let overview = service.cloud_overview_authorized(&owner).unwrap();
+    assert!(!overview.linked);
+    assert!(!overview.console_approvals.enabled);
+    assert!(overview.org.is_none());
+    assert!(!service.org_leave_authorized(&owner).unwrap());
+    assert!(
+        !service
+            .console_approvals_disable_authorized(&owner)
+            .unwrap()
+    );
+
+    assert!(matches!(
+        service.cloud_overview_authorized(&agent),
+        Err(KeyLeaseError::Denied { .. })
+    ));
+    assert!(matches!(
+        service.org_leave_authorized(&agent),
+        Err(KeyLeaseError::Denied { .. })
+    ));
+    assert!(service.list_pending_approvals_admin(10).unwrap().is_empty());
+}
+
+#[test]
 fn wrong_master_password_is_reported_as_rejected_not_crypto() {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(NativeStore::open(dir.path().join("vault.sqlite")).unwrap());

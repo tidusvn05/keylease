@@ -24,7 +24,9 @@ keylease cloud console
 # {"url": "https://vault.example.com/console/#login=…", "expires_at": …}
 ```
 
-Open the URL once within 15 minutes. Then add a passkey in the console
+Open the URL once within 15 minutes. On a Mac, the KeyLease app does the
+same from **Server → Open KeyLease Console** and opens the browser for you.
+Then add a passkey in the console
 (Settings → Passkeys) to sign in later without the device. Sessions last 12
 hours; sign out ends the current one.
 
@@ -48,6 +50,9 @@ keylease cloud console-approvals enable     # pins the account's passkeys
 keylease cloud console-approvals status
 keylease cloud console-approvals disable
 ```
+
+On a Mac, **Server → Approve from the KeyLease Console** in the KeyLease app
+does the same without the master password (the app is already unlocked).
 
 `keylease serve` then reports its pending approvals every few seconds.
 **Approvals** lists them per node with the agent, action, resource and the

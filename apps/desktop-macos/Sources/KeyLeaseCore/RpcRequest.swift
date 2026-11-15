@@ -122,6 +122,16 @@ public enum RpcRequest: Encodable, Sendable {
     case trustRevoke(id: String)
     /// A node agent asks the cloud owner for an item (ADR 0006).
     case cloudRequest(purpose: String, hint: String?)
+    /// The owner's Server page: link, console approvals, organization.
+    case cloudOverview
+    /// Owner: a one-time KeyLease Console sign-in link.
+    case cloudConsoleSignIn
+    /// Pin the account's passkeys so the console decides approvals (ADR 0011).
+    case consoleApprovalsEnable(shareAudit: Bool)
+    case consoleApprovalsDisable
+    /// Join an organization as a managed node (ADR 0012).
+    case orgJoin(code: SecretValue)
+    case orgLeave
     case agentEnroll(name: String)
     case sshIdentities
     case entriesInject(program: String, fields: [InjectField])
@@ -216,6 +226,12 @@ public enum RpcRequest: Encodable, Sendable {
         case .sshSign: "ssh_sign"
         case .sshIssueCert: "ssh_issue_cert"
         case .cloudRequest: "cloud_request"
+        case .cloudOverview: "cloud_overview"
+        case .cloudConsoleSignIn: "cloud_console_sign_in"
+        case .consoleApprovalsEnable: "console_approvals_enable"
+        case .consoleApprovalsDisable: "console_approvals_disable"
+        case .orgJoin: "org_join"
+        case .orgLeave: "org_leave"
         case .auditQuery: "audit_query"
         case .leaseRequest: "lease_request"
         case .gateExecute: "gate_execute"
@@ -242,7 +258,8 @@ public enum RpcRequest: Encodable, Sendable {
         switch self {
         case .status, .groupsList, .templatesList, .migrationsStatus,
             .projectsList, .connectionsList, .trustsList, .sshIdentities,
-            .lock:
+            .lock, .cloudOverview, .cloudConsoleSignIn,
+            .consoleApprovalsDisable, .orgLeave:
             break
         case .unlock(let password, let sessionTtlSeconds):
             try c.encode(password, forKey: key("password"))
@@ -403,6 +420,10 @@ public enum RpcRequest: Encodable, Sendable {
         case .httpBindingSet(let id, let binding):
             try c.encode(id, forKey: key("id"))
             try c.encode(binding, forKey: key("binding"))
+        case .consoleApprovalsEnable(let shareAudit):
+            try c.encode(shareAudit, forKey: key("share_audit"))
+        case .orgJoin(let code):
+            try c.encode(code, forKey: key("code"))
         case .entriesInject(let program, let fields):
             try c.encode(program, forKey: key("program"))
             try c.encode(fields, forKey: key("fields"))

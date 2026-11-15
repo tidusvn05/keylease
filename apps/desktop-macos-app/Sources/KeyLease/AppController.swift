@@ -130,6 +130,7 @@ final class AppController {
     let connections = ConnectionsController()
     let approvals = ApprovalsController()
     let trusts = TrustsController()
+    let server = ServerController()
     let remotes = RemoteVaultsController()
     let activity = ActivityController()
     let notifier = ApprovalNotifier()
@@ -225,6 +226,7 @@ final class AppController {
             connections.list.clear()
             approvals.list.clear()
             trusts.clear()
+            server.clear()
             activity.list.clear()
             enter(
                 .locked,
@@ -259,6 +261,7 @@ final class AppController {
         connections.use(monitoredClient)
         approvals.use(monitoredClient)
         trusts.use(monitoredClient)
+        server.use(monitoredClient)
         activity.use(monitoredClient)
         await vault.load(using: monitoredClient)
         localPendingApprovals = next.pendingApprovals ?? 0

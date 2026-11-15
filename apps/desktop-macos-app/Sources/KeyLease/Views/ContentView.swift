@@ -9,6 +9,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     case approvals = "Approvals"
     case agents = "Agents"
     case remoteVaults = "Remote Vaults"
+    case server = "Server"
     case activity = "Activity"
     case connections = "Connections"
 
@@ -20,6 +21,7 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .approvals: "checkmark.shield"
         case .agents: "person.badge.key"
         case .remoteVaults: "server.rack"
+        case .server: "cloud"
         case .activity: "clock.arrow.circlepath"
         case .connections: "link"
         }
@@ -82,6 +84,8 @@ struct ContentView: View {
             Task { await app.trusts.list.load() }
         case .remoteVaults:
             Task { await app.remotes.refreshAll() }
+        case .server:
+            Task { await app.server.load() }
         case .activity:
             Task { await app.activity.list.load() }
         case .connections:
@@ -99,6 +103,8 @@ struct ContentView: View {
             AgentsView(app: app)
         case .remoteVaults:
             RemoteVaultsView(app: app)
+        case .server:
+            ServerView(app: app)
         case .activity:
             ActivityView(app: app)
         case .connections:

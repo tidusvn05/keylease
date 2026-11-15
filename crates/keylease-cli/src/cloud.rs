@@ -3,9 +3,8 @@
 
 use super::*;
 use keylease_core::relay::{
-    FetchRecoveryKit, HEADER_MEMBER, HEADER_SIGNATURE, HEADER_TIMESTAMP, RecoveryKitResponse,
-    RelayAccountCreated, RelayAck, RelayBackupList, RelayInbox, RelayInvite, RelayJoined,
-    RelayMember,
+    FetchRecoveryKit, RecoveryKitResponse, RelayAccountCreated, RelayAck, RelayBackupList,
+    RelayInbox, RelayInvite, RelayJoined, RelayMember,
 };
 use keylease_service::{CloudRole, ShareScope};
 use reqwest::Method;
@@ -146,93 +145,7 @@ pub(crate) fn parse_ttl(value: &str) -> Result<Duration> {
     }
 }
 
-/// Carries relay requests; signed ones are signed by the service.
-pub(crate) struct Relay<'a> {
-    service: &'a KeyLeaseService,
-    base: String,
-    http: reqwest::Client,
-}
-
-fn relay_error(context: &str, status: reqwest::StatusCode, body: &str) -> KeyLeaseError {
-    let detail: String = body.chars().take(200).collect();
-    match status.as_u16() {
-        401 | 403 => KeyLeaseError::Denied {
-            reason: format!("{context}: the cloud refused ({status}) {detail}"),
-        },
-        404 => KeyLeaseError::NotFound {
-            resource: format!("{context} ({detail})"),
-        },
-        _ => KeyLeaseError::ConnectorUnavailable { retryable: true },
-    }
-}
-
-impl<'a> Relay<'a> {
-    pub(crate) fn new(service: &'a KeyLeaseService, url: &str) -> Result<Self> {
-        Ok(Self {
-            service,
-            base: url.trim_end_matches('/').to_owned(),
-            http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .user_agent(concat!("keylease/", env!("CARGO_PKG_VERSION")))
-                .build()
-                .map_err(|_| KeyLeaseError::Storage)?,
-        })
-    }
-
-    pub(crate) async fn send<T: serde::de::DeserializeOwned>(
-        &self,
-        method: Method,
-        path: &str,
-        body: Option<Vec<u8>>,
-        signed: bool,
-        bearer: Option<&str>,
-    ) -> Result<T> {
-        let mut request = self
-            .http
-            .request(method.clone(), format!("{}{path}", self.base));
-        let bytes = body.unwrap_or_default();
-        if signed {
-            let signature = self
-                .service
-                .cloud_sign_request(method.as_str(), path, &bytes)?;
-            request = request
-                .header(HEADER_MEMBER, signature.member_id)
-                .header(HEADER_TIMESTAMP, signature.timestamp.to_string())
-                .header(HEADER_SIGNATURE, signature.signature_b64);
-        }
-        if let Some(token) = bearer {
-            request = request.bearer_auth(token);
-        }
-        if !bytes.is_empty() {
-            request = request
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(bytes);
-        }
-        let response = request
-            .send()
-            .await
-            .map_err(|_| KeyLeaseError::ConnectorUnavailable { retryable: true })?;
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(relay_error(path, status, &text));
-        }
-        serde_json::from_str(&text).map_err(|_| KeyLeaseError::InvalidRequest {
-            reason: format!("{path}: unexpected cloud response"),
-        })
-    }
-
-    pub(crate) async fn post<B: Serialize, T: serde::de::DeserializeOwned>(
-        &self,
-        path: &str,
-        body: &B,
-        signed: bool,
-    ) -> Result<T> {
-        let bytes = serde_json::to_vec(body).map_err(|_| KeyLeaseError::Storage)?;
-        self.send(Method::POST, path, Some(bytes), signed, None)
-            .await
-    }
-}
+pub(crate) use keylease_service::CloudRelay as Relay;
 
 /// One sync round. Quiet when the vault is unlinked or locked.
 pub(crate) async fn sync_once(service: &KeyLeaseService) -> Result<Value> {
@@ -366,12 +279,7 @@ pub(crate) fn spawn_sync_loop(service: Arc<KeyLeaseService>) {
 }
 
 fn require_link(service: &KeyLeaseService) -> Result<keylease_service::CloudLink> {
-    service
-        .cloud_link()?
-        .filter(|link| !link.member_id.is_empty())
-        .ok_or_else(|| KeyLeaseError::InvalidRequest {
-            reason: "this vault is not linked to a cloud (keylease cloud init / join)".into(),
-        })
+    service.cloud_require_link()
 }
 
 pub(crate) async fn cloud_command(cli: &Cli, socket: &Path, command: CloudCommand) -> Result<()> {
@@ -425,37 +333,10 @@ pub(crate) async fn cloud_command(cli: &Cli, socket: &Path, command: CloudComman
             Ok(())
         }
         CloudCommand::Console { console_url } => {
-            let link = require_link(&service)?;
-            if link.role != CloudRole::Owner {
-                return Err(KeyLeaseError::InvalidRequest {
-                    reason: "only the owner device signs in to the console".into(),
-                });
-            }
-            let mut bytes = [0_u8; 32];
-            rand::RngCore::fill_bytes(&mut rand::rng(), &mut bytes);
-            let token =
-                base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes);
-            let lookup_hash: String = {
-                use sha2::Digest;
-                sha2::Sha256::digest(token.as_bytes())
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect()
-            };
-            let expires_at = chrono::Utc::now() + chrono::Duration::minutes(15);
-            let relay = Relay::new(&service, &link.url)?;
-            relay
-                .post::<_, Value>(
-                    "/v1/relay/console-links",
-                    &json!({"lookup_hash": lookup_hash, "expires_at": expires_at}),
-                    true,
-                )
-                .await?;
-            let base = console_url
-                .unwrap_or_else(|| format!("{}/console/", link.url.trim_end_matches('/')));
+            let link = service.cloud_console_sign_in(console_url).await?;
             print_json(&json!({
-                "url": format!("{}#login={token}", base),
-                "expires_at": expires_at,
+                "url": link.url,
+                "expires_at": link.expires_at,
                 "note": "Open it once in your browser; it signs you in and stops working.",
             }))
         }

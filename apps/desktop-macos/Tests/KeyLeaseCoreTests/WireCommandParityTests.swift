@@ -129,6 +129,12 @@ final class WireCommandParityTests: XCTestCase {
                 ttlSeconds: nil
             ),
             .cloudRequest(purpose: "deploy", hint: nil),
+            .cloudOverview,
+            .cloudConsoleSignIn,
+            .consoleApprovalsEnable(shareAudit: true),
+            .consoleApprovalsDisable,
+            .orgJoin(code: SecretValue("klnode_x")),
+            .orgLeave,
             .auditQuery(limit: 50),
             .leaseRequest(
                 request: ActionRequest(
@@ -202,6 +208,24 @@ final class WireCommandParityTests: XCTestCase {
                     trust: TrustDecision(scope: .item, duration: .hour1))))
         XCTAssertEqual(trusted["trust"]?["scope"], .string("item"))
         XCTAssertEqual(trusted["trust"]?["duration"], .string("1h"))
+    }
+
+    func testCloudRequestsCarryTheirFields() throws {
+        let enable = try JSONDecoder().decode(
+            JSONValue.self,
+            from: JSONEncoder().encode(
+                RpcRequest.consoleApprovalsEnable(shareAudit: false)))
+        XCTAssertEqual(enable["command"], .string("console_approvals_enable"))
+        XCTAssertEqual(enable["share_audit"], .bool(false))
+        let join = try JSONDecoder().decode(
+            JSONValue.self,
+            from: JSONEncoder().encode(
+                RpcRequest.orgJoin(code: SecretValue("klnode_abc"))))
+        XCTAssertEqual(join["code"], .string("klnode_abc"))
+        let overview = try JSONDecoder().decode(
+            JSONValue.self,
+            from: JSONEncoder().encode(RpcRequest.cloudOverview))
+        XCTAssertEqual(overview, .object(["command": .string("cloud_overview")]))
     }
 
     func testTrustCeilingsFollowRiskTiers() {
