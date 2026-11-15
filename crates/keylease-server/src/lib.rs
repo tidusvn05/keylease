@@ -1,6 +1,7 @@
 //! KeyLease Cloud modular control plane.
 
 mod api;
+mod audit_push;
 mod console;
 mod console_approvals;
 mod console_assets;
@@ -22,6 +23,7 @@ mod teams;
 mod web_push;
 
 pub use api::{CloudApiConfig, CloudApiState, router};
+pub use audit_push::{push_audit_once, spawn_audit_push};
 pub use console_sso::ConsoleOidc;
 pub use dynamic::{reap_expired_logins, spawn_reaper};
 pub use enterprise::{AuditExportBatch, ScimTokenSecret};

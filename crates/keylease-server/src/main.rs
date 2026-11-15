@@ -96,6 +96,7 @@ async fn main() -> Result<()> {
         .context("bind cloud listener")?;
     info!(%listen, "KeyLease Cloud listening");
     keylease_server::spawn_reaper(state.clone());
+    keylease_server::spawn_audit_push(state.clone());
     axum::serve(listener, router(state))
         .await
         .context("serve cloud API")

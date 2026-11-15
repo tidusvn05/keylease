@@ -27,7 +27,6 @@ use base64::{
     Engine,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
-use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signer, SigningKey, Verifier};
 use hmac::{Hmac, Mac};
 use keylease_core::KeyLeaseError;
@@ -431,32 +430,20 @@ async fn export_audit(
     .await
     .map_err(storage)?;
     let syslog = query.format.as_deref() == Some("syslog");
+    let format = if syslog {
+        crate::audit_push::Format::Syslog
+    } else {
+        crate::audit_push::Format::JsonLines
+    };
     let mut out = String::new();
     let mut last = query.after.unwrap_or(0);
     for row in &rows {
-        let id: i64 = row.get("id");
-        last = id;
-        let event = json!({
-            "id": id,
-            "org": org,
-            "project": row.get::<String, _>("slug"),
-            "environment": row.get::<Option<String>, _>("environment"),
-            "name": row.get::<Option<String>, _>("name"),
-            "action": row.get::<String, _>("action"),
-            "actor": row.get::<String, _>("account_id"),
-            "at": row.get::<DateTime<Utc>, _>("at"),
-        });
-        if syslog {
-            // <110> = facility 13 (log audit), severity 6 (informational).
-            out.push_str(&format!(
-                "<110>1 {} keylease-server keylease - audit - {}\n",
-                row.get::<DateTime<Utc>, _>("at").to_rfc3339(),
-                event
-            ));
-        } else {
-            out.push_str(&event.to_string());
-            out.push('\n');
-        }
+        last = row.get("id");
+        out.push_str(&crate::audit_push::audit_line(
+            format,
+            &crate::audit_push::audit_event_json(&org, row),
+            row.get("at"),
+        ));
     }
     let mut response = out.into_response();
     response.headers_mut().insert(

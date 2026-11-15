@@ -3,6 +3,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
+import { AuditDestinations } from "@/components/audit-destinations";
 import { GatewayClients } from "@/components/gateway-clients";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -230,6 +231,7 @@ function OrgPage() {
           )}
         />
       )}
+      {manager && <AuditDestinations org={id} />}
     </div>
   );
 }
