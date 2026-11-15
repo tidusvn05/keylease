@@ -239,7 +239,9 @@ and the macOS/provider checks that must happen in their real environments.
 The repository also contains a self-hosted control plane and edge node for
 running agents against SaaS connectors with signed policy bundles: Cloud API
 and worker, the edge node with an MCP endpoint and dynamic credentials,
-and the KeyLease Console (`apps/console`). To run it on one VPS, follow
+and the KeyLease Console (`apps/console`). To try it on one machine with two
+commands and no Docker, see [`docs/server-quick-install.md`](docs/server-quick-install.md);
+for the full Docker stack on a VPS, follow
 [`docs/self-hosted-vps.md`](docs/self-hosted-vps.md).
 
 This work was built in phases from
