@@ -36,6 +36,7 @@ Sources/KeyLease/
 ├── VaultController.swift   # search/view/reveal/totp over KeyLeaseCore
 ├── RuntimeService.swift    # keylease CLI + SMAppService (port of the bridge)
 ├── SecurityService.swift   # pasteboard clear, lock signals, URL allowlist
+├── ServerController.swift # Server page: cloud link, console approvals, organization
 ├── ConnectionDefaults.swift
 └── Views/                  # phase router, unlock, onboarding, vault UI
 ```

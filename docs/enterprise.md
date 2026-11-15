@@ -118,6 +118,9 @@ organization. It then applies the organization's rules, signed by the server
    keylease cloud org status
    ```
 
+   On a Mac, the KeyLease app's **Server → Join an organization…** does the
+   same.
+
 2. **Write the rules.** They are a JSON list, edited on the same page or with
    `PUT /v1/orgs/ORG/node-policy`:
 

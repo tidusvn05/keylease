@@ -39,6 +39,9 @@ pub(crate) fn desktop_owner_rule(agent_id: AgentId, vault_id: &VaultId) -> Polic
             "trust:revoke",
             "client:enroll",
             "audit:query",
+            // The cloud link: console sign-in, console approvals, managed
+            // nodes. Desktop only, like client enrollment.
+            "cloud:manage",
         ]
         .into_iter()
         .map(str::to_owned)

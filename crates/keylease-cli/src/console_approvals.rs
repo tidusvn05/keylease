@@ -6,7 +6,7 @@
 use super::*;
 use crate::cloud::Relay;
 use keylease_core::console::{
-    AccountPasskeys, AuditUpload, DecisionResults, MAX_AUDIT_UPLOAD, NodeReport, NodeReportResponse,
+    AuditUpload, DecisionResults, MAX_AUDIT_UPLOAD, NodeReport, NodeReportResponse,
 };
 use reqwest::Method;
 
@@ -38,18 +38,7 @@ pub(crate) async fn command(
 ) -> Result<()> {
     match command {
         ConsoleApprovalsCommand::Enable { no_audit } => {
-            let link = service
-                .cloud_link()?
-                .filter(|link| !link.member_id.is_empty())
-                .ok_or_else(|| KeyLeaseError::InvalidRequest {
-                    reason: "this vault is not linked to a cloud (keylease cloud init / join)"
-                        .into(),
-                })?;
-            let relay = Relay::new(service, &link.url)?;
-            let passkeys: AccountPasskeys = relay
-                .send(Method::GET, "/v1/relay/console/passkeys", None, true, None)
-                .await?;
-            let config = service.console_approvals_enable(passkeys, !no_audit)?;
+            let config = service.console_approvals_enable_remote(!no_audit).await?;
             println!(
                 "Console approvals are on. Decisions must be signed at {} with one of:",
                 config.origin

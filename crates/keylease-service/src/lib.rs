@@ -37,6 +37,7 @@ mod backup;
 mod bundle;
 pub mod client_key;
 mod cloud;
+mod cloud_remote;
 mod connections;
 mod console_approvals;
 mod db;
@@ -65,6 +66,10 @@ pub use cloud::{
     CloudLink, CloudNode, CloudRole, CloudShare, CloudShareRequest, CloudStatus, InboxOutcome,
     InviteSetup, OwnerSetup, PendingBackup, RelaySignature, RequestStatus, RestoreReport,
     ShareScope,
+};
+pub use cloud_remote::{
+    CloudOverview, CloudRelay, ConsoleApprovalsOverview, ConsoleSignInLink, OrgJoinOutcome,
+    OrgOverview,
 };
 pub use console_approvals::ConsoleApprovalsConfig;
 pub use db::{DbTarget, ScramClientFinal};
