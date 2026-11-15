@@ -45,7 +45,7 @@ and is revoked when the job ends. No crates.io token is stored in GitHub or in t
 Trusted Publishing cannot create a crate, so the first version of each crate is published by
 hand. `scripts/release.py pending` lists the crates not yet on crates.io, checks that their
 names (with `-` and `_` treated alike) are free, and that existing crates are owned by
-`tidusvn05`. The workflow stops before publishing anything while a crate is new.
+`tidusvn05`. The workflow stops at the first crate that is new (see [A new crate](#a-new-crate)).
 
 ### First release (bootstrap, once)
 
@@ -69,19 +69,24 @@ names (with `-` and `_` treated alike) are free, and that existing crates are ow
 
 ### A new crate
 
-When a release adds a crate (or makes one publishable), the `crates` job stops before
-publishing and names it. Publish the crates in order by hand with a token that has
-`publish-new`, `publish-update` and `trusted-publishing`, limited to the new crate's name:
+When a release adds a crate (or makes one publishable), the `crates` job publishes the crates
+before it in order, then stops at the new crate and names it. Its dependencies are then on
+crates.io, so publish it by hand with a token that has `publish-new`, `publish-update` and
+`trusted-publishing`, limited to the new crate's name:
 
 ```sh
 cargo login
-scripts/release.py publish                     # skips what is already published
+scripts/release.py publish --crates <crate>       # only that crate; the others stay with CI
 scripts/release.py trustpub tidusvn05/keylease --crates <crate> --only
 cargo logout
 ```
 
-Then delete the token and re-run the failed job (`gh run rerun <run id> --failed`).
+Then delete the token and re-run the failed job (`gh run rerun <run id> --failed`). It skips
+what is published and carries on; with two new crates it stops again at the second.
 Check the name first: crate names are permanent.
+
+Do not run a plain `scripts/release.py publish` here: the existing crates accept only Trusted
+Publishing (`--only`), so crates.io refuses them with `403 Forbidden`.
 
 ## Steps
 
