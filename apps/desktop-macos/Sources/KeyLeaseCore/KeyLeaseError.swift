@@ -2,9 +2,7 @@ import Foundation
 
 /// Stable error codes emitted by the daemon.
 ///
-/// Mirrors `KeyLeaseErrorCode` in
-/// `packages/leasegate_vault_ui/lib/core/rpc/keylease_client.dart`; the wire
-/// values come from `keylease-core/src/error.rs`. The `__`-prefixed codes are
+/// The wire values come from `keylease-core/src/error.rs`. The `__`-prefixed codes are
 /// client-side only and never appear on the wire.
 public enum KeyLeaseErrorCode: String, Sendable {
     case vaultLocked = "vault_locked"

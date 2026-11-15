@@ -4,13 +4,12 @@ import SwiftUI
 // MARK: - Design tokens (`brand/BRAND.md` + `keylease_tokens.dart`)
 
 /// The single place deciding how KeyLease looks — colors, spacing, radii
-/// and the shared control chrome. Values mirror the Flutter token set so
-/// both apps read as one product.
+/// and the shared control chrome. The Android app uses the same values so
+/// both read as one product.
 enum KL {
     enum Colors {
         /// Gateway Blue — primary actions, focus, the mark. The dark
-        /// variant is the lightened blue the Flutter tokens use for
-        /// readability on Midnight surfaces.
+        /// variant is lightened for readability on Midnight surfaces.
         static let accent = Color(
             light: 0x2F72FF, dark: 0x6AA9F5)
         /// Accent tuned for text/icons on surfaces (>= 4.5:1 contrast).

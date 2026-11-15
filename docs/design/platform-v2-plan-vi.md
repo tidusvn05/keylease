@@ -329,9 +329,9 @@ thời hạn, wire protocol giữa node và server.
 | Hiện tại | v2 |
 |---|---|
 | `apps/desktop-macos(-app)` | giữ: quản lý + approver |
-| `apps/mobile-flutter` + `packages/leasegate_vault_ui` | app mobile (làm sau P2, chắc chắn có): vault, approver, quét QR; công nghệ chốt khi bắt đầu |
-| `apps/mobile-android` (Kotlin/Compose) | cần quyết định: bỏ nếu Flutter là hướng chính |
-| `apps/approval-flutter` (web/mobile cho operator) | gộp: phần duyệt vào app mobile, phần quản trị vào web console |
+| `apps/mobile-android` (Kotlin/Compose) | giữ: app Android native (vault, approver, quét QR) |
+| (mới) app iOS | SwiftUI native, dùng chung `KeyLeaseCore` với app macOS |
+| `apps/mobile-flutter`, `apps/approval-flutter`, `packages/leasegate_vault_ui` | đã xoá (2026-11-15): mobile làm native; phần quản trị đã có ở web console |
 | (mới) Web console | SPA, phục vụ bởi `keylease-server` (nhúng vào binary); stack ở mục 11 |
 
 ### 7.3 Code doanh nghiệp đang có
@@ -398,10 +398,10 @@ cho tới khi PR trước được merge.
 | P5 | #32 MCP Gateway, #33 proxy base-URL phía server + PostgreSQL động, #39 MySQL động + dọn login hết hạn, #40 duyệt từng lần gọi qua gateway, #41 MCP server upstream (OAuth) | |
 | P6 | #34 KMS API, xuất audit (JSONL/syslog), SCIM (thu hồi), #42 đẩy audit sang SIEM, #43 root key qua AWS KMS / Cloud KMS / PKCS#11, #44 managed node (ADR 0012) | |
 
-Chưa làm vì cần môi trường khác: app macOS/mobile (Swift, Kotlin/Flutter không
+Chưa làm vì cần môi trường khác: app macOS/mobile (Swift, Kotlin không
 build được trên máy Linux này), UI app cho các tính năng mới.
 
-App mobile: sau bước 11, khi chốt công nghệ (mục 12). Quyết định mở 3–5 ở mục 9
+App mobile: native (đã chốt, mục 12), người dùng tự viết. Quyết định mở 3–5 ở mục 9
 lấy theo đề xuất (last-writer-wins, migration tự động, console chỉ hiện metadata
 của project Private) trừ khi có thay đổi.
 
@@ -418,11 +418,12 @@ của project Private) trừ khi có thay đổi.
 - **Hai chế độ Private/Managed** (mục 2.2), kèm thiết kế khôi phục khoá (mục 2.4).
 - **Web console là SPA dùng React + TypeScript + Vite + TanStack Router** (mục 11).
   Không dùng TanStack Start vì console không cần server JS.
+- **App mobile làm native** (2026-11-15): SwiftUI cho iOS, Kotlin/Compose cho
+  Android (`apps/mobile-android`), cùng Rust core. Đã xoá các app Flutter.
 
 Còn mở:
 
-1. **App mobile** (mục 12): native + Rust core (khuyến nghị) hay Flutter?
-2. **App Android Kotlin `mobile-android`** và `mobile-flutter`: giữ cái nào khi làm mobile?
+1. ~~App mobile~~ và ~~giữ app Android nào~~: đã chốt native (ở trên).
 3. **Sync Private khi nhiều device cùng sửa**: last-writer-wins theo item có
    lịch sử version (đơn giản, khuyến nghị) hay merge theo field?
 4. **Tương thích ngược**: vault v1 nâng cấp tại chỗ (migration) hay xuất/nhập lại?
@@ -575,5 +576,4 @@ cân nhắc nhưng không chọn.
 - Android: Kotlin + Compose (tiếp tục `apps/mobile-android`).
 - Rust core qua C ABI hiện có (`keylease-mobile`), dữ liệu bí mật truyền dạng
   byte, không qua `String` của JVM (đúng lo ngại trong ADR 0004).
-- Flutter là phương án dự phòng nếu muốn một codebase; khi đó phần extension
-  vẫn viết native.
+- **Đã chốt (2026-11-15):** native. Các app Flutter đã được xoá khỏi repo.

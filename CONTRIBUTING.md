@@ -26,9 +26,10 @@ cargo deny check            # dependency advisories and licenses
 The PostgreSQL tests in `crates/keylease-server` run when
 `KEYLEASE_TEST_DATABASE_URL` points at a disposable database; CI provides one.
 
-The Flutter packages and the Swift apps are checked separately; see the
-Development section of the [README](README.md). CI runs only the Rust checks
-today, so say in the pull request how you tested app changes.
+The Swift apps are built and tested by the `macOS app` workflow on pull
+requests that touch them; see the Development section of the
+[README](README.md). The Android app has no CI yet, so say in the pull request
+how you tested it.
 
 ## Commits and releases
 

@@ -3,8 +3,7 @@ import XCTest
 
 @testable import KeyLeaseCore
 
-/// `EntryDraft` validation and payload parity with the Dart `EntryDraft`
-/// in `packages/leasegate_vault_ui` — the wire objects are compared as
+/// `EntryDraft` validation and wire payloads — the objects are compared as
 /// decoded `JSONValue` so a missing or renamed key fails here first.
 final class EntryDraftTests: XCTestCase {
     private func sampleEntry() -> ItemMetadata {

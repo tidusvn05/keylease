@@ -8,12 +8,10 @@ android {
     compileSdk = 36
 
     // Pinned to the same NDK `cargo ndk` builds libkeylease_mobile.so
-    // against; see the comment in apps/mobile-flutter for why this cannot
-    // float.
+    // against, so the C++ runtime the .so links matches the one packaged.
     ndkVersion = "28.2.13676358"
 
     defaultConfig {
-        // Parallel-installable with the Flutter client (ai.leasegate.vault).
         applicationId = "ai.leasegate.mobile"
         minSdk = 26
         targetSdk = 36
@@ -59,9 +57,8 @@ kotlin {
 }
 
 /**
- * Rebuilds the Rust core before every Android build, for the same reason the
- * Flutter client does: a stale .so silently packaged from jniLibs is the
- * classic cargo-ndk failure. KEYLEASE_ANDROID_FEATURES turns on the JNI
+ * Rebuilds the Rust core before every Android build: a stale .so silently
+ * packaged from jniLibs is the classic cargo-ndk failure. KEYLEASE_ANDROID_FEATURES turns on the JNI
  * exports this app binds; KEYLEASE_SKIP_RUST=1 reuses the staged .so when
  * only Kotlin changed.
  */

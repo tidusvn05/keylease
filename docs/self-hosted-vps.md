@@ -251,7 +251,7 @@ Configure OIDC with an exact issuer, audience and HTTPS JWKS URI through
 token through `identity/scim-tokens`; its plaintext is returned once. The SCIM
 User subset is served at `/v1/scim/{organization}/Users`.
 
-The Flutter project now includes native `ios/` and `android/` targets. Device
+Device
 enrollment requires the bootstrap administrator credential once. Subsequent
 mobile approval uses an Ed25519 device proof, biometric authorization and a
 five-minute operator session. When OIDC is enabled, supply an ID token from the

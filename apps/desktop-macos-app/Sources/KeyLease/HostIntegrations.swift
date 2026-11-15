@@ -185,7 +185,7 @@ final class HostIntegrations {
     }
 
     /// Deep-link to the Screen Recording pane so the user can grant the
-    /// capture permission — `open_screen_recording_settings` in Flutter.
+    /// capture permission.
     func openScreenRecordingSettings() {
         NSWorkspace.shared.open(URL(
             string: "x-apple.systempreferences:"

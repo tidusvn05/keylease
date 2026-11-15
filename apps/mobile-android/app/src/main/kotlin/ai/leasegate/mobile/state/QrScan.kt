@@ -11,8 +11,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
  * Camera TOTP scan plumbing.
  *
  * `scan()` suspends until the Compose camera overlay decodes a QR code or
- * the user dismisses it — the same shape as the Flutter adapter's
- * `scanTotpQrCodeFromCamera`. Only `otpauth://` codes are accepted; anything
+ * the user dismisses it. Only `otpauth://` codes are accepted; anything
  * else keeps the camera running instead of feeding a stray QR into TOTP.
  */
 class QrScanCoordinator {

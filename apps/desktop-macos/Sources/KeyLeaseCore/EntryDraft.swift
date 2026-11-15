@@ -11,8 +11,7 @@ public func isAgentContentKind(_ kind: String) -> Bool {
     agentContentKinds.contains(kind)
 }
 
-/// The editable snapshot of an entry — a direct port of the Dart
-/// `EntryDraft` in `packages/leasegate_vault_ui`.
+/// The editable snapshot of an entry.
 ///
 /// Drafts live outside the view tree so a failed save, a rebuild or a
 /// navigation change cannot lose typed data. Secret fields start empty on an

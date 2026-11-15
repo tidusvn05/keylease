@@ -34,7 +34,7 @@ final class SecurityService {
     }
 
     /// Sleep and screen-lock both wipe pending clipboard secrets and ask the
-    /// caller to lock the vault — the `lockRequested` events in Flutter.
+    /// caller to lock the vault.
     /// Idempotent: WindowGroup `.task` can re-fire when a window reappears.
     func observeLockSignals(onLock: @escaping @MainActor () -> Void) {
         guard observerTokens.isEmpty else { return }

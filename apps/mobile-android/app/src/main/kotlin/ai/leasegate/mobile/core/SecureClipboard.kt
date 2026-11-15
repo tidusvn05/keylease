@@ -10,10 +10,9 @@ import android.os.Looper
 import android.os.PersistableBundle
 
 /**
- * The conditional secret clipboard. Direct port of `SecurityPlugin.kt` —
- * the clear-after timer is scheduled on a `Handler` tied to the application
- * context so it outlives the composition (and now there is no Flutter engine
- * to outlive, the same guarantee holds across activity recreation).
+ * The conditional secret clipboard. The clear-after timer is scheduled on a
+ * `Handler` tied to the application context so it outlives the composition
+ * and survives activity recreation.
  *
  * The UI never writes secrets to the clipboard itself: every copy goes
  * through here so the conditional clear stays in force.
