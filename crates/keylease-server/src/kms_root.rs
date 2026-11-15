@@ -634,9 +634,17 @@ fn pkcs11_crypt(settings: &Pkcs11Kms, encrypt: bool, data: &[u8]) -> Result<Zero
 
     let pkcs11 = Pkcs11::new(&settings.module)
         .with_context(|| format!("load the PKCS#11 module {}", settings.module.display()))?;
-    pkcs11
-        .initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))
-        .context("initialize the PKCS#11 module")?;
+    // The library stays initialized for the life of the process (the same
+    // module may be loaded again, e.g. by `kms init`, which wraps then
+    // unwraps).
+    match pkcs11.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK)) {
+        Ok(())
+        | Err(cryptoki::error::Error::Pkcs11(
+            cryptoki::error::RvError::CryptokiAlreadyInitialized,
+            _,
+        )) => {}
+        Err(error) => return Err(error).context("initialize the PKCS#11 module"),
+    }
     let slot = pkcs11
         .get_slots_with_token()?
         .into_iter()
