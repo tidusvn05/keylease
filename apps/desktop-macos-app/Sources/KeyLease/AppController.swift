@@ -415,7 +415,7 @@ final class AppController {
     }
 
     /// `NSOpenPanel` for a vault source (KDBX / 1PUX / KeyLease backup or
-    /// database) — the Flutter `chooseVaultSource` channel call.
+    /// database).
     func chooseVaultSource() -> String? {
         host.pickFile(
             title: "Choose a vault file",
@@ -466,8 +466,7 @@ final class AppController {
         }
     }
 
-    /// Screen lock and system sleep lock the vault — the Flutter
-    /// `lockRequested` behaviour.
+    /// Screen lock and system sleep lock the vault.
     func installLockObservers() {
         security.observeLockSignals { [weak self] in
             guard let self, self.phase == .ready else { return }

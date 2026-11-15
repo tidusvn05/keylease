@@ -14,7 +14,7 @@ import androidx.compose.ui.graphics.Color
  * KeyLease design tokens — the Compose port of `KeyLeaseTokens`.
  *
  * Gateway Blue (#2f72ff) is the brand accent. On dark surfaces the readable
- * variant is the lightened #6aa9f5 — the same split the Flutter tokens make.
+ * variant is the lightened #6aa9f5, as in the macOS app.
  */
 data class KeyleaseColors(
     val accent: Color,

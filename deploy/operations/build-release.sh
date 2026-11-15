@@ -27,7 +27,7 @@ done
 mkdir -p "$output_dir"
 
 control_tag="keylease-server:$release_id"
-web_tag="keylease-approval-web:$release_id"
+web_tag="keylease-web:$release_id"
 gateway_tag="keylease-edge:$release_id"
 export KEYLEASE_CONTROL_IMAGE="$control_tag"
 export KEYLEASE_WEB_IMAGE="$web_tag"

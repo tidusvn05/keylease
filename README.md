@@ -239,7 +239,7 @@ and the macOS/provider checks that must happen in their real environments.
 The repository also contains a self-hosted control plane and edge node for
 running agents against SaaS connectors with signed policy bundles: Cloud API
 and worker, the edge node with an MCP endpoint and dynamic credentials,
-and the `approval-flutter` operator app. To run it on one VPS, follow
+and the KeyLease Console (`apps/console`). To run it on one VPS, follow
 [`docs/self-hosted-vps.md`](docs/self-hosted-vps.md).
 
 This work was built in phases from
@@ -315,12 +315,11 @@ machine-readable acceptance report. See
   the CLI daemon and the mobile FFI so the wire format cannot drift.
 - `keylease-mobile`: the in-process C ABI the Android client calls; see
   `docs/adr/0004-mobile-in-process-boundary.md`.
-- `packages/leasegate_vault_ui`: the shared vault client — models, state, design
-  tokens and feature UI — used by the Flutter mobile app.
 - `apps/desktop-macos` / `apps/desktop-macos-app`: native Swift client core
   (builds and tests on Linux too) and the SwiftUI app (needs a Mac).
-- `apps/mobile-flutter`: the Android vault client.
-- `apps/approval-flutter`: responsive remote approval and Edge-health web app.
+- `apps/mobile-android`: the native Android (Kotlin) vault client. An iOS app
+  will be native Swift too.
+- `apps/console`: the KeyLease Console web app, embedded into `keylease-server`.
 
 ## Development
 
@@ -330,15 +329,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p keylease -- --help
 ```
 
-The Flutter side lives in two packages that are checked independently:
-
-```sh
-cd packages/leasegate_vault_ui && flutter analyze && flutter test
-cd apps/mobile-flutter         && flutter analyze && flutter test
-```
-
-Building the Android client needs the toolchain described in
-`apps/mobile-flutter/README.md`; `scripts/build-android.sh` drives it.
+The Swift apps are built and tested by the `macOS app` workflow. The Android
+client builds with Gradle in `apps/mobile-android`; its `preBuild` runs
+`scripts/build-android-rust.sh` to cross-compile the Rust core.
 
 See `docs/security/threat-model.md` and `docs/adr/` before changing crypto,
 identity, trust-mode or connector boundaries.

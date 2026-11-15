@@ -464,8 +464,8 @@ class AppController(
 
     /**
      * Process-level foreground/background, driven by ProcessLifecycleOwner.
-     * `paused`/`hidden`/`detached` in the Flutter observer map to ON_STOP:
-     * `inactive` (transient system dialogs) is deliberately excluded, and
+     * Moving to the background (ON_STOP) counts; transient system dialogs
+     * deliberately do not, and
      * FLAG_SECURE already blanks the recents thumbnail.
      */
     fun onProcessLifecycle(foregrounded: Boolean) {

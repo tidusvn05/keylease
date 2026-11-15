@@ -93,16 +93,10 @@ services:
     tmpfs: [/tmp]
 
   web:
-    image: ${KEYLEASE_WEB_IMAGE:-keylease-approval-web:local}
+    image: ${KEYLEASE_WEB_IMAGE:-keylease-web:local}
     build:
       context: ../..
-      dockerfile: deploy/compose/Dockerfile.approval
-      args:
-        KEYLEASE_CLOUD_URL: https://${KEYLEASE_DOMAIN}/api
-        KEYLEASE_ORGANIZATION_ID: ${KEYLEASE_ORGANIZATION_ID:-}
-        KEYLEASE_PROJECT_ID: ${KEYLEASE_PROJECT_ID:-}
-        KEYLEASE_APPROVER_ID: ${KEYLEASE_APPROVER_ID:-}
-        KEYLEASE_AGENT_ID: ${KEYLEASE_AGENT_ID:-}
+      dockerfile: deploy/compose/Dockerfile.web
     restart: unless-stopped
     depends_on:
       control-plane:

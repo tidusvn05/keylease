@@ -158,6 +158,9 @@ final class WireCommandParityTests: XCTestCase {
                     taskId: nil
                 )
             ),
+            .httpForward(request: .object([:])),
+            .httpBindingGet(id: "i"),
+            .httpBindingSet(id: "i", binding: nil),
             .lock,
         ]
     }

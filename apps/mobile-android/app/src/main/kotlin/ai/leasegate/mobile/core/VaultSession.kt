@@ -12,8 +12,7 @@ import kotlinx.coroutines.withContext
  * Every JNI call blocks its calling thread — `call` runs the Rust dispatch to
  * completion — so calls are confined to one dedicated dispatcher. One
  * long-lived worker also matches the store's real concurrency: `NativeStore`
- * is a single mutex, so there is nothing to gain from more. This is the
- * direct counterpart of `VaultIsolate` in the Flutter client.
+ * is a single mutex, so there is nothing to gain from more.
  */
 class VaultSession {
     private val executor = Executors.newSingleThreadExecutor { runnable ->

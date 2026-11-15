@@ -561,7 +561,7 @@ private fun EntryForm(
             Text("Favorite")
         }
 
-        // Dynamic template fields, sectioned like the Flutter form.
+        // Dynamic template fields, sectioned like the macOS editor.
         var section: String? = null
         for (field in template?.fields ?: emptyList()) {
             if (field.section != section) {

@@ -5,8 +5,7 @@ import KeyLeaseCore
 
 // MARK: - Dialog helpers
 
-/// Synchronous destructive-action confirmation — the Flutter `confirm()`
-/// dialog. NSAlert gives a real modal on macOS.
+/// Synchronous destructive-action confirmation. NSAlert gives a real modal on macOS.
 @MainActor
 func confirmAction(
     title: String,

@@ -1,9 +1,9 @@
 //! The in-process transport for the mobile client.
 //!
-//! On desktop, Flutter is a separate process that reaches the vault over a Unix
+//! On desktop, the app is a separate process that reaches the vault over a Unix
 //! socket, and `docs/security/threat-model.md` treats it as untrusted. Android
 //! has no place to host that daemon, so here the Rust core runs inside the app
-//! process and this crate is the boundary Dart calls across.
+//! process and this crate is the boundary the app calls across.
 //!
 //! That collapses a process boundary the threat model relies on; see
 //! `docs/adr/0004-mobile-in-process-boundary.md`. What replaces it is the

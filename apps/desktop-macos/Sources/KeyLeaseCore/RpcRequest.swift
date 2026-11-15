@@ -126,6 +126,12 @@ public enum RpcRequest: Encodable, Sendable {
     case sshIdentities
     case entriesInject(program: String, fields: [InjectField])
     case dbTarget(id: String)
+    /// `request` is an `HttpForwardRequest`; the app does not build these
+    /// yet, so they stay untyped here.
+    case httpForward(request: JSONValue)
+    case httpBindingGet(id: String)
+    /// `binding` is an `HttpBinding`, or nil to remove it.
+    case httpBindingSet(id: String, binding: JSONValue?)
     case dbScram(
         id: String,
         database: String,
@@ -203,6 +209,9 @@ public enum RpcRequest: Encodable, Sendable {
         case .sshIdentities: "ssh_identities"
         case .entriesInject: "entries_inject"
         case .dbTarget: "db_target"
+        case .httpForward: "http_forward"
+        case .httpBindingGet: "http_binding_get"
+        case .httpBindingSet: "http_binding_set"
         case .dbScram: "db_scram"
         case .sshSign: "ssh_sign"
         case .sshIssueCert: "ssh_issue_cert"
@@ -382,13 +391,18 @@ public enum RpcRequest: Encodable, Sendable {
             // serde `#[serde(default)]`: omitted means a single-use
             // approval, the wire every older client sends.
             try c.encodeIfPresent(trust, forKey: key("trust"))
-        case .trustRevoke(let id), .dbTarget(let id):
+        case .trustRevoke(let id), .dbTarget(let id), .httpBindingGet(let id):
             try c.encode(id, forKey: key("id"))
         case .agentEnroll(let name):
             try c.encode(name, forKey: key("name"))
         case .cloudRequest(let purpose, let hint):
             try c.encode(purpose, forKey: key("purpose"))
             try c.encodeIfPresent(hint, forKey: key("hint"))
+        case .httpForward(let request):
+            try c.encode(request, forKey: key("request"))
+        case .httpBindingSet(let id, let binding):
+            try c.encode(id, forKey: key("id"))
+            try c.encode(binding, forKey: key("binding"))
         case .entriesInject(let program, let fields):
             try c.encode(program, forKey: key("program"))
             try c.encode(fields, forKey: key("fields"))

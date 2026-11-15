@@ -7,7 +7,7 @@ import kotlin.math.min
 /**
  * Vault files in Android app-private storage, over JNI.
  *
- * Port of `FfiVaultStorage` in the Flutter client: the registry is a plain
+ * The registry is a plain
  * non-secret JSON file, the vault database is authoritative and is never
  * modified here.
  */

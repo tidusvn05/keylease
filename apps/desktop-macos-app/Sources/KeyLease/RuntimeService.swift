@@ -5,8 +5,7 @@ import ServiceManagement
 
 import KeyLeaseCore
 
-/// Errors from the local runtime layer — the values carried by the Flutter
-/// `com.keylease/runtime` channel, kept so behaviour matches 1:1.
+/// Errors from the local runtime layer.
 struct RuntimeError: Error, Equatable, Sendable {
     let code: String
     let message: String
@@ -96,7 +95,7 @@ final class RuntimeService: Sendable {
         Bundle.main.bundleURL.pathExtension == "app"
     }
 
-    // MARK: - CLI calls (same argument lists as the Flutter bridge)
+    // MARK: - CLI calls
 
     func inspect() async throws -> LocalRuntimeInspection {
         LocalRuntimeInspection(try await run(["desktop", "inspect"]))

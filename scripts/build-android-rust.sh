@@ -22,9 +22,9 @@ for command in cargo rustup cargo-ndk; do
 done
 
 # arm64 for devices, x86_64 for emulators. See the abiFilters comment in
-# android/app/build.gradle.kts for why armeabi-v7a is excluded.
+# apps/mobile-android/app/build.gradle.kts for why armeabi-v7a is excluded.
 ABIS="${KEYLEASE_ANDROID_ABIS:-arm64-v8a x86_64}"
-OUTPUT="${KEYLEASE_ANDROID_OUTPUT_DIR:-$REPO_DIR/apps/mobile-flutter/android/app/src/main/jniLibs}"
+OUTPUT="${KEYLEASE_ANDROID_OUTPUT_DIR:-$REPO_DIR/apps/mobile-android/app/src/main/jniLibs}"
 PROFILE="${KEYLEASE_ANDROID_PROFILE:-release}"
 
 # Installed per invocation rather than pinned in rust-toolchain.toml: adding
@@ -36,8 +36,8 @@ rustup target add --toolchain "$TOOLCHAIN" aarch64-linux-android x86_64-linux-an
 targets=()
 for abi in $ABIS; do targets+=(--target "$abi"); done
 
-# The native Kotlin client (apps/mobile-android) needs the JNI exports in
-# addition to the C ABI; the Flutter client leaves this unset.
+# The Kotlin client (apps/mobile-android) sets KEYLEASE_ANDROID_FEATURES=jni
+# for the JNI exports in addition to the C ABI.
 features_args=()
 if [ -n "${KEYLEASE_ANDROID_FEATURES:-}" ]; then
   features_args+=(--features "$KEYLEASE_ANDROID_FEATURES")

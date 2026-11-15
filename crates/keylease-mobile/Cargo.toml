@@ -15,8 +15,8 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 
 [features]
 # The Kotlin client in apps/mobile-android reaches the same cores through JNI
-# exports instead of the C ABI. Off by default so the host test suite and the
-# Flutter cdylib do not link the JVM-facing surface.
+# exports instead of the C ABI. Off by default so the host test suite and a
+# future iOS build do not link the JVM-facing surface.
 default = []
 jni = ["dep:jni"]
 

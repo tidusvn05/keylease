@@ -11,7 +11,7 @@ in the [threat model](security/threat-model.md).
 | What it is | An encrypted vault with a policy engine, served by `keylease serve` over a local Unix socket | A self-hosted control plane (Cloud API, worker, PostgreSQL) plus an edge node that serves MCP and dynamic credentials |
 | Who uses it | One person: agents on a Mac or a VPS | An operator running agents against SaaS connectors with signed policy bundles |
 | Agent interface | `keylease` CLI (and the brokers below), MCP over stdio, the OAuth remote MCP server | MCP over Streamable HTTP, credential API |
-| Approver | macOS app, `keylease approval …`, paired remote approver | `apps/approval-flutter` web/mobile app |
+| Approver | macOS app, `keylease approval …`, paired remote approver | KeyLease Console (`apps/console`) |
 | Docs | this page, [ADR 0005](adr/0005-agent-trust-and-secret-use.md) | [Phase 3 architecture](phase-3/architecture-and-tech-stack.md), [single-VPS install](self-hosted-vps.md) |
 
 Both share the same core: `KeyLeaseService` is the only layer that touches
@@ -117,7 +117,7 @@ Details: [agent approvals and trust](agent-approvals.md).
 | VPS + paired approver (mode B) | `keylease serve --approver-listen` behind TLS | macOS app **Remote Vaults**, or `keylease remote` on a laptop | Same as mode A (remote unlock not implemented) |
 | VPS remote MCP server for web assistants | `keylease serve --remote-mcp --public-url` behind TLS | Same as mode A or B | Same as mode A |
 | VPS as a cloud node | any of the above, linked with `keylease cloud join` | Share requests decided on the owner device | Same as mode A; data beyond its own arrives only as approved shares |
-| KeyLease Cloud + Edge | Edge's embedded `KeyLeaseService` | `approval-flutter` | Edge vault password file |
+| KeyLease Cloud + Edge | Edge's embedded `KeyLeaseService` | KeyLease Console | Edge vault password file |
 
 ## Component map
 
@@ -132,6 +132,5 @@ Details: [agent approvals and trust](agent-approvals.md).
 | `crates/keylease-mcp` | Streamable HTTP MCP adapter over the service (connector actions) |
 | `crates/keylease-edge`, `keylease-server`, `keylease-credentials` | KeyLease edge node, Cloud control plane, dynamic credentials |
 | `apps/desktop-macos`, `apps/desktop-macos-app` | Native Swift client core and SwiftUI app |
-| `packages/leasegate_vault_ui` | Shared Flutter vault UI for the mobile app |
-| `apps/mobile-flutter`, `crates/keylease-mobile` | Android vault client and its in-process FFI |
-| `apps/approval-flutter` | KeyLease Cloud approval and Edge health app |
+| `apps/mobile-android`, `crates/keylease-mobile` | Native Android vault client and its in-process FFI |
+| `apps/console` | KeyLease Console web app (embedded into `keylease-server`) |

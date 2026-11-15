@@ -2,6 +2,12 @@
 
 Status: accepted
 
+> **Update, 2026-11.** The Flutter clients were removed; mobile apps are native.
+> The decision stands: the Android app (`apps/mobile-android`, Kotlin) runs the
+> same core in process through the crate's JNI exports (feature `jni`), and a
+> future iOS app would link its static library from Swift. Where this record
+> says Dart or Flutter, read "the app".
+
 ## Context
 
 Through Phase 9 there is exactly one trusted plaintext boundary. `docs/security/threat-model.md`

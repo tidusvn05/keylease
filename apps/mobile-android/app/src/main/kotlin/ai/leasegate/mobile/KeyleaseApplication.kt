@@ -38,8 +38,8 @@ class KeyleaseApplication : Application() {
         )
 
         // Process-level lifecycle: any move to the background hides revealed
-        // secrets and locks, matching the Flutter observer's paused/hidden
-        // handling — screen-off is indistinguishable from a normal pause.
+        // secrets and locks; screen-off is indistinguishable from a normal
+        // pause.
         ProcessLifecycleOwner.get().lifecycle.addObserver(
             object : DefaultLifecycleObserver {
                 override fun onStart(owner: LifecycleOwner) =
