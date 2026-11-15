@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { McpUpstreams } from "@/components/mcp-upstreams";
 import { api } from "@/lib/api/client";
 import { orgQuery } from "@/lib/queries";
 
@@ -318,6 +319,13 @@ function Secrets() {
           )}
         </CardContent>
       </Card>
+      <McpUpstreams
+        org={search.org}
+        project={search.project}
+        environment={environment}
+        admin={project.my_role === "admin"}
+        report={report}
+      />
       {project.my_role === "admin" && (
         <Card>
           <CardHeader>

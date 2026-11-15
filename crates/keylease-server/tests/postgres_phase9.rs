@@ -48,6 +48,7 @@ async fn phase9_host_status_is_authenticated_redacted_and_freshness_checked() {
                 public_url: None,
                 kms_root_key: None,
                 oidc: None,
+                allow_private_network: false,
             },
         )
         .unwrap(),

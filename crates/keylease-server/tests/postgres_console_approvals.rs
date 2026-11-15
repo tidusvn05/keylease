@@ -201,6 +201,7 @@ async fn a_node_approval_is_decided_in_the_console_and_its_audit_listed() {
                 public_url: Some(ORIGIN.into()),
                 kms_root_key: None,
                 oidc: None,
+                allow_private_network: false,
             },
         )
         .unwrap(),
@@ -486,6 +487,7 @@ async fn browsers_subscribe_to_web_push() {
                 public_url: Some(ORIGIN.into()),
                 kms_root_key: None,
                 oidc: None,
+                allow_private_network: false,
             },
         )
         .unwrap(),

@@ -463,17 +463,47 @@ async fn mcp(
             }),
         ),
         "ping" => rpc_result(&id, json!({})),
-        "tools/list" => rpc_result(&id, json!({"tools": tools()})),
+        "tools/list" => {
+            let mut all = tools().as_array().cloned().unwrap_or_default();
+            all.extend(
+                crate::gateway_upstream::client_tools(&state, &org, &caller.id)
+                    .await?
+                    .into_iter()
+                    .map(|tool| tool.definition),
+            );
+            rpc_result(&id, json!({"tools": all}))
+        }
         "tools/call" => {
             let name = request["params"]["name"].as_str().unwrap_or_default();
             let arguments = request["params"]["arguments"].clone();
             let outcome = match name {
-                "list_apis" => list_apis(&state, &org, &caller).await,
-                "http_request" => http_request(&state, &org, &caller, arguments).await,
-                _ => Err(invalid(format!("unknown tool {name}"))),
+                "list_apis" => list_apis(&state, &org, &caller)
+                    .await
+                    .map(|text| tool_text(text, false)),
+                "http_request" => http_request(&state, &org, &caller, arguments)
+                    .await
+                    .map(|text| tool_text(text, false)),
+                _ => {
+                    let exposed =
+                        crate::gateway_upstream::client_tools(&state, &org, &caller.id).await?;
+                    match exposed.iter().find(|tool| tool.name == name) {
+                        Some(tool) => {
+                            crate::gateway_upstream::call_tool(
+                                &state,
+                                &org,
+                                &caller.id,
+                                caller.approval,
+                                tool,
+                                arguments,
+                            )
+                            .await
+                        }
+                        None => Err(invalid(format!("unknown tool {name}"))),
+                    }
+                }
             };
             match outcome {
-                Ok(text) => rpc_result(&id, tool_text(text, false)),
+                Ok(result) => rpc_result(&id, result),
                 Err(ApiError(error)) => rpc_result(
                     &id,
                     tool_text(format!("KeyLease: {}", explain(&error)), true),
@@ -527,7 +557,7 @@ async fn list_apis(state: &CloudApiState, org: &str, caller: &Client) -> ApiResu
     )
 }
 
-fn public_address(address: std::net::IpAddr) -> bool {
+pub(crate) fn public_address(address: std::net::IpAddr) -> bool {
     use std::net::IpAddr;
     match address {
         IpAddr::V4(v4) => {

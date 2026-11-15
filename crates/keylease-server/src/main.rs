@@ -66,6 +66,8 @@ async fn main() -> Result<()> {
                 }
                 _ => None,
             },
+            allow_private_network: env::var("KEYLEASE_GATEWAY_ALLOW_PRIVATE")
+                .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true")),
             oidc: match env::var("KEYLEASE_OIDC_ISSUER") {
                 Ok(issuer) if !issuer.is_empty() => Some(keylease_server::ConsoleOidc {
                     issuer,

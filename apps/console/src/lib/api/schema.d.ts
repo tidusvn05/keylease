@@ -754,6 +754,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/orgs/{org}/projects/{slug}/mcp-upstreams": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listMcpUpstreams"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/orgs/{org}/projects/{slug}/mcp-upstreams/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setMcpUpstream"];
+        post?: never;
+        delete: operations["deleteMcpUpstream"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/orgs/{org}/projects/{slug}/mcp-upstreams/{name}/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["connectMcpUpstream"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -966,6 +1014,15 @@ export interface components {
             decided_by?: string | null;
             decided_at?: string | null;
             consumed_at?: string | null;
+        };
+        McpUpstream: {
+            name: string;
+            url: string;
+            /** @enum {string} */
+            auth: "none" | "bearer" | "oauth";
+            secret_name?: string | null;
+            issuer?: string | null;
+            environments: string[];
         };
     };
     responses: never;
@@ -2355,6 +2412,128 @@ export interface operations {
                     "application/json": {
                         approval_id?: string;
                         state?: string;
+                    };
+                };
+            };
+        };
+    };
+    listMcpUpstreams: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        upstreams: components["schemas"]["McpUpstream"][];
+                    };
+                };
+            };
+        };
+    };
+    setMcpUpstream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                slug: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    url: string;
+                    /** @enum {string} */
+                    auth: "none" | "bearer" | "oauth";
+                    secret_name?: string;
+                    client_id?: string;
+                    scope?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        name?: string;
+                        secret_name?: string | null;
+                        issuer?: string | null;
+                    };
+                };
+            };
+        };
+    };
+    deleteMcpUpstream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                slug: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        removed?: number;
+                    };
+                };
+            };
+        };
+    };
+    connectMcpUpstream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org: string;
+                slug: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    environment: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        authorize_url: string;
                     };
                 };
             };
