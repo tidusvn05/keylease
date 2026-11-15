@@ -55,6 +55,10 @@ pub struct CloudApiConfig {
     pub kms_root_key: Option<[u8; 32]>,
     /// Console single sign-on (OpenID Connect).
     pub oidc: Option<crate::console_sso::ConsoleOidc>,
+    /// Let the MCP Gateway reach upstream MCP servers on private addresses
+    /// (`KEYLEASE_GATEWAY_ALLOW_PRIVATE=1`), for servers inside the same
+    /// network. Off by default: the gateway posts where org admins point it.
+    pub allow_private_network: bool,
 }
 
 impl std::fmt::Debug for CloudApiConfig {
@@ -80,6 +84,7 @@ impl Default for CloudApiConfig {
             public_url: None,
             kms_root_key: None,
             oidc: None,
+            allow_private_network: false,
         }
     }
 }
@@ -96,6 +101,7 @@ pub struct CloudApiState {
     pub(crate) oidc: Option<crate::console_sso::ConsoleOidc>,
     /// KEYLEASE_SERVER_PUBLIC_URL without a trailing slash.
     pub(crate) public_url: Option<String>,
+    pub(crate) allow_private_network: bool,
 }
 
 impl std::fmt::Debug for CloudApiState {
@@ -135,6 +141,7 @@ impl CloudApiState {
                 .public_url
                 .as_deref()
                 .map(|url| url.trim_end_matches('/').to_owned()),
+            allow_private_network: config.allow_private_network,
         })
     }
 }
@@ -275,6 +282,7 @@ pub fn router(state: CloudApiState) -> Router {
         .merge(crate::machine::router())
         .merge(crate::gateway::router())
         .merge(crate::gateway_approvals::router())
+        .merge(crate::gateway_upstream::router())
         .merge(crate::dynamic::router())
         .merge(crate::enterprise_v2::router())
         .layer(DefaultBodyLimit::max(maximum))

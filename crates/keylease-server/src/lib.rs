@@ -11,6 +11,7 @@ mod enterprise_api;
 mod enterprise_v2;
 mod gateway;
 mod gateway_approvals;
+mod gateway_upstream;
 mod machine;
 mod managed;
 mod oidc;

@@ -403,7 +403,7 @@ struct SetSecret {
     value: String,
 }
 
-async fn write_version(
+pub(crate) async fn write_version(
     state: &CloudApiState,
     org: &str,
     slug: &str,
