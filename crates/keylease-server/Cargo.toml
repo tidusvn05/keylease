@@ -8,12 +8,14 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-p256 = { version = "0.13", features = ["ecdsa"] }
+aes-gcm = "0.10"
+p256 = { version = "0.13", features = ["ecdh", "ecdsa"] }
 anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true
 chrono.workspace = true
 ed25519-dalek.workspace = true
+hkdf.workspace = true
 hmac.workspace = true
 jsonwebtoken.workspace = true
 keylease-core = { path = "../keylease-core", version = "0.3.0" }

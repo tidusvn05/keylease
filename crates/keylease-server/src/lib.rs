@@ -17,6 +17,7 @@ mod relay;
 mod siem;
 mod store;
 mod teams;
+mod web_push;
 
 pub use api::{CloudApiConfig, CloudApiState, router};
 pub use console_sso::ConsoleOidc;

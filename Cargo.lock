@@ -2358,11 +2358,13 @@ dependencies = [
 name = "keylease-server"
 version = "0.3.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "axum",
  "base64 0.22.1",
  "chrono",
  "ed25519-dalek 3.0.0",
+ "hkdf 0.12.4",
  "hmac 0.12.1",
  "http-body-util",
  "jsonwebtoken",

@@ -466,3 +466,97 @@ fn urlencode(text: &str) -> String {
         })
         .collect()
 }
+
+#[tokio::test]
+async fn browsers_subscribe_to_web_push() {
+    let Some(database_url) = std::env::var("KEYLEASE_TEST_DATABASE_URL").ok() else {
+        eprintln!("skipping PostgreSQL web push test; KEYLEASE_TEST_DATABASE_URL is unset");
+        return;
+    };
+    let repository = CloudRepository::connect(&database_url, 2).await.unwrap();
+    repository.migrate().await.unwrap();
+    let app = router(
+        CloudApiState::new(
+            repository.clone(),
+            ControlSigner::generate("web-push-test").unwrap(),
+            CloudApiConfig {
+                admin_token: "console-test-administrator-token-at-least-32".into(),
+                maximum_body_bytes: 1024 * 1024,
+                operations_status_file: None,
+                public_url: Some(ORIGIN.into()),
+                kms_root_key: None,
+                oidc: None,
+            },
+        )
+        .unwrap(),
+    );
+    let (account, _, _, cookie, _, _) = account(repository.pool()).await;
+    let (status, key) = send(
+        &app,
+        console("GET", "/v1/console/push/key", &cookie, Value::Null),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let key = URL_SAFE_NO_PAD
+        .decode(key["key"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(key.len(), 65);
+    // The key stays the same.
+    let (_, again) = send(
+        &app,
+        console("GET", "/v1/console/push/key", &cookie, Value::Null),
+    )
+    .await;
+    assert_eq!(
+        URL_SAFE_NO_PAD
+            .decode(again["key"].as_str().unwrap())
+            .unwrap(),
+        key
+    );
+
+    let browser = p256::SecretKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
+    let p256dh = URL_SAFE_NO_PAD.encode(browser.public_key().to_sec1_bytes());
+    let endpoint = format!("https://push.example.net/send/{account}");
+    let subscription = |endpoint: &str| json!({"endpoint": endpoint, "keys": {"p256dh": p256dh, "auth": URL_SAFE_NO_PAD.encode([1_u8; 16])}, "name": "Firefox"});
+    let (status, _) = send(
+        &app,
+        console(
+            "POST",
+            "/v1/console/push/subscriptions",
+            &cookie,
+            subscription(&endpoint),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200);
+    // Addresses on the server's network are refused.
+    let (status, _) = send(
+        &app,
+        console(
+            "POST",
+            "/v1/console/push/subscriptions",
+            &cookie,
+            subscription("https://10.0.0.5/push"),
+        ),
+    )
+    .await;
+    assert_eq!(status, 400);
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM console_push_subscriptions WHERE account_id=$1")
+            .bind(&account)
+            .fetch_one(repository.pool())
+            .await
+            .unwrap();
+    assert_eq!(count, 1);
+    let (_, removed) = send(
+        &app,
+        console(
+            "DELETE",
+            "/v1/console/push/subscriptions",
+            &cookie,
+            json!({"endpoint": endpoint}),
+        ),
+    )
+    .await;
+    assert_eq!(removed["removed"], 1);
+}

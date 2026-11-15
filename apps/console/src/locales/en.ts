@@ -127,6 +127,9 @@ export const en = {
   approvals: {
     title: "Approvals",
     description: "Pending agent requests on your nodes. A decision is signed with your passkey and checked again by the node.",
+    notifyOn: "Notify me",
+    notifyOff: "Stop notifications",
+    notifyFailed: "Notifications are blocked or unavailable in this browser.",
     noNodes: "No node reports its approvals here yet.",
     enableHelp: "On each node (a VPS running keylease serve, or your Mac), register a passkey here first, then run:",
     reported: "Last report {{time}}",
