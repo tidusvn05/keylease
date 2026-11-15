@@ -36,6 +36,33 @@ machine identities, dynamic logins, KMS) as JSON Lines, or RFC 5424 syslog with
 `format=syslog`. Page with `after=<id>`: the `x-keylease-next` header is the
 cursor for the next call, so a collector can poll and resume.
 
+### Push
+
+keylease-server can also send the audit itself. On the organization page,
+**Audit to your SIEM** (owners and admins), or
+`PUT /v1/orgs/ORG/audit/destinations/NAME`:
+
+```json
+{"url": "https://siem.example.com/services/collector", "format": "splunk_hec",
+ "secret": "…", "start": "now"}
+```
+
+- **Formats:** `jsonl` (JSON Lines), `syslog` (RFC 5424, the same lines as the
+  export), `splunk_hec` (HTTP Event Collector events, `sourcetype`
+  `keylease:audit`).
+- **Token:** sent as `Authorization: Bearer …` (Splunk: `Splunk …`). Change it
+  with `header` and `template` (`{secret}` marks the token). It is encrypted
+  with the KMS root key, so push needs `KEYLEASE_KMS_ROOT_KEY_FILE`.
+- **Start:** `start` is `now` (default) or `beginning` (every past event too).
+
+Every 15 seconds each destination gets the events after its cursor, up to 500
+per request. When a collector fails, its cursor stays and the next attempt
+waits 15 s, 30 s, 1 min and so on, up to an hour. The destination list shows
+how many events are waiting and the last error, and **Send a test event**
+checks a destination. Several server replicas can run at once; a destination
+is locked while it is sent. Collectors must have public HTTPS addresses unless
+`KEYLEASE_GATEWAY_ALLOW_PRIVATE=1` is set (see `docs/mcp-gateway.md`).
+
 ## SCIM 2.0 (deprovisioning)
 
 An owner creates a SCIM token (`POST /v1/orgs/ORG/scim-tokens`) and configures
@@ -49,6 +76,5 @@ device, so the provider cannot create them.
 ## Not yet
 
 - Hardware security modules (PKCS#11) and cloud KMS providers for the root key.
-- Pushing the audit to a SIEM (pull with the export API for now).
 - Managed nodes: nodes receiving signed policy from the server (the earlier
   edge node covers part of this).

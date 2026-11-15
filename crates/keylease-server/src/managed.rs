@@ -65,7 +65,7 @@ pub(crate) fn router() -> Router<CloudApiState> {
         )
 }
 
-fn root(state: &CloudApiState) -> ApiResult<&SecretKey> {
+pub(crate) fn root(state: &CloudApiState) -> ApiResult<&SecretKey> {
     state
         .kms
         .as_deref()

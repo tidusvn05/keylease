@@ -104,7 +104,10 @@ fn unreachable_error() -> ApiError {
 /// A client pinned to the host's checked addresses: HTTPS (HTTP only with
 /// private addresses allowed), public addresses unless the server allows
 /// private ones, no redirects.
-async fn checked_client(state: &CloudApiState, url: &url::Url) -> ApiResult<reqwest::Client> {
+pub(crate) async fn checked_client(
+    state: &CloudApiState,
+    url: &url::Url,
+) -> ApiResult<reqwest::Client> {
     let allow_private = state.allow_private_network;
     if url.scheme() != "https" && !(allow_private && url.scheme() == "http") {
         return Err(invalid("upstream and authorization URLs must use https"));
