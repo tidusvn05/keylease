@@ -129,6 +129,9 @@ export const vi: Messages = {
   approvals: {
     title: "Phê duyệt",
     description: "Các yêu cầu của agent đang chờ trên các node của bạn. Quyết định được ký bằng passkey và node kiểm tra lại chữ ký.",
+    notifyOn: "Báo cho tôi",
+    notifyOff: "Tắt thông báo",
+    notifyFailed: "Trình duyệt này chặn hoặc không hỗ trợ thông báo.",
     noNodes: "Chưa có node nào gửi danh sách phê duyệt lên đây.",
     enableHelp: "Trên từng node (VPS chạy keylease serve, hoặc máy Mac), đăng ký passkey ở đây trước, rồi chạy:",
     reported: "Báo cáo gần nhất {{time}}",

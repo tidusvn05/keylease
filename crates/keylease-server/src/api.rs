@@ -267,6 +267,7 @@ pub fn router(state: CloudApiState) -> Router {
         .merge(crate::relay::router())
         .merge(crate::console::router())
         .merge(crate::console_approvals::router())
+        .merge(crate::web_push::router())
         .merge(crate::console_assets::router())
         .merge(crate::teams::router())
         .merge(crate::managed::router())

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/table";
 import type { components } from "@/lib/api/schema";
 import { decideApproval, type TrustDecision } from "@/lib/approvals";
+import { disablePush, enablePush, pushEnabled, pushSupported } from "@/lib/push";
 import { approvalsQuery } from "@/lib/queries";
 
 export const Route = createFileRoute("/approvals")({
@@ -40,9 +41,12 @@ function Approvals() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{t("approvals.title")}</h1>
-        <p className="text-muted-foreground">{t("approvals.description")}</p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">{t("approvals.title")}</h1>
+          <p className="text-muted-foreground">{t("approvals.description")}</p>
+        </div>
+        <NotifyToggle />
       </div>
       {data !== undefined && nodes.length === 0 && (
         <Card>
@@ -87,6 +91,44 @@ function Approvals() {
           </Table>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Web Push for this browser: a notification when a node reports a new request. */
+function NotifyToggle() {
+  const { t } = useTranslation();
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (pushSupported()) void pushEnabled().then(setEnabled, () => setEnabled(false));
+  }, []);
+  if (!pushSupported()) return null;
+  const toggle = async () => {
+    setBusy(true);
+    setFailed(false);
+    try {
+      if (enabled) {
+        await disablePush();
+        setEnabled(false);
+      } else {
+        const ok = await enablePush(navigator.userAgent.slice(0, 80));
+        setEnabled(ok);
+        setFailed(!ok);
+      }
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="text-right">
+      <Button size="sm" variant="outline" disabled={busy || enabled === null} onClick={() => void toggle()}>
+        {enabled ? t("approvals.notifyOff") : t("approvals.notifyOn")}
+      </Button>
+      {failed && <p className="text-destructive mt-1 text-xs">{t("approvals.notifyFailed")}</p>}
     </div>
   );
 }

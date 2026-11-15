@@ -50,6 +50,9 @@ turn into an approver for every node.
   server in plaintext. Secrets never are; the stated purpose is shown as
   untrusted text, as on the node.
 - Approval latency is the report interval (a few seconds) plus the person.
-  Web Push (a later step) tells the person a request is waiting.
+  Web Push tells subscribed browsers when a node reports a new request: the
+  message (node, agent, action) is encrypted for the browser (RFC 8291), and
+  the server signs push requests with a VAPID key (RFC 8292) kept in its
+  database.
 - Nodes need `KEYLEASE_SERVER_PUBLIC_URL` on the server (passkeys need it
   anyway).

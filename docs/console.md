@@ -56,6 +56,13 @@ can add a trust window the way the node's own approvers do. The node checks
 the passkey signature itself before applying the decision, and the list shows
 whether it was applied.
 
+**Notify me** on the Approvals page asks the browser for permission and
+subscribes it to Web Push: when a node reports a new request, the browser shows
+a notification (agent, action and node; never an item) that opens the
+Approvals page. The message is encrypted for the browser (RFC 8291) and the
+server signs its requests to the push service with a key it generates on
+first use (VAPID). Turn it off with **Stop notifications**.
+
 After adding a passkey, run `enable` again on each node: a node accepts only
 the passkeys it pinned. With `enable --no-audit` the audit stays on the node;
 otherwise **Audit log** lists the events every node uploads (the server keeps

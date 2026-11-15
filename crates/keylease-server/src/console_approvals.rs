@@ -89,6 +89,39 @@ async fn node_report(
         .collect();
     let approvals = serde_json::to_value(&pending).map_err(|_| invalid("malformed report"))?;
     let pool = state.repository.pool();
+    let previous: Vec<String> = sqlx::query(
+        "SELECT jsonb_path_query_array(approvals, '$[*].id') AS ids FROM console_node_reports WHERE member_id=$1",
+    )
+    .bind(&caller.member_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(storage)?
+    .and_then(|row| serde_json::from_value(row.get("ids")).ok())
+    .unwrap_or_default();
+    let new: Vec<&&ApprovalRecord> = pending
+        .iter()
+        .filter(|approval| !previous.contains(&approval.id.0))
+        .collect();
+    if let (Some(first), Some(subject)) = (new.first(), state.console.origin()) {
+        let node: Option<String> = sqlx::query("SELECT name FROM relay_members WHERE member_id=$1")
+            .bind(&caller.member_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(storage)?
+            .map(|row| row.get("name"));
+        crate::web_push::notify_account(
+            pool.clone(),
+            subject.to_owned(),
+            caller.account_id.clone(),
+            json!({
+                "kind": "approval",
+                "node": node,
+                "count": new.len(),
+                "agent": first.agent_id,
+                "action": first.action,
+            }),
+        );
+    }
     sqlx::query(
         "INSERT INTO console_node_reports(member_id,account_id,approvals,reported_at) VALUES($1,$2,$3,now()) \
          ON CONFLICT (member_id) DO UPDATE SET approvals=EXCLUDED.approvals, reported_at=now()",

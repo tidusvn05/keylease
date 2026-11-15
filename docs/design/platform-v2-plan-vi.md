@@ -392,7 +392,7 @@ cho tới khi PR trước được merge.
 |---|---|---|
 | P0 | #13 plan + console, #14 bỏ LeaseGate, #15 remote MCP, #16 keylease-server + deploy, #17 tách module service | |
 | P1 | #18 environment/Personal/tham chiếu tên, #19 bundle age + `.env`/CSV, #20 dependency, #21 HTTP proxy base-URL (ADR 0007), #22 HTTPS_PROXY/MITM | |
-| P2 | #23 đăng nhập console + passkey (ADR 0008), #24 sync thiết bị (ADR 0009), #25 console v1 | Web Push, approval/audit trên console: chưa |
+| P2 | #23 đăng nhập console + passkey (ADR 0008), #24 sync thiết bị (ADR 0009), #25 console v1, #37 duyệt bằng passkey + audit của node trên console (ADR 0011), #38 Web Push | |
 | P3 | #26 tổ chức + phân quyền, #27 Managed + KMS (ADR 0010), #28 change request, #29 SSO OIDC | |
 | P4 | #30 machine identity + `keylease ci run`, #31 GitHub Action + access key cho ESO | |
 | P5 | #32 MCP Gateway, #33 proxy base-URL phía server + PostgreSQL động | MySQL, proxy MCP upstream (OAuth), duyệt từng lần gọi: chưa |

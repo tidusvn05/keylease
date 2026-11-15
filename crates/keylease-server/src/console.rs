@@ -74,6 +74,13 @@ impl ConsoleConfig {
         })
     }
 
+    /// The console's origin, when a public URL is set.
+    pub(crate) fn origin(&self) -> Option<&str> {
+        self.relying_party
+            .as_ref()
+            .map(|(_, origin)| origin.as_str())
+    }
+
     pub(crate) fn require(&self) -> ApiResult<(&str, &str)> {
         self.relying_party
             .as_ref()
