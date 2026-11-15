@@ -25,7 +25,7 @@ test("navigates between console pages", async ({ page }) => {
   await mockApi(page, true);
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-  await page.getByRole("button", { name: "EN" }).click();
+  await page.getByRole("button", { name: "EN", exact: true }).click();
   await page.getByRole("link", { name: "Approvals" }).click();
   await expect(page).toHaveURL(/\/approvals$/);
   await expect(page.getByRole("heading", { name: "Approvals" })).toBeVisible();
@@ -63,7 +63,7 @@ test("lists a node's pending approvals", async ({ page }) => {
     }),
   );
   await page.goto("/approvals");
-  await page.getByRole("button", { name: "EN" }).click();
+  await page.getByRole("button", { name: "EN", exact: true }).click();
   await expect(page.getByText("vps-1")).toBeVisible();
   await expect(page.getByText("ssh:sign")).toBeVisible();
   await expect(page.getByText("agent-claude")).toBeVisible();
