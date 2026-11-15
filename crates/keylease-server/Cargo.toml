@@ -31,7 +31,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_json_canonicalizer.workspace = true
 sha2.workspace = true
-sqlx = { workspace = true, default-features = false }
+sqlx = { workspace = true, default-features = false, features = ["mysql"] }
 subtle.workspace = true
 tokio.workspace = true
 tower.workspace = true

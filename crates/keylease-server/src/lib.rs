@@ -21,6 +21,7 @@ mod web_push;
 
 pub use api::{CloudApiConfig, CloudApiState, router};
 pub use console_sso::ConsoleOidc;
+pub use dynamic::{reap_expired_logins, spawn_reaper};
 pub use enterprise::{AuditExportBatch, ScimTokenSecret};
 pub use siem::SiemExporter;
 pub use store::{
