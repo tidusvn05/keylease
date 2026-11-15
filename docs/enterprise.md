@@ -73,8 +73,37 @@ remove the member and their project access (the last owner stays). People
 still join through invites: KeyLease accounts are created by the person's own
 device, so the provider cannot create them.
 
+## Where the KMS root key lives
+
+The root key wraps every Managed project's data keys. By default it is a file
+(`KEYLEASE_KMS_ROOT_KEY_FILE`, 32 bytes in unpadded base64, mode 0600). It can
+instead be wrapped by a key management service or an HSM. In that case only
+the wrapped key is on disk (`KEYLEASE_KMS_WRAPPED_ROOT_KEY_FILE`), and the
+server unwraps it at start and keeps the plaintext key only in memory. The
+start log shows the key's fingerprint, never the key.
+
+| `KEYLEASE_KMS_PROVIDER` | Settings |
+|---|---|
+| `file` (default when the file is set) | `KEYLEASE_KMS_ROOT_KEY_FILE` |
+| `aws` | `AWS_REGION`, `KEYLEASE_AWS_KMS_KEY_ID` (key ID, ARN or alias), optionally `KEYLEASE_AWS_KMS_ENDPOINT` (VPC endpoint). Credentials come from `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`, an ECS task role or an EC2 instance role (IMDSv2). The role needs `kms:Encrypt` (for `init` and `wrap`) and `kms:Decrypt`. |
+| `gcp` | `KEYLEASE_GCP_KMS_KEY` (`projects/P/locations/L/keyRings/R/cryptoKeys/K`). The token comes from `GOOGLE_APPLICATION_CREDENTIALS` (a service account key) or the metadata server (GCE, GKE, Cloud Run). The account needs `roles/cloudkms.cryptoKeyEncrypterDecrypter`. |
+| `pkcs11` | `KEYLEASE_PKCS11_MODULE` (the vendor's PKCS#11 library), `KEYLEASE_PKCS11_TOKEN_LABEL`, `KEYLEASE_PKCS11_PIN_FILE` (mode 0600) and `KEYLEASE_PKCS11_KEY_LABEL` (an AES key on the token, used with AES-GCM). The server image is built with PKCS#11 support. A source build needs `--features pkcs11`. |
+
+With the provider's variables set:
+
+```sh
+keylease-server kms init                       # new deployment: a new root key, written wrapped
+keylease-server kms wrap /etc/keylease/kms_root_key   # move an existing file key to the provider
+keylease-server kms check                      # unwraps and prints the fingerprint
+```
+
+`init` and `wrap` never overwrite a wrapped file, and they check that the
+provider gives the same key back. After `wrap`, start the server with the
+provider and check that the fingerprint is unchanged. Then keep an offline
+copy of the old file key somewhere separate (losing both it and the
+provider's key loses every Managed secret), and remove it from the server.
+
 ## Not yet
 
-- Hardware security modules (PKCS#11) and cloud KMS providers for the root key.
 - Managed nodes: nodes receiving signed policy from the server (the earlier
   edge node covers part of this).

@@ -8,6 +8,7 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cryptoki = { version = "0.12", optional = true }
 aes-gcm = "0.10"
 p256 = { version = "0.13", features = ["ecdh", "ecdsa"] }
 anyhow.workspace = true
@@ -41,6 +42,11 @@ tracing-subscriber.workspace = true
 url.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
+
+[features]
+# Root key in a hardware security module (PKCS#11). Needs the vendor's
+# PKCS#11 library at run time.
+pkcs11 = ["dep:cryptoki"]
 
 [dev-dependencies]
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "std"] }

@@ -396,7 +396,7 @@ cho tới khi PR trước được merge.
 | P3 | #26 tổ chức + phân quyền, #27 Managed + KMS (ADR 0010), #28 change request, #29 SSO OIDC | |
 | P4 | #30 machine identity + `keylease ci run`, #31 GitHub Action + access key cho ESO | |
 | P5 | #32 MCP Gateway, #33 proxy base-URL phía server + PostgreSQL động, #39 MySQL động + dọn login hết hạn, #40 duyệt từng lần gọi qua gateway, #41 MCP server upstream (OAuth) | |
-| P6 | #34 KMS API, xuất audit (JSONL/syslog), SCIM (thu hồi) #42 đẩy audit sang SIEM | PKCS#11/HSM, KMS cloud, managed node: chưa |
+| P6 | #34 KMS API, xuất audit (JSONL/syslog), SCIM (thu hồi), #42 đẩy audit sang SIEM, #43 root key qua AWS KMS / Cloud KMS / PKCS#11 | managed node: chưa |
 
 Chưa làm vì cần môi trường khác: app macOS/mobile (Swift, Kotlin/Flutter không
 build được trên máy Linux này), UI app cho các tính năng mới.

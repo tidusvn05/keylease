@@ -42,6 +42,16 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      # The root key in a hardware security module, against SoftHSM.
+      - name: PKCS#11 (SoftHSM)
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q softhsm2
+          mkdir -p "$RUNNER_TEMP/softhsm/tokens"
+          printf 'directories.tokendir = %s/softhsm/tokens\nobjectstore.backend = file\n' "$RUNNER_TEMP" > "$RUNNER_TEMP/softhsm/softhsm2.conf"
+          export SOFTHSM2_CONF="$RUNNER_TEMP/softhsm/softhsm2.conf"
+          softhsm2-util --init-token --free --label keylease-test --pin 1234 --so-pin 4321
+          cargo clippy -p keylease-server --features pkcs11 --all-targets -- -D warnings
+          KEYLEASE_TEST_PKCS11_MODULE=/usr/lib/softhsm/libsofthsm2.so cargo test -p keylease-server --features pkcs11 --test kms_providers
 
   console:
     runs-on: ubuntu-latest
