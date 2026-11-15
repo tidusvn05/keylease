@@ -4,18 +4,20 @@ One tag `vX.Y.Z` on `main` produces everything a release ships:
 
 | Output | For | Made by |
 |---|---|---|
-| **GitHub release**: release notes (no attached binaries) | people following releases | `Release` workflow, job `release` |
+| **GitHub release**: release notes | people following releases | `Release` workflow, job `release` |
+| **Binaries** `keylease-X.Y.Z-<target>.tar.gz` (+ `.sha256`, `SHA256SUMS`): `keylease` and `keylease-server` with the console inside, for x86_64/aarch64 Linux (glibc 2.35+) and macOS | `install.sh` ([server-quick-install.md](server-quick-install.md)) | jobs `binaries` (`.github/workflows/binaries.yml`, also run on pull requests that touch it) and `attach` |
 | **crates.io**: `keylease` and the libraries it needs, at `X.Y.Z` | `cargo install --locked keylease`, and Rust code that embeds the vault | job `crates`, `scripts/release.py publish` with a short-lived Trusted Publishing token |
 | **Container images** `ghcr.io/tidusvn05/keylease-server:X.Y.Z` and `ghcr.io/tidusvn05/keylease-edge:X.Y.Z` (and `latest`) | the single-VPS KeyLease Cloud + Edge deployment ([self-hosted-vps.md](self-hosted-vps.md)) | job `image`, from `deploy/compose/Dockerfile.server` and `Dockerfile.edge` |
 
-crates.io is the primary output: users install with `cargo install --locked keylease`. GitHub
+Most users install the binaries with `install.sh`; `cargo install --locked keylease` builds from crates.io. GitHub
 attaches the source archives of the tag to the release. A pre-release tag `vX.Y.Z-rc.N` makes
-only a GitHub pre-release: no crates, no images.
+only a GitHub pre-release with its binaries: no crates, no images.
 
-What is **not** released here: prebuilt `keylease` binaries, the macOS app (built from source
+What is **not** released here: the macOS app (built from source
 with `scripts/package-macos-swift.sh`, see [below](#the-macos-app)), the Android app, the
 approval web app (its image bakes in a Cloud URL, so each deployment builds it). Releases
-v0.2.0 and v0.2.1 still attached Linux and macOS archives and a DMG; later ones do not.
+v0.2.0 and v0.2.1 attached Linux and macOS archives and a DMG; 0.3.0 attached none; from
+0.4.0 the binaries above are attached again.
 
 ## Versioning
 

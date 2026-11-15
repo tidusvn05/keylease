@@ -67,14 +67,16 @@ Step-by-step guides, with what is and is not implemented, are in
 
 ## Install
 
-With Rust 1.94+ ([rustup](https://rustup.rs)), on Linux or macOS:
+On Linux or macOS (prebuilt, verified, into `~/.local/bin`):
 
 ```sh
-cargo install --locked keylease
+curl -fsSL https://raw.githubusercontent.com/tidusvn05/keylease/main/install.sh | sh
 ```
 
-This builds `keylease` from crates.io into `~/.cargo/bin`. Releases do not ship
-prebuilt binaries or apps; build the macOS app yourself (below).
+Add `-s -- --server` to also run a KeyLease server on that machine
+([details](docs/server-quick-install.md)). With Rust 1.94+ you can instead
+build from crates.io: `cargo install --locked keylease`. The macOS app is built
+from source (below).
 Releases: [GitHub](https://github.com/tidusvn05/keylease/releases) ·
 [how they are made](docs/releasing.md).
 
@@ -239,7 +241,9 @@ and the macOS/provider checks that must happen in their real environments.
 The repository also contains a self-hosted control plane and edge node for
 running agents against SaaS connectors with signed policy bundles: Cloud API
 and worker, the edge node with an MCP endpoint and dynamic credentials,
-and the KeyLease Console (`apps/console`). To run it on one VPS, follow
+and the KeyLease Console (`apps/console`). To try it on one machine with two
+commands and no Docker, see [`docs/server-quick-install.md`](docs/server-quick-install.md);
+for the full Docker stack on a VPS, follow
 [`docs/self-hosted-vps.md`](docs/self-hosted-vps.md).
 
 This work was built in phases from

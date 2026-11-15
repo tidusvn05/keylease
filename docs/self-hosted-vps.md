@@ -1,5 +1,7 @@
 # Self-host KeyLease all-in-one on one VPS
 
+To try the server without Docker, see [server-quick-install.md](server-quick-install.md).
+
 This profile runs on one Linux VPS with Docker Engine, Compose v2, a DNS name
 pointing to the VPS, and inbound TCP 80/443. It is suitable for a personal or
 beta installation; it is not highly available.

@@ -7,8 +7,43 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 use zeroize::Zeroizing;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+mod setup;
+
+fn main() -> Result<()> {
+    // Before the runtime starts any thread: setup's server.env becomes the
+    // environment unless it is already set.
+    if !matches!(
+        env::args().nth(1).as_deref(),
+        Some("setup" | "status" | "uninstall" | "-h" | "--help" | "help")
+    ) {
+        setup::load_env_file()?;
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("start the async runtime")?
+        .block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
+    match env::args().nth(1).as_deref() {
+        Some("setup") => return setup::run(env::args().skip(2).collect()).await,
+        Some("status") => return setup::status(env::args().skip(2).collect()).await,
+        Some("uninstall") => return setup::uninstall(env::args().skip(2).collect()),
+        Some("-h" | "--help" | "help") => {
+            println!(
+                "keylease-server — the self-hosted KeyLease server\n\n\
+                 \x20 keylease-server setup       install: secrets, a private PostgreSQL, a service\n\
+                 \x20 keylease-server status      is it running, and where\n\
+                 \x20 keylease-server uninstall   stop and remove the service (data is kept)\n\
+                 \x20 keylease-server             run in the foreground (what the service runs)\n\
+                 \x20 keylease-server migrate | healthcheck | kms …\n\n\
+                 Docs: https://github.com/tidusvn05/keylease/blob/main/docs/server-quick-install.md"
+            );
+            return Ok(());
+        }
+        _ => {}
+    }
     if env::args().nth(1).as_deref() == Some("healthcheck") {
         return local_healthcheck().await;
     }
@@ -22,6 +57,7 @@ async fn main() -> Result<()> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .json()
         .init();
+    setup::ensure_postgres()?;
     let database_url = read_secret_text(
         Path::new(&required_env("KEYLEASE_DATABASE_URL_FILE")?),
         4096,
@@ -107,6 +143,7 @@ async fn main() -> Result<()> {
 }
 
 async fn migrate_only() -> Result<()> {
+    setup::ensure_postgres()?;
     let database_url = read_secret_text(
         Path::new(&required_env("KEYLEASE_DATABASE_URL_FILE")?),
         4096,

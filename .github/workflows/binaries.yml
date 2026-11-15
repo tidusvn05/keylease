@@ -1,0 +1,77 @@
+name: Binaries
+
+# Prebuilt `keylease` and `keylease-server` (with the KeyLease Console inside)
+# for Linux and macOS, as one archive per platform plus a .sha256 file. The
+# release workflow calls this and attaches the archives; `install.sh`
+# downloads them. Pull requests that touch the packaging run it as a check.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The tag or commit to build.
+        type: string
+        required: true
+      version:
+        description: The version in the archive names (no leading v).
+        type: string
+        required: true
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/binaries.yml
+      - scripts/package-binaries.sh
+      - install.sh
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Built on the oldest supported Ubuntu so the binaries run on
+          # glibc 2.35 and newer (Ubuntu 22.04, Debian 12, RHEL 9…).
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
+          - { target: aarch64-apple-darwin, os: macos-15 }
+          - { target: x86_64-apple-darwin, os: macos-15-intel }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: apps/console/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: apps/console/.nvmrc
+          cache: pnpm
+          cache-dependency-path: apps/console/pnpm-lock.yaml
+      - name: Build the console (embedded into keylease-server)
+        working-directory: apps/console
+        run: pnpm install --frozen-lockfile && pnpm build
+      - run: rustup show active-toolchain || rustup toolchain install
+      - name: Build
+        # pkcs11: the HSM vendor's library is only loaded when configured.
+        run: cargo build --locked --release -p keylease -p keylease-server --features keylease-server/pkcs11
+      - name: Package
+        run: scripts/package-binaries.sh "${{ inputs.version || '0.0.0-dev' }}" "${{ matrix.target }}" target/release dist
+      - name: Smoke test
+        run: |
+          mkdir smoke && tar -xzf dist/*.tar.gz -C smoke
+          smoke/*/keylease --version
+          smoke/*/keylease-server setup --help
+      - uses: actions/upload-artifact@v7
+        with:
+          name: binaries-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
