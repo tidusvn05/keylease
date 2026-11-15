@@ -1930,6 +1930,180 @@
           }
         }
       }
+    },
+    "/v1/console/approvals": {
+      "get": {
+        "operationId": "listApprovals",
+        "summary": "Pending approvals reported by the account's nodes, and recent console decisions",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalsOverview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/console/approvals/challenge": {
+      "post": {
+        "operationId": "approvalChallenge",
+        "summary": "The payload and passkey challenge for one decision",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "member_id",
+                  "approval_id",
+                  "approve"
+                ],
+                "properties": {
+                  "member_id": {
+                    "type": "string"
+                  },
+                  "approval_id": {
+                    "type": "string"
+                  },
+                  "approve": {
+                    "type": "boolean"
+                  },
+                  "trust": {
+                    "$ref": "#/components/schemas/TrustDecision"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionOptions"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/console/approvals/decide": {
+      "post": {
+        "operationId": "approvalDecide",
+        "summary": "Queue a passkey-signed decision for the node",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "payload",
+                  "assertion"
+                ],
+                "properties": {
+                  "payload": {
+                    "type": "string"
+                  },
+                  "assertion": {
+                    "type": "object",
+                    "required": [
+                      "credential_id",
+                      "client_data_json",
+                      "authenticator_data",
+                      "signature"
+                    ],
+                    "properties": {
+                      "credential_id": {
+                        "type": "string"
+                      },
+                      "client_data_json": {
+                        "type": "string"
+                      },
+                      "authenticator_data": {
+                        "type": "string"
+                      },
+                      "signature": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "decision_id"
+                  ],
+                  "properties": {
+                    "decision_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/console/audit": {
+      "get": {
+        "operationId": "listNodeAudit",
+        "summary": "Audit events uploaded by the account's nodes, newest first",
+        "parameters": [
+          {
+            "name": "member",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeAuditPage"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2405,6 +2579,355 @@
                 }
               }
             }
+          }
+        }
+      },
+      "PendingApproval": {
+        "type": "object",
+        "required": [
+          "id",
+          "request_digest_hex",
+          "policy_version",
+          "state",
+          "expires_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "request_digest_hex": {
+            "type": "string"
+          },
+          "policy_version": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "risk": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "purpose": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "semantic_summary": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "operation": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              },
+              "blast_radius": {
+                "type": "string"
+              },
+              "changed_fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "NodeApprovals": {
+        "type": "object",
+        "required": [
+          "member_id",
+          "name",
+          "role",
+          "reported_at",
+          "approvals"
+        ],
+        "properties": {
+          "member_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "reported_at": {
+            "type": "string"
+          },
+          "approvals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PendingApproval"
+            }
+          }
+        }
+      },
+      "ConsoleDecision": {
+        "type": "object",
+        "required": [
+          "decision_id",
+          "member_id",
+          "approval_id",
+          "approve",
+          "passkey_name",
+          "created_at"
+        ],
+        "properties": {
+          "decision_id": {
+            "type": "string"
+          },
+          "member_id": {
+            "type": "string"
+          },
+          "approval_id": {
+            "type": "string"
+          },
+          "approve": {
+            "type": "boolean"
+          },
+          "passkey_name": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "delivered_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "approved",
+              "denied",
+              "rejected",
+              null
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolved_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ApprovalsOverview": {
+        "type": "object",
+        "required": [
+          "nodes",
+          "decisions"
+        ],
+        "properties": {
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeApprovals"
+            }
+          },
+          "decisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsoleDecision"
+            }
+          }
+        }
+      },
+      "TrustDecision": {
+        "type": "object",
+        "required": [
+          "scope",
+          "duration"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "resource",
+              "item",
+              "project"
+            ]
+          },
+          "duration": {
+            "type": "string",
+            "enum": [
+              "once",
+              "30m",
+              "1h",
+              "6h",
+              "1d",
+              "3d",
+              "7d"
+            ]
+          }
+        }
+      },
+      "DecisionOptions": {
+        "type": "object",
+        "required": [
+          "challenge",
+          "payload",
+          "rp_id",
+          "allow_credentials"
+        ],
+        "properties": {
+          "challenge": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "string"
+          },
+          "rp_id": {
+            "type": "string"
+          },
+          "allow_credentials": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "NodeAuditEvent": {
+        "type": "object",
+        "required": [
+          "member_id",
+          "node",
+          "seq",
+          "event"
+        ],
+        "properties": {
+          "member_id": {
+            "type": "string"
+          },
+          "node": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "event": {
+            "type": "object",
+            "required": [
+              "timestamp",
+              "agent_id",
+              "action",
+              "resource",
+              "decision",
+              "outcome"
+            ],
+            "properties": {
+              "timestamp": {
+                "type": "string"
+              },
+              "agent_id": {
+                "type": "string"
+              },
+              "action": {
+                "type": "string"
+              },
+              "resource": {
+                "type": "string"
+              },
+              "decision": {
+                "type": "string"
+              },
+              "outcome": {
+                "type": "string"
+              },
+              "trust_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "workload_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "on_behalf_of": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "NodeAuditPage": {
+        "type": "object",
+        "required": [
+          "events",
+          "next"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeAuditEvent"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       }

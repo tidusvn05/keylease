@@ -70,3 +70,14 @@ export const ssoQuery = queryOptions({
   },
   retry: false,
 });
+
+export const approvalsQuery = queryOptions({
+  queryKey: ["approvals"],
+  queryFn: async () => {
+    const { data } = await api.GET("/v1/console/approvals");
+    if (data === undefined) throw new Error("could not load approvals");
+    return data;
+  },
+  // Nodes report every few seconds; agents wait on these.
+  refetchInterval: 5_000,
+});

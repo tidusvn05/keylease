@@ -39,4 +39,5 @@ pbkdf2 = "0.12"
 age = { version = "0.12.1", features = ["armor"] }
 
 [dev-dependencies]
+p256 = { version = "0.13", features = ["ecdsa", "std"] }
 tempfile.workspace = true

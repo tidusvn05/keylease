@@ -38,6 +38,7 @@ mod bundle;
 pub mod client_key;
 mod cloud;
 mod connections;
+mod console_approvals;
 mod db;
 mod environments;
 mod http;
@@ -64,6 +65,7 @@ pub use cloud::{
     InviteSetup, OwnerSetup, PendingBackup, RelaySignature, RequestStatus, RestoreReport,
     ShareScope,
 };
+pub use console_approvals::ConsoleApprovalsConfig;
 pub use db::{DbTarget, ScramClientFinal};
 use environments::*;
 pub use http::{

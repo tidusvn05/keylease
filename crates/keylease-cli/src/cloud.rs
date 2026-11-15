@@ -65,6 +65,10 @@ pub(crate) enum CloudCommand {
     },
     /// Run one sync round now (the daemon does this every minute).
     Sync,
+    /// Let the KeyLease Console decide this vault's pending approvals (signed
+    /// with one of your passkeys) and list its audit.
+    #[command(subcommand)]
+    ConsoleApprovals(crate::console_approvals::ConsoleApprovalsCommand),
     /// Owner: the nodes this device verified.
     Nodes,
     /// Owner: remove a node; its shares end and it can no longer sync.
@@ -171,7 +175,7 @@ impl<'a> Relay<'a> {
         })
     }
 
-    async fn send<T: serde::de::DeserializeOwned>(
+    pub(crate) async fn send<T: serde::de::DeserializeOwned>(
         &self,
         method: Method,
         path: &str,
@@ -214,7 +218,7 @@ impl<'a> Relay<'a> {
         })
     }
 
-    async fn post<B: Serialize, T: serde::de::DeserializeOwned>(
+    pub(crate) async fn post<B: Serialize, T: serde::de::DeserializeOwned>(
         &self,
         path: &str,
         body: &B,
@@ -541,6 +545,9 @@ pub(crate) async fn cloud_command(cli: &Cli, socket: &Path, command: CloudComman
         }
         CloudCommand::Status => print_json(&service.cloud_status()?),
         CloudCommand::Sync => print_json(&sync_once(&service).await?),
+        CloudCommand::ConsoleApprovals(command) => {
+            crate::console_approvals::command(&service, command).await
+        }
         CloudCommand::Nodes => print_json(&service.cloud_nodes()?),
         CloudCommand::Remove { node } => {
             let link = require_link(&service)?;

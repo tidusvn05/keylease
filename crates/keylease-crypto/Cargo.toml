@@ -14,6 +14,7 @@ base64.workspace = true
 chacha20poly1305.workspace = true
 hkdf.workspace = true
 hmac.workspace = true
+p256 = { version = "0.13", features = ["ecdsa"] }
 keylease-core = { path = "../keylease-core", version = "0.3.0" }
 rand.workspace = true
 serde.workspace = true
@@ -23,4 +24,5 @@ x25519-dalek.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+p256 = { version = "0.13", features = ["ecdsa", "std"] }
 tempfile.workspace = true

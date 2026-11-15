@@ -617,6 +617,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/console/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pending approvals reported by the account's nodes, and recent console decisions */
+        get: operations["listApprovals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/console/approvals/challenge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The payload and passkey challenge for one decision */
+        post: operations["approvalChallenge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/console/approvals/decide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Queue a passkey-signed decision for the node */
+        post: operations["approvalDecide"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/console/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Audit events uploaded by the account's nodes, newest first */
+        get: operations["listNodeAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -735,6 +803,82 @@ export interface components {
                 requested_by: string;
                 requested_at: string;
             }[];
+        };
+        PendingApproval: {
+            id: string;
+            request_digest_hex: string;
+            policy_version: number;
+            state: string;
+            expires_at: string;
+            agent_id?: string | null;
+            action?: string | null;
+            resource?: string | null;
+            created_at?: string | null;
+            risk?: string | null;
+            purpose?: string | null;
+            project_id?: string | null;
+            semantic_summary?: {
+                operation?: string;
+                target?: string;
+                blast_radius?: string;
+                changed_fields?: string[];
+            } | null;
+        };
+        NodeApprovals: {
+            member_id: string;
+            name: string;
+            role: string;
+            reported_at: string;
+            approvals: components["schemas"]["PendingApproval"][];
+        };
+        ConsoleDecision: {
+            decision_id: string;
+            member_id: string;
+            approval_id: string;
+            approve: boolean;
+            passkey_name: string;
+            created_at: string;
+            delivered_at?: string | null;
+            /** @enum {string|null} */
+            outcome?: "approved" | "denied" | "rejected" | null;
+            reason?: string | null;
+            resolved_at?: string | null;
+        };
+        ApprovalsOverview: {
+            nodes: components["schemas"]["NodeApprovals"][];
+            decisions: components["schemas"]["ConsoleDecision"][];
+        };
+        TrustDecision: {
+            /** @enum {string} */
+            scope: "resource" | "item" | "project";
+            /** @enum {string} */
+            duration: "once" | "30m" | "1h" | "6h" | "1d" | "3d" | "7d";
+        };
+        DecisionOptions: {
+            challenge: string;
+            payload: string;
+            rp_id: string;
+            allow_credentials: string[];
+        };
+        NodeAuditEvent: {
+            member_id: string;
+            node: string;
+            seq: number;
+            event: {
+                timestamp: string;
+                agent_id: string;
+                action: string;
+                resource: string;
+                decision: string;
+                outcome: string;
+                trust_id?: string | null;
+                workload_id?: string | null;
+                on_behalf_of?: string | null;
+            };
+        };
+        NodeAuditPage: {
+            events: components["schemas"]["NodeAuditEvent"][];
+            next: string | null;
         };
     };
     responses: never;
@@ -1875,6 +2019,113 @@ export interface operations {
                 };
                 content: {
                     "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    listApprovals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalsOverview"];
+                };
+            };
+        };
+    };
+    approvalChallenge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    member_id: string;
+                    approval_id: string;
+                    approve: boolean;
+                    trust?: components["schemas"]["TrustDecision"];
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionOptions"];
+                };
+            };
+        };
+    };
+    approvalDecide: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    payload: string;
+                    assertion: {
+                        credential_id: string;
+                        client_data_json: string;
+                        authenticator_data: string;
+                        signature: string;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        decision_id: string;
+                    };
+                };
+            };
+        };
+    };
+    listNodeAudit: {
+        parameters: {
+            query?: {
+                member?: string;
+                before?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeAuditPage"];
                 };
             };
         };

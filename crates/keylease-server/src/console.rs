@@ -14,7 +14,6 @@
 
 use crate::api::{ApiError, ApiResult, CloudApiState};
 use crate::relay::{Caller, denied, invalid, parse, storage, verify};
-use crate::webauthn;
 use axum::{
     Json, Router,
     body::Bytes,
@@ -29,6 +28,7 @@ use base64::{
 };
 use chrono::{DateTime, Duration, Utc};
 use keylease_core::{KeyLeaseError, relay::RelayRole};
+use keylease_crypto::webauthn;
 use rand::RngCore;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -74,7 +74,7 @@ impl ConsoleConfig {
         })
     }
 
-    fn require(&self) -> ApiResult<(&str, &str)> {
+    pub(crate) fn require(&self) -> ApiResult<(&str, &str)> {
         self.relying_party
             .as_ref()
             .map(|(id, origin)| (id.as_str(), origin.as_str()))

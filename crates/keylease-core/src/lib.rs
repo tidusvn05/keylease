@@ -3,6 +3,7 @@
 mod action;
 mod audit;
 mod connection;
+pub mod console;
 mod domain;
 mod error;
 mod identity;

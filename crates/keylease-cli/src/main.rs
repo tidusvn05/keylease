@@ -33,6 +33,7 @@ mod backend;
 mod bundle;
 mod ci;
 mod cloud;
+mod console_approvals;
 mod db_proxy;
 mod http_mitm;
 mod http_proxy;
@@ -3138,6 +3139,7 @@ async fn serve(
         });
     }
     cloud::spawn_sync_loop(service.clone());
+    console_approvals::spawn_loop(service.clone());
     notify::spawn_notifier(service.clone(), db.to_path_buf());
     if let Some(parent) = socket.parent() {
         create_private_dir(parent)?;
