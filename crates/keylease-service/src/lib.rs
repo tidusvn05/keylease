@@ -46,6 +46,7 @@ mod identity;
 mod inject;
 mod items;
 mod leases;
+mod org_policy;
 mod owner_rules;
 mod password;
 mod remote;
@@ -73,6 +74,7 @@ pub use http::{
 };
 pub use inject::InjectRequest;
 use items::*;
+pub use org_policy::OrgMembership;
 use owner_rules::*;
 pub use password::*;
 pub use remote::{APPROVER_SIGNATURE_CONTEXT, ApproverDevice, PairingCode, approver_signing_input};

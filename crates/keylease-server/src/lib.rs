@@ -16,6 +16,7 @@ mod gateway_upstream;
 pub mod kms_root;
 mod machine;
 mod managed;
+mod managed_nodes;
 mod oidc;
 mod relay;
 mod siem;
