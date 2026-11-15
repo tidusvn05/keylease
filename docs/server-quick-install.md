@@ -1,18 +1,25 @@
-# Install keylease-server on one machine
+# Install keylease-server
 
-For trying the server, a team on one machine, or a VPS where you do not want
-Docker. Two commands from a checkout; no root needed.
+One command on Linux or macOS. No root, no Docker, no Rust.
 
 ```sh
-git clone https://github.com/tidusvn05/keylease.git && cd keylease
-scripts/install-server.sh --with-cli
+curl -fsSL https://raw.githubusercontent.com/tidusvn05/keylease/main/install.sh | sh -s -- --server
 ```
 
-The script builds the KeyLease Console and `keylease-server` (and, with
-`--with-cli`, the `keylease` CLI) into `~/.local/bin`, then runs
-`keylease-server setup`. Setup needs PostgreSQL's programs installed
-(`apt install postgresql`, `brew install postgresql@17`), not a running
-database. It prints where everything is and what to run next:
+You need PostgreSQL's programs installed, not a running database: the server
+runs its own private one. If they are missing, the installer stops before
+downloading anything and prints the command for your system:
+
+| System | Command |
+|---|---|
+| Debian, Ubuntu | `sudo apt install postgresql` |
+| Fedora, RHEL | `sudo dnf install postgresql-server` |
+| Arch | `sudo pacman -S postgresql` |
+| macOS | `brew install postgresql@17` |
+
+The installer puts `keylease` and `keylease-server` in `~/.local/bin` (after
+checking the download's SHA-256), then runs `keylease-server setup`, which
+starts the server as a service and prints what to do next:
 
 ```text
 KeyLease server is set up in ~/.local/share/keylease-server
@@ -22,31 +29,59 @@ KeyLease server is set up in ~/.local/share/keylease-server
   Database:    private PostgreSQL in ~/.local/share/keylease-server/pg (Unix socket only)
 ```
 
-Then link your vault as the owner and open the console:
+Then make your vault the owner and sign in to the console:
 
 ```sh
+keylease vault init        # once, if you have no vault yet
 keylease cloud init --url http://localhost:8080 --admin-token-file ~/.local/share/keylease-server/secrets/admin_token
-keylease cloud console
+keylease cloud console     # prints a one-time sign-in link
 ```
+
+## Day to day
+
+```sh
+keylease-server status       # running or not, the console address, the admin token file
+keylease-server uninstall    # stop and remove the service; your data stays
+```
+
+Upgrade by running the install command again: the binaries are replaced,
+setup keeps the secrets and the database, the service restarts and the
+database is migrated.
+
+Logs: `journalctl --user -u keylease-server -f` on Linux,
+`~/.local/share/keylease-server/server.log` on macOS.
+
+A Linux user service stops at logout unless lingering is on. Setup tells you
+when it is off; turn it on with `sudo loginctl enable-linger $USER`.
+
+## Options
+
+Pass them after `--server`, or to `keylease-server setup` directly:
+
+| Option | Default | |
+|---|---|---|
+| `--listen ADDR:PORT` | `127.0.0.1:8080` | Setup stops early and suggests a free port when this one is taken. |
+| `--public-url URL` | `http://localhost:PORT` | The address browsers and vaults use. Set it when a reverse proxy serves a real name. |
+| `--database-url-file FILE` | a private cluster | Use a PostgreSQL you already run (a file holding its URL). |
+| `--dir DIR` | `~/.local/share/keylease-server` | Where the secrets, database and settings live. |
+| `--no-service` | | Only prepare; start it yourself with `keylease-server`. |
+
+The installer also takes `--version X.Y.Z` and `--bin-dir DIR`.
 
 ## What setup does
 
-- Generates the admin token, control signing key and KMS root key, mode 0600,
-  in `secrets/`. They are kept when setup runs again. **Back up
-  `secrets/kms_root_key` elsewhere**: Managed secrets cannot be decrypted
+- Generates the admin token, control signing key and KMS root key (mode 0600)
+  in `secrets/`. Running setup again keeps them. **Back up
+  `secrets/kms_root_key` somewhere else**: Managed secrets cannot be decrypted
   without it.
 - Creates a private PostgreSQL cluster in `pg/` that listens only on a Unix
-  socket inside that mode-0700 directory, and a `keylease` database. With
-  `--database-url-file FILE` it uses your database instead.
+  socket inside that mode-0700 directory: no network port, nothing for other
+  users to reach.
 - Writes `server.env`. A bare `keylease-server` reads it, starts the private
-  PostgreSQL if it is down, runs the migrations and serves.
-- On Linux with systemd, installs and starts `keylease-server.service` (a user
-  service; a system service when run as root with `--database-url-file`).
-  Elsewhere it prints the command to run.
-
-Options: `--listen ADDR:PORT` (default `127.0.0.1:8080`), `--public-url URL`
-(the address browsers and vaults use; default `http://localhost:PORT`),
-`--dir DIR`, `--database-url-file FILE`, `--no-service`.
+  PostgreSQL if it is down, migrates and serves.
+- Installs the service: a systemd user unit on Linux (a system unit when run
+  as root, which needs `--database-url-file`), a launchd agent on macOS. It
+  will not replace a service that belongs to another install directory.
 
 ## Reaching it from another computer
 
@@ -59,7 +94,7 @@ ssh -N -L 8080:127.0.0.1:8080 you@server     # then open http://localhost:8080/c
 Passkeys work through the tunnel because the browser sees `localhost`. For a
 real name, put a TLS reverse proxy in front and run setup again with
 `--public-url https://keys.example.com` (passkeys registered on `localhost`
-then need registering again):
+need registering again):
 
 ```text
 keys.example.com {
@@ -67,16 +102,15 @@ keys.example.com {
 }
 ```
 
-## Operate
+## From source
+
+For unreleased changes, or when no binary fits your platform (releases before
+0.4.0, musl systems, glibc older than 2.35):
 
 ```sh
-systemctl --user status keylease-server      # state; journalctl --user -u keylease-server -f for logs
-systemctl --user restart keylease-server     # after upgrading: scripts/install-server.sh again does this
-systemctl --user disable --now keylease-server   # stop it; data stays in ~/.local/share/keylease-server
+git clone https://github.com/tidusvn05/keylease.git && cd keylease
+scripts/install-server.sh            # needs Rust and Node.js; options for setup go after --
 ```
-
-A user service stops at logout unless lingering is on
-(`sudo loginctl enable-linger $USER`); setup says so when it is off.
 
 For the full Docker stack with backups, upgrades and the edge node, see
 [self-hosted-vps.md](self-hosted-vps.md).

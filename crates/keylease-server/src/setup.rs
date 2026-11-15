@@ -10,6 +10,7 @@
 //! The server reads the same directory at start ([`load_env_file`]), so a
 //! bare `keylease-server` runs what setup prepared, and [`ensure_postgres`]
 //! starts the private cluster first when `server.env` names one.
+//! `keylease-server status` and `uninstall` read the same directory.
 
 use anyhow::{Context, Result, bail};
 use base64::{
@@ -45,7 +46,10 @@ fn usage() -> &'static str {
      \n\
      Generates the secrets, prepares PostgreSQL (a private cluster in DIR unless\n\
      --database-url-file is given), writes DIR/server.env and starts the server\n\
-     as a systemd service. Safe to run again: secrets and data are kept."
+     as a service (systemd, or launchd on macOS). Safe to run again: secrets\n\
+     and data are kept.\n\
+     \n\
+     Later:  keylease-server status | keylease-server uninstall"
 }
 
 /// The directory setup uses when none is given.
@@ -119,6 +123,14 @@ fn parse(args: Vec<String>) -> Result<Options> {
 pub async fn run(args: Vec<String>) -> Result<()> {
     let options = parse(args)?;
     let dir = &options.dir;
+    check_port(options.listen).await?;
+    if options.service {
+        if cfg!(target_os = "macos") {
+            refuse_foreign_service(&launchd_plist()?, dir)?;
+        } else if has_systemd() {
+            refuse_foreign_service(&systemd_unit_path()?, dir)?;
+        }
+    }
     create_private_dir(dir)?;
     let secrets = dir.join("secrets");
     create_private_dir(&secrets)?;
@@ -180,7 +192,13 @@ pub async fn run(args: Vec<String>) -> Result<()> {
     write_secret(&dir.join(ENV_FILE), &env_text)?;
 
     let binary = env::current_exe().context("locate keylease-server")?;
-    let started = if options.service && has_systemd() {
+    let started = if options.service && cfg!(target_os = "macos") {
+        if let Some(cluster) = &postgres {
+            stop_cluster(cluster)?;
+        }
+        install_launchd(&binary, dir)?;
+        wait_ready(options.listen).await
+    } else if options.service && has_systemd() {
         // Hand the cluster to the service, which starts it in its own cgroup.
         if let Some(cluster) = &postgres {
             stop_cluster(cluster)?;
@@ -194,13 +212,13 @@ pub async fn run(args: Vec<String>) -> Result<()> {
     println!();
     println!("KeyLease server is set up in {}", dir.display());
     if started {
-        println!("  Running:     {SERVICE} ({})", service_scope_hint());
-    } else if options.service && !has_systemd() {
+        println!("  Running:     {}", service_scope_hint());
+    } else if options.service && !has_systemd() && !cfg!(target_os = "macos") {
         println!("  No systemd here. Start it with:  {}", binary.display());
     } else if options.service {
         println!(
-            "  The service did not answer yet. Check: journalctl {}-u keylease-server -e",
-            if is_root() { "" } else { "--user " }
+            "  The service did not answer yet. Check:  {}",
+            log_hint(dir)
         );
     } else {
         println!("  Start it with:  {}", binary.display());
@@ -377,11 +395,14 @@ async fn prepare_postgres(dir: &Path) -> Result<Cluster> {
              or pass --database-url-file with a URL to an existing database."
         );
     }
-    let bin = find_postgres_bin().context(
-        "PostgreSQL is not installed (no initdb/pg_ctl found). Install it \
-         (Debian/Ubuntu: apt install postgresql; macOS: brew install postgresql@17), \
-         or pass --database-url-file with a URL to an existing database.",
-    )?;
+    let Some(bin) = find_postgres_bin() else {
+        bail!(
+            "the server needs PostgreSQL's programs (it runs its own private database with them).\n\
+             \x20 Install them, then run setup again:  {}\n\
+             \x20 Or use a database you already have:  --database-url-file FILE",
+            postgres_install_hint()
+        );
+    };
     let data = dir.join("pg");
     let cluster = Cluster {
         data: data.clone(),
@@ -515,6 +536,43 @@ pub fn ensure_postgres() -> Result<()> {
 
 // ---- service -----------------------------------------------------------------
 
+/// Whether a service definition (unit or plist) at `path` belongs to the
+/// install in `dir`. One machine has one service; it names its directory.
+fn service_owner_is(path: &Path, dir: &Path) -> bool {
+    let env_file = dir.join(ENV_FILE);
+    fs::read_to_string(path).is_ok_and(|text| {
+        text.contains(&format!("EnvironmentFile={}\n", env_file.display()))
+            || text.contains(&format!(
+                "<string>{}</string>",
+                xml_escape(&dir.to_string_lossy())
+            ))
+    })
+}
+
+fn refuse_foreign_service(path: &Path, dir: &Path) -> Result<()> {
+    if path.exists() && !service_owner_is(path, dir) {
+        bail!(
+            "{} already runs another KeyLease server install.\n\
+             \x20 Use --no-service for this one, or remove the other first:  keylease-server uninstall --dir OTHER_DIR",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+fn systemd_unit_path() -> Result<PathBuf> {
+    if is_root() {
+        return Ok(PathBuf::from("/etc/systemd/system").join(SERVICE));
+    }
+    Ok(env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .context("HOME is not set")?
+        .join("systemd/user")
+        .join(SERVICE))
+}
+
 fn has_systemd() -> bool {
     Path::new("/run/systemd/system").is_dir()
         && Command::new("systemctl")
@@ -524,25 +582,30 @@ fn has_systemd() -> bool {
 }
 
 fn service_scope_hint() -> &'static str {
-    if is_root() {
-        "systemctl status keylease-server"
+    if cfg!(target_os = "macos") {
+        "launchd agent app.keylease.server (keylease-server status)"
+    } else if is_root() {
+        "keylease-server.service (systemctl status keylease-server)"
     } else {
-        "systemctl --user status keylease-server"
+        "keylease-server.service (systemctl --user status keylease-server)"
+    }
+}
+
+fn log_hint(dir: &Path) -> String {
+    if cfg!(target_os = "macos") {
+        format!("tail -f {}", dir.join("server.log").display())
+    } else if is_root() {
+        "journalctl -u keylease-server -e".into()
+    } else {
+        "journalctl --user -u keylease-server -e".into()
     }
 }
 
 fn install_service(binary: &Path, dir: &Path) -> Result<()> {
     let root = is_root();
-    let unit_dir = if root {
-        PathBuf::from("/etc/systemd/system")
-    } else {
-        let config = env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-            .context("HOME is not set")?;
-        config.join("systemd/user")
-    };
+    let unit_path = systemd_unit_path()?;
+    refuse_foreign_service(&unit_path, dir)?;
+    let unit_dir = unit_path.parent().context("unit directory")?.to_path_buf();
     fs::create_dir_all(&unit_dir)?;
     // Postgres is started by the server (pg_ctl) and lives in the service's
     // cgroup: stopping the service sends it SIGTERM too (a clean shutdown).
@@ -569,7 +632,7 @@ fn install_service(binary: &Path, dir: &Path) -> Result<()> {
             "default.target"
         },
     );
-    fs::write(unit_dir.join(SERVICE), unit)?;
+    fs::write(&unit_path, unit)?;
     let systemctl = |args: &[&str]| -> Result<()> {
         let mut command = Command::new("systemctl");
         if !root {
@@ -627,6 +690,265 @@ async fn wait_ready(listen: SocketAddr) -> bool {
     false
 }
 
+// ---- checks ------------------------------------------------------------------
+
+/// Fails early, before anything is written, when another program holds the
+/// port. A KeyLease server already there (setup run again) is fine.
+async fn check_port(listen: SocketAddr) -> Result<()> {
+    if std::net::TcpListener::bind(listen).is_ok() {
+        return Ok(());
+    }
+    if is_keylease_at(listen).await {
+        return Ok(());
+    }
+    let free = (listen.port().saturating_add(1)..listen.port().saturating_add(50))
+        .find(|port| std::net::TcpListener::bind(SocketAddr::new(listen.ip(), *port)).is_ok());
+    match free {
+        Some(port) => bail!(
+            "{listen} is already in use by another program.\n  Choose another port:  keylease-server setup --listen {}:{port}",
+            listen.ip()
+        ),
+        None => {
+            bail!("{listen} is already in use by another program; choose another with --listen")
+        }
+    }
+}
+
+async fn is_keylease_at(listen: SocketAddr) -> bool {
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+    else {
+        return false;
+    };
+    let host = if listen.ip().is_unspecified() {
+        "127.0.0.1".to_owned()
+    } else {
+        listen.ip().to_string()
+    };
+    match client
+        .get(format!("http://{host}:{}/healthz", listen.port()))
+        .send()
+        .await
+    {
+        Ok(response) => response
+            .text()
+            .await
+            .is_ok_and(|body| body.contains("\"keylease-server\"")),
+        Err(_) => false,
+    }
+}
+
+fn postgres_install_hint() -> String {
+    if cfg!(target_os = "macos") {
+        return "brew install postgresql@17".into();
+    }
+    let release = fs::read_to_string("/etc/os-release").unwrap_or_default();
+    let ids: String = release
+        .lines()
+        .filter(|line| line.starts_with("ID=") || line.starts_with("ID_LIKE="))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let hint = if ids.contains("debian") || ids.contains("ubuntu") {
+        "sudo apt install postgresql"
+    } else if ids.contains("fedora") || ids.contains("rhel") || ids.contains("centos") {
+        "sudo dnf install postgresql-server"
+    } else if ids.contains("arch") {
+        "sudo pacman -S postgresql"
+    } else if ids.contains("suse") {
+        "sudo zypper install postgresql-server"
+    } else {
+        "install PostgreSQL 14 or newer with your package manager"
+    };
+    hint.into()
+}
+
+// ---- macOS -------------------------------------------------------------------
+
+const LAUNCHD_LABEL: &str = "app.keylease.server";
+
+fn launchd_plist() -> Result<PathBuf> {
+    let home = env::var_os("HOME").context("HOME is not set")?;
+    Ok(PathBuf::from(home).join(format!("Library/LaunchAgents/{LAUNCHD_LABEL}.plist")))
+}
+
+fn launchd_domain() -> String {
+    let uid = Command::new("id")
+        .arg("-u")
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+        .unwrap_or_default();
+    format!("gui/{uid}")
+}
+
+fn xml_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// A per-user launchd agent: starts at login, restarts on failure.
+fn install_launchd(binary: &Path, dir: &Path) -> Result<()> {
+    let plist = launchd_plist()?;
+    refuse_foreign_service(&plist, dir)?;
+    if let Some(parent) = plist.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let log = dir.join("server.log");
+    fs::write(
+        &plist,
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+             <plist version=\"1.0\">\n<dict>\n\
+             \x20 <key>Label</key><string>{LAUNCHD_LABEL}</string>\n\
+             \x20 <key>ProgramArguments</key><array><string>{binary}</string></array>\n\
+             \x20 <key>EnvironmentVariables</key><dict><key>KEYLEASE_SERVER_DIR</key><string>{dir}</string></dict>\n\
+             \x20 <key>RunAtLoad</key><true/>\n\
+             \x20 <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\n\
+             \x20 <key>StandardOutPath</key><string>{log}</string>\n\
+             \x20 <key>StandardErrorPath</key><string>{log}</string>\n\
+             </dict>\n</plist>\n",
+            binary = xml_escape(&binary.to_string_lossy()),
+            dir = xml_escape(&dir.to_string_lossy()),
+            log = xml_escape(&log.to_string_lossy()),
+        ),
+    )?;
+    let domain = launchd_domain();
+    // Replace a loaded copy; "not loaded" is fine.
+    let _ = Command::new("launchctl")
+        .args(["bootout", &format!("{domain}/{LAUNCHD_LABEL}")])
+        .stderr(std::process::Stdio::null())
+        .status();
+    let status = Command::new("launchctl")
+        .args(["bootstrap", &domain])
+        .arg(&plist)
+        .status()
+        .context("run launchctl")?;
+    if !status.success() {
+        bail!("launchctl bootstrap failed; see {}", log.display());
+    }
+    Ok(())
+}
+
+// ---- status and uninstall ------------------------------------------------------
+
+fn setup_dir_from(args: &[String]) -> Result<PathBuf> {
+    match args {
+        [] => Ok(env::var_os("KEYLEASE_SERVER_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(default_dir)),
+        [flag, dir] if flag == "--dir" => Ok(PathBuf::from(dir)),
+        _ => bail!("expected nothing or --dir DIR"),
+    }
+}
+
+fn read_env(dir: &Path) -> Vec<(String, String)> {
+    fs::read_to_string(dir.join(ENV_FILE))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key.trim().to_owned(), value.trim().to_owned()))
+        .collect()
+}
+
+/// `keylease-server status`: where it is, whether it answers, how to reach it.
+pub async fn status(args: Vec<String>) -> Result<()> {
+    let dir = setup_dir_from(&args)?;
+    let settings = read_env(&dir);
+    let get = |key: &str| {
+        settings
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.clone())
+    };
+    let Some(listen) = get("KEYLEASE_SERVER_LISTEN") else {
+        println!(
+            "No server is set up in {}. Run:  keylease-server setup",
+            dir.display()
+        );
+        return Ok(());
+    };
+    let listen: SocketAddr = listen
+        .parse()
+        .context("KEYLEASE_SERVER_LISTEN in server.env")?;
+    let public_url =
+        get("KEYLEASE_SERVER_PUBLIC_URL").unwrap_or_else(|| format!("http://{listen}"));
+    let up = is_keylease_at(listen).await;
+    println!("KeyLease server in {}", dir.display());
+    println!(
+        "  State:       {}",
+        if up { "running" } else { "not answering" }
+    );
+    println!("  Console:     {public_url}/console/");
+    println!("  Listens on:  {listen}");
+    if let Some(admin) = get("KEYLEASE_ADMIN_TOKEN_FILE") {
+        println!("  Admin token: {admin}");
+    }
+    if !up {
+        println!("  Logs:        {}", log_hint(&dir));
+    }
+    Ok(())
+}
+
+/// `keylease-server uninstall [--dir DIR]`: stops and removes the service and
+/// stops the private PostgreSQL. The directory (secrets, database) stays; it
+/// says how to delete it.
+pub fn uninstall(args: Vec<String>) -> Result<()> {
+    let dir = setup_dir_from(&args)?;
+    if cfg!(target_os = "macos") {
+        let plist = launchd_plist()?;
+        if plist.exists() && service_owner_is(&plist, &dir) {
+            let _ = Command::new("launchctl")
+                .args(["bootout", &format!("{}/{LAUNCHD_LABEL}", launchd_domain())])
+                .stderr(std::process::Stdio::null())
+                .status();
+            fs::remove_file(&plist)?;
+            println!("Removed the launchd agent {LAUNCHD_LABEL}.");
+        } else if plist.exists() {
+            println!("The launchd agent belongs to another install; left as it is.");
+        }
+    } else if has_systemd() {
+        let root = is_root();
+        let unit = systemd_unit_path()?;
+        if unit.exists() && service_owner_is(&unit, &dir) {
+            let systemctl = |args: &[&str]| {
+                let mut command = Command::new("systemctl");
+                if !root {
+                    command.arg("--user");
+                }
+                let _ = command.args(args).status();
+            };
+            systemctl(&["disable", "--now", SERVICE]);
+            fs::remove_file(&unit)?;
+            systemctl(&["daemon-reload"]);
+            println!("Stopped and removed {SERVICE}.");
+        } else if unit.exists() {
+            println!("{SERVICE} belongs to another install; left as it is.");
+        }
+    }
+    let settings = read_env(&dir);
+    let get = |key: &str| {
+        settings
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| PathBuf::from(value))
+    };
+    if let (Some(data), Some(pg_ctl)) = (get("KEYLEASE_EMBEDDED_POSTGRES"), get("KEYLEASE_PG_CTL"))
+    {
+        stop_cluster(&Cluster { data, pg_ctl })?;
+    }
+    if dir.exists() {
+        println!(
+            "Your data stays in {} (secrets and the database). To delete it for good:\n  rm -r {}",
+            dir.display(),
+            dir.display()
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -645,6 +967,30 @@ mod tests {
         .unwrap();
         assert_eq!(ok.listen.port(), 18080);
         assert!(!ok.service);
+    }
+
+    #[test]
+    fn a_service_belongs_to_the_directory_it_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let unit = dir.path().join("unit");
+        fs::write(
+            &unit,
+            "[Service]\nEnvironmentFile=/srv/a/server.env\nExecStart=x\n",
+        )
+        .unwrap();
+        assert!(service_owner_is(&unit, Path::new("/srv/a")));
+        assert!(!service_owner_is(&unit, Path::new("/srv/b")));
+        assert!(!service_owner_is(&unit, Path::new("/srv")));
+        assert!(refuse_foreign_service(&unit, Path::new("/srv/b")).is_err());
+        assert!(refuse_foreign_service(&dir.path().join("none"), Path::new("/srv/b")).is_ok());
+        let plist = dir.path().join("plist");
+        fs::write(
+            &plist,
+            "<key>KEYLEASE_SERVER_DIR</key><string>/Users/a/kl</string>",
+        )
+        .unwrap();
+        assert!(service_owner_is(&plist, Path::new("/Users/a/kl")));
+        assert!(!service_owner_is(&plist, Path::new("/Users/a/k")));
     }
 
     #[test]

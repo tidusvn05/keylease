@@ -105,11 +105,16 @@ jobs:
           ## Install
 
           \`\`\`sh
+          # keylease (CLI) and keylease-server, prebuilt for Linux and macOS (x86_64, arm64):
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ needs.check.outputs.tag }}/install.sh | sh
+          # …and set up a server on this machine:
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ needs.check.outputs.tag }}/install.sh | sh -s -- --server
+          # or from crates.io:
           cargo install --locked keylease --version ${{ needs.check.outputs.version }}
           \`\`\`
 
-          No prebuilt binaries or apps are attached. The macOS app is built from source with
-          \`scripts/package-macos-swift.sh\` (see the README).
+          The archives below hold both binaries; each has a .sha256 file. The macOS app is built
+          from source with \`scripts/package-macos-swift.sh\` (see the README).
           NOTES
           if [ "${{ needs.check.outputs.prerelease }}" = false ]; then
             cat >> NOTES.md <<NOTES
@@ -126,6 +131,33 @@ jobs:
           body_path: NOTES.md
           prerelease: ${{ needs.check.outputs.prerelease }}
           draft: ${{ github.event_name == 'workflow_dispatch' }}
+
+  binaries:
+    name: Binaries
+    needs: check
+    uses: ./.github/workflows/binaries.yml
+    with:
+      ref: ${{ needs.check.outputs.tag }}
+      version: ${{ needs.check.outputs.version }}
+
+  attach:
+    name: Attach the binaries
+    needs: [check, release, binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: binaries-*
+          merge-multiple: true
+          path: dist
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat dist/*.sha256 > dist/SHA256SUMS
+          gh release upload "${{ needs.check.outputs.tag }}" dist/* --clobber --repo "${{ github.repository }}"
 
   image:
     name: Image ${{ matrix.image }}
