@@ -119,3 +119,7 @@ master password.
   no remote-unlock button yet.
 - Approvers poll; for a push when an agent waits, use `keylease notify`
   (`docs/agent-approvals.md`).
+
+A node linked to a `keylease-server` can also be approved from the KeyLease
+Console with a passkey, without pairing: see `docs/console.md`, Approvals and
+audit.

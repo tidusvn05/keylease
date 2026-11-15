@@ -2,6 +2,7 @@
 
 mod api;
 mod console;
+mod console_approvals;
 mod console_assets;
 mod console_sso;
 mod dynamic;
@@ -16,7 +17,6 @@ mod relay;
 mod siem;
 mod store;
 mod teams;
-mod webauthn;
 
 pub use api::{CloudApiConfig, CloudApiState, router};
 pub use console_sso::ConsoleOidc;

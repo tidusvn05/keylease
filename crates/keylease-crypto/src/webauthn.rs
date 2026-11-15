@@ -1,4 +1,5 @@
-//! The part of WebAuthn (passkeys) the console needs: ES256 credentials,
+//! The part of WebAuthn (passkeys) KeyLease needs (the console sign-in on
+//! keylease-server, and nodes checking passkey-signed approvals): ES256 credentials,
 //! `none` attestation (the authenticator's maker is not checked), user
 //! presence required, signature counters checked when the authenticator
 //! keeps one.
@@ -167,6 +168,11 @@ fn cose_es256_key(cose: &Cbor) -> Result<Vec<u8>> {
     Ok(point)
 }
 
+/// Whether `sec1` is an uncompressed P-256 public key, as stored for a passkey.
+pub fn valid_public_key(sec1: &[u8]) -> bool {
+    sec1.len() == 65 && VerifyingKey::from_sec1_bytes(sec1).is_ok()
+}
+
 /// Checks `clientDataJSON` and returns its SHA-256.
 pub fn verify_client_data(
     client_data_json: &[u8],
@@ -302,13 +308,15 @@ pub fn verify_assertion(
     Ok(data.sign_count)
 }
 
-#[cfg(test)]
-pub(crate) mod tests {
+/// Builders for passkey ceremonies in tests (here and in the crates that verify
+/// passkey-signed requests).
+#[doc(hidden)]
+pub mod testing {
     use super::*;
     use p256::ecdsa::{SigningKey, signature::Signer};
 
-    pub(crate) const RP_ID: &str = "vault.example.com";
-    pub(crate) const ORIGIN: &str = "https://vault.example.com";
+    pub const RP_ID: &str = "vault.example.com";
+    pub const ORIGIN: &str = "https://vault.example.com";
 
     fn cbor_bytes(out: &mut Vec<u8>, major: u8, bytes: &[u8]) {
         head(out, major, bytes.len() as u64);
@@ -327,7 +335,7 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn cose_key(key: &SigningKey) -> Vec<u8> {
+    pub fn cose_key(key: &SigningKey) -> Vec<u8> {
         let point = key.verifying_key().to_encoded_point(false);
         let mut out = vec![0xa5]; // map(5)
         out.extend_from_slice(&[0x01, 0x02]); // kty: EC2
@@ -340,10 +348,7 @@ pub(crate) mod tests {
         out
     }
 
-    pub(crate) fn authenticator_data(
-        count: u32,
-        credential: Option<(&[u8], &SigningKey)>,
-    ) -> Vec<u8> {
+    pub fn authenticator_data(count: u32, credential: Option<(&[u8], &SigningKey)>) -> Vec<u8> {
         let mut data = Sha256::digest(RP_ID.as_bytes()).to_vec();
         data.push(if credential.is_some() { 0x45 } else { 0x05 });
         data.extend_from_slice(&count.to_be_bytes());
@@ -356,7 +361,7 @@ pub(crate) mod tests {
         data
     }
 
-    pub(crate) fn client_data(kind: &str, challenge: &[u8]) -> Vec<u8> {
+    pub fn client_data(kind: &str, challenge: &[u8]) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({
             "type": kind,
             "challenge": URL_SAFE_NO_PAD.encode(challenge),
@@ -365,7 +370,7 @@ pub(crate) mod tests {
         .unwrap()
     }
 
-    pub(crate) fn attestation_object(auth_data: &[u8]) -> Vec<u8> {
+    pub fn attestation_object(auth_data: &[u8]) -> Vec<u8> {
         let mut out = vec![0xa3];
         cbor_bytes(&mut out, 3, b"fmt");
         cbor_bytes(&mut out, 3, b"none");
@@ -376,12 +381,19 @@ pub(crate) mod tests {
         out
     }
 
-    pub(crate) fn sign(key: &SigningKey, auth_data: &[u8], client_data_json: &[u8]) -> Vec<u8> {
+    pub fn sign(key: &SigningKey, auth_data: &[u8], client_data_json: &[u8]) -> Vec<u8> {
         let mut message = auth_data.to_vec();
         message.extend_from_slice(&Sha256::digest(client_data_json));
         let signature: Signature = key.sign(&message);
         signature.to_der().as_bytes().to_vec()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testing::*;
+    use super::*;
+    use p256::ecdsa::SigningKey;
 
     #[test]
     fn a_passkey_registers_and_signs_in() {

@@ -1427,6 +1427,25 @@ impl NativeStore {
             .collect()
     }
 
+    /// Audit events after sequence number `after`, oldest first, with their
+    /// sequence numbers.
+    pub fn query_audit_after(&self, after: i64, limit: u32) -> Result<Vec<(i64, AuditEvent)>> {
+        let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
+        let mut statement = connection
+            .prepare("SELECT seq,event_json FROM audit_events WHERE seq > ?1 ORDER BY seq LIMIT ?2")
+            .map_err(|_| KeyLeaseError::Storage)?;
+        let rows = statement
+            .query_map(params![after, limit], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })
+            .map_err(|_| KeyLeaseError::Storage)?;
+        rows.map(|row| {
+            let (seq, json) = row.map_err(|_| KeyLeaseError::Storage)?;
+            Ok((seq, from_json::<AuditEvent>(&json)?))
+        })
+        .collect()
+    }
+
     pub fn save_approval(&self, approval: &ApprovalRecord) -> Result<()> {
         let connection = self.connection.lock().map_err(|_| KeyLeaseError::Storage)?;
         connection

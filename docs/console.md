@@ -2,7 +2,8 @@
 
 The console is the web UI of a self-hosted `keylease-server`
 ([ADR 0008](adr/0008-server-identity-and-console-sign-in.md)). It shows your
-account, its devices and passkeys; it never shows vault secrets.
+account, its devices and passkeys, the pending approvals of your nodes and
+their audit log; it never shows vault secrets.
 
 ## Server setting
 
@@ -35,6 +36,30 @@ pass `--console-url`.
 The console lists the owner device and every node. Revoking a node stops it
 from using the relay immediately; the owner device can only be replaced by
 recovering the account (`keylease cloud recover`).
+
+## Approvals and audit
+
+A node shows its pending approvals in the console once you turn it on there
+([ADR 0011](adr/0011-console-approvals-and-node-audit.md)). Register a passkey
+in the console first, then on the node (master password):
+
+```sh
+keylease cloud console-approvals enable     # pins the account's passkeys
+keylease cloud console-approvals status
+keylease cloud console-approvals disable
+```
+
+`keylease serve` then reports its pending approvals every few seconds.
+**Approvals** lists them per node with the agent, action, resource and the
+agent's stated purpose; **Approve** or **Deny** asks for your passkey, and you
+can add a trust window the way the node's own approvers do. The node checks
+the passkey signature itself before applying the decision, and the list shows
+whether it was applied.
+
+After adding a passkey, run `enable` again on each node: a node accepts only
+the passkeys it pinned. With `enable --no-audit` the audit stays on the node;
+otherwise **Audit log** lists the events every node uploads (the server keeps
+the last 50,000 per node).
 
 ## Single sign-on
 

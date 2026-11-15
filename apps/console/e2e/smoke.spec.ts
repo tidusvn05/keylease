@@ -30,3 +30,43 @@ test("navigates between console pages", async ({ page }) => {
   await expect(page).toHaveURL(/\/approvals$/);
   await expect(page.getByRole("heading", { name: "Approvals" })).toBeVisible();
 });
+
+test("lists a node's pending approvals", async ({ page }) => {
+  await mockApi(page, true);
+  const now = new Date().toISOString();
+  await page.route("**/v1/console/approvals", (route) =>
+    route.fulfill({
+      json: {
+        nodes: [
+          {
+            member_id: "member_node_1",
+            name: "vps-1",
+            role: "node",
+            reported_at: now,
+            approvals: [
+              {
+                id: "ap-1",
+                request_digest_hex: "ab".repeat(32),
+                policy_version: 3,
+                state: "pending",
+                expires_at: new Date(Date.now() + 600_000).toISOString(),
+                agent_id: "agent-claude",
+                action: "ssh:sign",
+                resource: "kl://vault/item/1",
+                purpose: "deploy the site",
+              },
+            ],
+          },
+        ],
+        decisions: [],
+      },
+    }),
+  );
+  await page.goto("/approvals");
+  await page.getByRole("button", { name: "EN" }).click();
+  await expect(page.getByText("vps-1")).toBeVisible();
+  await expect(page.getByText("ssh:sign")).toBeVisible();
+  await expect(page.getByText("agent-claude")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Approve" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Deny" })).toBeVisible();
+});
