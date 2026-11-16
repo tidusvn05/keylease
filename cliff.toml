@@ -44,7 +44,7 @@ sort_commits = "oldest"
 commit_parsers = [
   { message = "^chore\\(release\\)", skip = true },
   # Merge commits repeat the commits they bring in.
-  { message = "^Merge (pull request|branch)", skip = true },
+  { message = "^Merge ", skip = true },
   { message = "^feat", group = "<!-- 0 -->Features" },
   { message = "^fix", group = "<!-- 1 -->Bug fixes" },
   { message = "^perf", group = "<!-- 2 -->Performance" },
