@@ -73,7 +73,8 @@ On Linux or macOS (prebuilt, verified, into `~/.local/bin`):
 curl -fsSL https://raw.githubusercontent.com/tidusvn05/keylease/main/install.sh | sh
 ```
 
-Add `-s -- --server` to also run a KeyLease server on that machine
+Add `-s -- --server` to also run a KeyLease server on that machine, and
+`--domain keys.example.com` (or `--tunnel tailscale`) to put it on HTTPS
 ([details](docs/server-quick-install.md)). With Rust 1.94+ you can instead
 build from crates.io: `cargo install --locked keylease`. The macOS app is built
 from source (below).
