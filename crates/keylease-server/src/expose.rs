@@ -155,6 +155,8 @@ pub struct ProxyPlan {
     pub commands: Vec<String>,
     /// Things to know before running them.
     pub notes: Vec<String>,
+    /// Why running them now would not work.
+    pub blockers: Vec<String>,
 }
 
 /// TLS files for Caddy when automatic HTTPS is off on this machine (an
@@ -172,7 +174,7 @@ fn brew_prefix() -> Option<PathBuf> {
 }
 
 /// The Caddyfile in use: Linux packages, or Homebrew on macOS.
-fn caddyfile() -> Option<PathBuf> {
+pub fn caddyfile() -> Option<PathBuf> {
     let system = PathBuf::from("/etc/caddy/Caddyfile");
     if system.is_file() {
         return Some(system);
@@ -180,6 +182,60 @@ fn caddyfile() -> Option<PathBuf> {
     brew_prefix()
         .map(|prefix| prefix.join("etc/Caddyfile"))
         .filter(|path| path.is_file() || have("caddy"))
+}
+
+pub fn has_nginx() -> bool {
+    Path::new("/etc/nginx").is_dir() && have("nginx")
+}
+
+/// Whether the Caddyfile turns automatic HTTPS off (certificates are then
+/// given by hand, e.g. Cloudflare origin certificates).
+pub fn auto_https_off(caddyfile: &Path) -> bool {
+    fs::read_to_string(caddyfile)
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .any(|line| {
+            !line.starts_with('#') && line.starts_with("auto_https") && line.contains("off")
+        })
+}
+
+/// Certificate pairs other sites in the Caddyfile use (`tls CERT KEY`).
+pub fn tls_examples(caddyfile: &Path) -> Vec<TlsFiles> {
+    let mut found: Vec<TlsFiles> = Vec::new();
+    for line in fs::read_to_string(caddyfile).unwrap_or_default().lines() {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        if let ["tls", cert, key] = words.as_slice()
+            && !found.iter().any(|t| t.cert == Path::new(cert))
+        {
+            found.push(TlsFiles {
+                cert: cert.into(),
+                key: key.into(),
+            });
+        }
+    }
+    found
+}
+
+/// A command that installs Caddy here, when setup knows one.
+pub fn caddy_install_command() -> Option<String> {
+    let hint = caddy_install_hint();
+    (!hint.starts_with("see ")).then_some(hint)
+}
+
+/// The address this machine uses to reach the internet (no packet is sent).
+/// On a VPS it is usually the public address a DNS record should name.
+pub fn outbound_ip() -> Option<IpAddr> {
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("1.1.1.1:53").ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    let private = match ip {
+        IpAddr::V4(v4) => {
+            v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.octets()[0] == 100
+        }
+        IpAddr::V6(_) => true,
+    };
+    (!private).then_some(ip)
 }
 
 pub fn caddy_site(domain: &str, port: u16, tls: Option<&TlsFiles>) -> String {
@@ -228,6 +284,7 @@ pub fn plan_proxy(
     let proxy_dir = dir.join("proxy");
     fs::create_dir_all(&proxy_dir).with_context(|| format!("create {}", proxy_dir.display()))?;
     let mut notes = Vec::new();
+    let mut blockers = Vec::new();
     if let Some(caddyfile) = caddyfile() {
         let file = proxy_dir.join("keylease.caddy");
         let current = fs::read_to_string(&caddyfile).unwrap_or_default();
@@ -243,7 +300,7 @@ pub fn plan_proxy(
                     .split_whitespace()
                     .any(|word| word.trim_start_matches("https://").trim_end_matches('{') == domain)
         }) {
-            notes.push(format!(
+            blockers.push(format!(
                 "{} already has a site for {domain}; choose another name, or replace that site \
                  with the one above.",
                 caddyfile.display()
@@ -255,7 +312,7 @@ pub fn plan_proxy(
                 .map(str::trim)
                 .filter(|line| line.starts_with("tls ") && line.split_whitespace().count() == 3)
                 .collect();
-            notes.push(format!(
+            blockers.push(format!(
                 "{} turns automatic HTTPS off, so Caddy needs the certificate files for {domain}: \
                  run setup again with --tls-cert FILE --tls-key FILE{}",
                 caddyfile.display(),
@@ -272,7 +329,7 @@ pub fn plan_proxy(
             ));
         }
         let config_dir = caddyfile.parent().unwrap_or(Path::new("/etc/caddy"));
-        let target = config_dir.join("keylease.caddy");
+        let target = config_dir.join(format!("keylease-{domain}.caddy"));
         let system = caddyfile.starts_with("/etc");
         let sudo = if system { "sudo " } else { "" };
         let mut commands = vec![format!(
@@ -281,7 +338,18 @@ pub fn plan_proxy(
             target.display()
         )];
         let import = format!("import {}", target.display());
-        if !current.lines().any(|line| line.trim() == import) {
+        let imported = current.lines().any(|line| line.trim() == import);
+        if imported && fs::read_to_string(&target).ok() == Some(caddy_site(domain, port, tls)) {
+            // Enabled by an earlier run, unchanged: nothing to do.
+            return Ok(ProxyPlan {
+                kind: "Caddy",
+                file,
+                commands: Vec::new(),
+                notes,
+                blockers: Vec::new(),
+            });
+        }
+        if !imported {
             commands.push(format!(
                 "echo '{import}' | {sudo}tee -a {} >/dev/null",
                 caddyfile.display()
@@ -297,11 +365,13 @@ pub fn plan_proxy(
             file,
             commands,
             notes,
+            blockers,
         });
     }
-    if Path::new("/etc/nginx").is_dir() && have("nginx") {
+    if has_nginx() {
         let file = proxy_dir.join("keylease.conf");
         fs::write(&file, nginx_site(domain, port))?;
+        let blockers = Vec::new();
         if *dns == Dns::Cloudflare {
             notes.push(format!(
                 "{domain} goes through Cloudflare's proxy; certbot's HTTP check works when \
@@ -321,6 +391,7 @@ pub fn plan_proxy(
             ],
             file,
             notes,
+            blockers,
         });
     }
     bail!(
@@ -356,6 +427,10 @@ fn caddy_install_hint() -> String {
 /// ran (and succeeded).
 pub fn offer(plan: &ProxyPlan) -> Result<bool> {
     println!();
+    if plan.commands.is_empty() {
+        println!("{} already serves this site.", plan.kind);
+        return Ok(true);
+    }
     println!(
         "{} will serve HTTPS. Site file: {}",
         plan.kind,
@@ -364,11 +439,14 @@ pub fn offer(plan: &ProxyPlan) -> Result<bool> {
     for note in &plan.notes {
         println!("  Note: {note}");
     }
+    for blocker in &plan.blockers {
+        println!("  First: {blocker}");
+    }
     println!("To enable it:");
     for command in &plan.commands {
         println!("  {command}");
     }
-    if !plan.notes.is_empty() || !std::io::stdin().is_terminal() {
+    if !plan.blockers.is_empty() || !std::io::stdin().is_terminal() {
         return Ok(false);
     }
     print!("Run these now? [Y/n] ");

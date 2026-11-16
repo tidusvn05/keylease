@@ -17,11 +17,16 @@ pub(crate) enum CloudCommand {
     /// Owner: link this vault to a cloud as the account owner and print the
     /// recovery kit (once).
     Init {
+        /// The server's address; asked when left out.
         #[arg(long)]
-        url: String,
-        /// The cloud's admin token (KEYLEASE_ADMIN_TOKEN_FILE on the cloud).
+        url: Option<String>,
+        /// The server's admin token file. Without it, you are asked for the
+        /// one-time setup code that `keylease-server setup` printed.
+        #[arg(long, conflicts_with = "code")]
+        admin_token_file: Option<PathBuf>,
+        /// The one-time setup code (asked when left out).
         #[arg(long)]
-        admin_token_file: PathBuf,
+        code: Option<String>,
         /// A name for this device.
         #[arg(long, default_value = "owner")]
         name: String,
@@ -332,9 +337,33 @@ pub(crate) async fn cloud_command(cli: &Cli, socket: &Path, command: CloudComman
         CloudCommand::Init {
             url,
             admin_token_file,
+            code,
             name,
         } => {
-            let token = read_secret_file(&admin_token_file, "cloud admin token")?;
+            let url = match url {
+                Some(url) => url,
+                None => {
+                    use std::io::Write as _;
+                    print!("Server address (e.g. https://keys.example.com): ");
+                    std::io::stdout()
+                        .flush()
+                        .map_err(|_| KeyLeaseError::Storage)?;
+                    let mut line = String::new();
+                    std::io::stdin()
+                        .read_line(&mut line)
+                        .map_err(|_| KeyLeaseError::Storage)?;
+                    line.trim().to_string()
+                }
+            };
+            let with_code = admin_token_file.is_none();
+            let token = match (admin_token_file, code) {
+                (Some(file), _) => read_secret_file(&file, "cloud admin token")?,
+                (None, Some(code)) => Zeroizing::new(code),
+                (None, None) => prompt(
+                    "Setup code (printed by keylease-server setup; `keylease-server owner-code` \
+                     makes a new one): ",
+                )?,
+            };
             let setup = service.cloud_owner_prepare(&url, &name)?;
             let link = service.cloud_link()?.ok_or(KeyLeaseError::Storage)?;
             let relay = Relay::new(&service, &link.url)?;
@@ -347,7 +376,16 @@ pub(crate) async fn cloud_command(cli: &Cli, socket: &Path, command: CloudComman
                     false,
                     Some(token.trim()),
                 )
-                .await?;
+                .await
+                .map_err(|error| match error {
+                    KeyLeaseError::Denied { .. } if with_code => KeyLeaseError::Denied {
+                        reason: "the server refused this setup code. A code works once, for 30 \
+                                 minutes: make a new one on the server with `keylease-server \
+                                 owner-code` and run this again"
+                            .into(),
+                    },
+                    other => other,
+                })?;
             let link = service.cloud_owner_commit(&created)?;
             println!(
                 "Linked to {} as the owner ({}).\nFingerprint: {}\n",

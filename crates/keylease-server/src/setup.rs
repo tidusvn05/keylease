@@ -157,21 +157,87 @@ fn parse(args: Vec<String>) -> Result<Options> {
 }
 
 pub async fn run(args: Vec<String>) -> Result<()> {
-    let options = parse(args)?;
-    let dir = &options.dir;
+    let mut options = parse(args)?;
+    let dir = &options.dir.clone();
     check_port(options.listen).await?;
-    let previous_url = read_env(dir)
-        .into_iter()
-        .find(|(key, _)| key == "KEYLEASE_SERVER_PUBLIC_URL")
-        .map(|(_, value)| value);
+    let previous = read_env(dir);
+    let kept = |key: &str| {
+        previous
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.clone())
+    };
+    let previous_url = kept("KEYLEASE_SERVER_PUBLIC_URL");
+    // Running setup again keeps the domain and its certificate files.
+    if options.domain.is_none()
+        && !options.tailscale
+        && options.public_url.is_none()
+        && let Some(domain) = kept("KEYLEASE_SETUP_DOMAIN")
+            .filter(|domain| previous_url.as_deref() == Some(format!("https://{domain}").as_str()))
+    {
+        options.domain = Some(domain);
+        if options.tls_cert.is_none() {
+            options.tls_cert = kept("KEYLEASE_SETUP_TLS_CERT").map(PathBuf::from);
+            options.tls_key = kept("KEYLEASE_SETUP_TLS_KEY").map(PathBuf::from);
+        }
+    }
+    // At a terminal, with no address given and none kept from before: ask.
+    let asked = options.domain.is_none()
+        && !options.tailscale
+        && options.public_url.is_none()
+        && previous_url
+            .as_deref()
+            .is_none_or(|url| url.contains("localhost"))
+        && crate::wizard::interactive();
+    if asked {
+        match crate::wizard::choose_address()? {
+            crate::wizard::Address::Domain { name, tls } => {
+                options.domain = Some(name);
+                if let Some(tls) = tls {
+                    options.tls_cert = Some(tls.cert);
+                    options.tls_key = Some(tls.key);
+                }
+            }
+            crate::wizard::Address::Tailscale => options.tailscale = true,
+            crate::wizard::Address::Local => {}
+        }
+        println!();
+        println!("== Installing");
+    } else if let Some(domain) = options.domain.clone()
+        && options.tls_cert.is_none()
+        && crate::wizard::interactive()
+        && let Some(file) = crate::expose::caddyfile()
+        && crate::expose::auto_https_off(&file)
+    {
+        // A domain given as an option, on a Caddy with automatic HTTPS off.
+        let tls = crate::wizard::certificate(&file, &domain)?;
+        options.tls_cert = Some(tls.cert);
+        options.tls_key = Some(tls.key);
+    }
     let dns = options.domain.as_deref().map(|domain| {
         let dns = crate::expose::check_dns(domain);
-        report_dns(domain, &dns);
+        if !asked {
+            report_dns(domain, &dns);
+        }
         dns
     });
     // Before anything is written: a missing Tailscale fails here.
     let tunnel_url = if options.tailscale {
-        Some(crate::expose::tailscale_serve(options.listen.port())?)
+        let port = options.listen.port();
+        Some(match crate::expose::tailscale_serve(port) {
+            Ok(url) => url,
+            Err(error)
+                if asked
+                    && error.to_string().contains("operator")
+                    && crate::wizard::confirm(
+                        "Let Tailscale serve for this user (sudo tailscale set --operator=$USER)?",
+                    )? =>
+            {
+                crate::wizard::run("sudo tailscale set --operator=$USER")?;
+                crate::expose::tailscale_serve(port)?
+            }
+            Err(error) => return Err(error),
+        })
     } else {
         None
     };
@@ -231,13 +297,25 @@ pub async fn run(args: Vec<String>) -> Result<()> {
          KEYLEASE_DATABASE_URL_FILE={db}\n\
          KEYLEASE_ADMIN_TOKEN_FILE={admin}\n\
          KEYLEASE_CONTROL_SIGNING_KEY_FILE={sign}\n\
-         KEYLEASE_KMS_ROOT_KEY_FILE={kms}\n",
+         KEYLEASE_KMS_ROOT_KEY_FILE={kms}\n\
+         KEYLEASE_OWNER_CODES_FILE={codes}\n",
         listen = options.listen,
         db = database_url_file.display(),
         admin = admin_token.display(),
         sign = secrets.join("control_signing_key").display(),
         kms = secrets.join("kms_root_key").display(),
+        codes = secrets.join("owner_codes").display(),
     );
+    if let Some(domain) = &options.domain {
+        env_text.push_str(&format!("KEYLEASE_SETUP_DOMAIN={domain}\n"));
+        if let (Some(cert), Some(key)) = (&options.tls_cert, &options.tls_key) {
+            env_text.push_str(&format!(
+                "KEYLEASE_SETUP_TLS_CERT={}\nKEYLEASE_SETUP_TLS_KEY={}\n",
+                cert.display(),
+                key.display()
+            ));
+        }
+    }
     if let Some(cluster) = &postgres {
         env_text.push_str(&format!(
             "KEYLEASE_EMBEDDED_POSTGRES={}\nKEYLEASE_PG_CTL={}\n",
@@ -315,7 +393,17 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         let plan =
             crate::expose::plan_proxy(dir, domain, options.listen.port(), tls.as_ref(), dns)?;
         if crate::expose::offer(&plan)? {
-            if crate::expose::answers(&public_url).await {
+            let mut answered = false;
+            for attempt in 0..4 {
+                if attempt > 0 {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+                if crate::expose::answers(&public_url).await {
+                    answered = true;
+                    break;
+                }
+            }
+            if answered {
                 println!("{public_url} answers. HTTPS is set up.");
             } else {
                 println!(
@@ -354,12 +442,62 @@ pub async fn run(args: Vec<String>) -> Result<()> {
              (or --tunnel tailscale)"
         );
     }
+    let code = keylease_server::owner_code::issue(&secrets.join("owner_codes"), 30)
+        .context("write a setup code")?;
     println!();
-    println!("Next, link a vault as its owner:");
+    println!("Next, on your laptop (its vault becomes the owner of this server), one command:");
     println!(
-        "  keylease cloud init --url {public_url} --admin-token-file {} && keylease cloud console",
+        "  curl -fsSL https://raw.githubusercontent.com/tidusvn05/keylease/main/install.sh | sh -s -- --link {public_url} {code}"
+    );
+    println!(
+        "  (the setup code works once, for 30 minutes; `keylease-server owner-code` makes another)"
+    );
+    println!(
+        "  Already have keylease there:  keylease cloud init --url {public_url} --code {code}"
+    );
+    println!(
+        "  On this machine instead:  keylease cloud init --url {public_url} --admin-token-file {}",
         admin_token.display()
     );
+    Ok(())
+}
+
+/// `keylease-server owner-code [--dir DIR] [--minutes N]`: a new one-time
+/// setup code for `keylease cloud init`.
+pub fn owner_code(args: Vec<String>) -> Result<()> {
+    let mut minutes = 30_u64;
+    let mut rest = Vec::new();
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        if arg == "--minutes" {
+            minutes = args
+                .next()
+                .and_then(|value| value.parse().ok())
+                .filter(|minutes| (1..=1440).contains(minutes))
+                .context("--minutes takes 1 to 1440")?;
+        } else {
+            rest.push(arg);
+        }
+    }
+    let dir = setup_dir_from(&rest)?;
+    let file = read_env(&dir)
+        .into_iter()
+        .find(|(key, _)| key == "KEYLEASE_OWNER_CODES_FILE")
+        .map(|(_, value)| PathBuf::from(value))
+        .with_context(|| {
+            format!(
+                "{} has no setup codes yet: run `keylease-server setup` again (it keeps everything)",
+                dir.display()
+            )
+        })?;
+    let code = keylease_server::owner_code::issue(&file, minutes)
+        .with_context(|| format!("write {}", file.display()))?;
+    let url = read_env(&dir)
+        .into_iter()
+        .find(|(key, _)| key == "KEYLEASE_SERVER_PUBLIC_URL")
+        .map_or_else(|| "URL".to_string(), |(_, value)| value);
+    println!("Setup code: {code}   (works once, for {minutes} minutes)");
+    println!("On your laptop:  keylease cloud init --url {url}");
     Ok(())
 }
 
