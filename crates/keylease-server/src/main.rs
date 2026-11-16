@@ -16,7 +16,17 @@ fn main() -> Result<()> {
     // environment unless it is already set.
     if !matches!(
         env::args().nth(1).as_deref(),
-        Some("setup" | "status" | "uninstall" | "owner-code" | "-h" | "--help" | "help")
+        Some(
+            "setup"
+                | "status"
+                | "uninstall"
+                | "owner-code"
+                | "-h"
+                | "--help"
+                | "help"
+                | "-V"
+                | "--version"
+        )
     ) {
         setup::load_env_file()?;
     }
@@ -46,7 +56,14 @@ async fn async_main() -> Result<()> {
             );
             return Ok(());
         }
-        _ => {}
+        Some("-V" | "--version") => {
+            println!("keylease-server {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Some("healthcheck" | "migrate" | "kms") | None => {}
+        Some(other) => {
+            anyhow::bail!("unknown command {other}; see keylease-server --help")
+        }
     }
     if env::args().nth(1).as_deref() == Some("healthcheck") {
         return local_healthcheck().await;
