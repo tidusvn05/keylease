@@ -5,6 +5,13 @@ All notable changes to KeyLease are listed here. The format follows
 [Semantic Versioning](https://semver.org/) (see docs/releasing.md). This file is
 generated from commit messages by git-cliff.
 
+## [0.5.0] - 2026-11-16
+
+### Features
+
+- **server:** Setup --domain and --tunnel tailscale for a real HTTPS address (6821b6e)
+- **cloud:** See every node's items on the owner device, adopt them (a3ecb31)
+
 ## [0.4.0] - 2026-11-15
 
 ### Features
