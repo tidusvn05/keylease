@@ -21,18 +21,24 @@ Run it in a terminal on the server. It walks you through the rest:
    lets you pick a certificate another site on the machine already uses.
    It then shows the commands that enable the site and runs them after a
    yes (they use sudo).
-4. **Linking your laptop.** It prints a one-time **setup code**. On the
-   laptop:
+4. **Linking your laptop.** It prints one command with a one-time **setup
+   code** in it. Run it on the laptop:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/tidusvn05/keylease/main/install.sh | sh
-keylease cloud init --url https://keys.example.com      # asks for the setup code
-keylease cloud console                                  # a one-time sign-in link for the console
+curl -fsSL https://raw.githubusercontent.com/tidusvn05/keylease/main/install.sh | sh -s -- --link https://keys.example.com KLS-XXXX-XXXX-XXXX-XXXX
 ```
+
+   It installs `keylease`, creates your vault if you have none (it asks for a
+   master password), links the vault as the server's owner, prints the
+   recovery kit once and a console sign-in link. With `keylease` already
+   installed: `keylease cloud init --url https://keys.example.com --code KLS-…`.
 
 A setup code works once, for 30 minutes, and only to link a vault as an
 owner; `keylease-server owner-code` on the server makes a new one. The admin
 token never has to leave the server.
+
+Running setup again (to upgrade) keeps the address, the domain and the
+certificate choice, and skips a web server site that is already enabled.
 
 Every answer is also an option (`--domain`, `--tunnel`, `--tls-cert`…, see
 below), so scripts and CI run setup without questions; with no terminal it

@@ -173,7 +173,7 @@ fn domain(public: Option<std::net::IpAddr>) -> Result<Address> {
     Ok(Address::Domain { name, tls })
 }
 
-fn certificate(caddyfile: &std::path::Path, name: &str) -> Result<TlsFiles> {
+pub fn certificate(caddyfile: &std::path::Path, name: &str) -> Result<TlsFiles> {
     let examples = expose::tls_examples(caddyfile);
     let mut options: Vec<String> = examples
         .iter()

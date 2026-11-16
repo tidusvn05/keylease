@@ -160,10 +160,27 @@ pub async fn run(args: Vec<String>) -> Result<()> {
     let mut options = parse(args)?;
     let dir = &options.dir.clone();
     check_port(options.listen).await?;
-    let previous_url = read_env(dir)
-        .into_iter()
-        .find(|(key, _)| key == "KEYLEASE_SERVER_PUBLIC_URL")
-        .map(|(_, value)| value);
+    let previous = read_env(dir);
+    let kept = |key: &str| {
+        previous
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.clone())
+    };
+    let previous_url = kept("KEYLEASE_SERVER_PUBLIC_URL");
+    // Running setup again keeps the domain and its certificate files.
+    if options.domain.is_none()
+        && !options.tailscale
+        && options.public_url.is_none()
+        && let Some(domain) = kept("KEYLEASE_SETUP_DOMAIN")
+            .filter(|domain| previous_url.as_deref() == Some(format!("https://{domain}").as_str()))
+    {
+        options.domain = Some(domain);
+        if options.tls_cert.is_none() {
+            options.tls_cert = kept("KEYLEASE_SETUP_TLS_CERT").map(PathBuf::from);
+            options.tls_key = kept("KEYLEASE_SETUP_TLS_KEY").map(PathBuf::from);
+        }
+    }
     // At a terminal, with no address given and none kept from before: ask.
     let asked = options.domain.is_none()
         && !options.tailscale
@@ -186,6 +203,16 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         }
         println!();
         println!("== Installing");
+    } else if let Some(domain) = options.domain.clone()
+        && options.tls_cert.is_none()
+        && crate::wizard::interactive()
+        && let Some(file) = crate::expose::caddyfile()
+        && crate::expose::auto_https_off(&file)
+    {
+        // A domain given as an option, on a Caddy with automatic HTTPS off.
+        let tls = crate::wizard::certificate(&file, &domain)?;
+        options.tls_cert = Some(tls.cert);
+        options.tls_key = Some(tls.key);
     }
     let dns = options.domain.as_deref().map(|domain| {
         let dns = crate::expose::check_dns(domain);
@@ -279,6 +306,16 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         kms = secrets.join("kms_root_key").display(),
         codes = secrets.join("owner_codes").display(),
     );
+    if let Some(domain) = &options.domain {
+        env_text.push_str(&format!("KEYLEASE_SETUP_DOMAIN={domain}\n"));
+        if let (Some(cert), Some(key)) = (&options.tls_cert, &options.tls_key) {
+            env_text.push_str(&format!(
+                "KEYLEASE_SETUP_TLS_CERT={}\nKEYLEASE_SETUP_TLS_KEY={}\n",
+                cert.display(),
+                key.display()
+            ));
+        }
+    }
     if let Some(cluster) = &postgres {
         env_text.push_str(&format!(
             "KEYLEASE_EMBEDDED_POSTGRES={}\nKEYLEASE_PG_CTL={}\n",
@@ -408,13 +445,15 @@ pub async fn run(args: Vec<String>) -> Result<()> {
     let code = keylease_server::owner_code::issue(&secrets.join("owner_codes"), 30)
         .context("write a setup code")?;
     println!();
-    println!("Next, on your laptop (its vault becomes the owner of this server):");
+    println!("Next, on your laptop (its vault becomes the owner of this server), one command:");
     println!(
-        "  1. Install:  curl -fsSL https://raw.githubusercontent.com/tidusvn05/keylease/main/install.sh | sh"
+        "  curl -fsSL https://raw.githubusercontent.com/tidusvn05/keylease/main/install.sh | sh -s -- --link {public_url} {code}"
     );
-    println!("  2. Link:     keylease cloud init --url {public_url}");
     println!(
-        "     Setup code: {code}   (works once, for 30 minutes; `keylease-server owner-code` makes another)"
+        "  (the setup code works once, for 30 minutes; `keylease-server owner-code` makes another)"
+    );
+    println!(
+        "  Already have keylease there:  keylease cloud init --url {public_url} --code {code}"
     );
     println!(
         "  On this machine instead:  keylease cloud init --url {public_url} --admin-token-file {}",

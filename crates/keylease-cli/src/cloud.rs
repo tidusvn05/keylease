@@ -22,8 +22,11 @@ pub(crate) enum CloudCommand {
         url: Option<String>,
         /// The server's admin token file. Without it, you are asked for the
         /// one-time setup code that `keylease-server setup` printed.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "code")]
         admin_token_file: Option<PathBuf>,
+        /// The one-time setup code (asked when left out).
+        #[arg(long)]
+        code: Option<String>,
         /// A name for this device.
         #[arg(long, default_value = "owner")]
         name: String,
@@ -334,6 +337,7 @@ pub(crate) async fn cloud_command(cli: &Cli, socket: &Path, command: CloudComman
         CloudCommand::Init {
             url,
             admin_token_file,
+            code,
             name,
         } => {
             let url = match url {
@@ -352,9 +356,10 @@ pub(crate) async fn cloud_command(cli: &Cli, socket: &Path, command: CloudComman
                 }
             };
             let with_code = admin_token_file.is_none();
-            let token = match admin_token_file {
-                Some(file) => read_secret_file(&file, "cloud admin token")?,
-                None => prompt(
+            let token = match (admin_token_file, code) {
+                (Some(file), _) => read_secret_file(&file, "cloud admin token")?,
+                (None, Some(code)) => Zeroizing::new(code),
+                (None, None) => prompt(
                     "Setup code (printed by keylease-server setup; `keylease-server owner-code` \
                      makes a new one): ",
                 )?,

@@ -9,6 +9,9 @@
 #                       setup options such as --domain NAME, --tunnel tailscale,
 #                       --listen, --public-url, --database-url-file and
 #                       --no-service are passed on
+#   --link URL CODE     then link this computer's vault to that server as its owner
+#                       (CODE: the setup code keylease-server setup printed); makes a
+#                       vault first if there is none
 #   --version X.Y.Z     a specific release (default: the latest)
 #   --bin-dir DIR       where the binaries go (default: ~/.local/bin)
 #
@@ -100,8 +103,31 @@ postgres_hint() {
   esac
 }
 
+# Makes a vault if there is none, links it to the server as the owner and
+# prints a console sign-in link. Asks for the master password at the terminal.
+link_vault() {
+  kl="$1"
+  (: </dev/tty) 2>/dev/null || fail "--link asks for your master password: run it in a terminal."
+  if "$kl" desktop inspect 2>/dev/null | grep -q '"needs_onboarding"'; then
+    step "Creating your vault (choose a master password; it never leaves this computer)"
+    "$kl" vault init </dev/tty || fail "creating the vault failed."
+  fi
+  step "Linking this vault to $link_url"
+  name=$(hostname -s 2>/dev/null || hostname)
+  "$kl" cloud init --url "$link_url" --code "$link_code" --name "${name:-laptop}" </dev/tty ||
+    fail "linking failed (see above)." \
+      "A setup code works once, for 30 minutes: on the server run  keylease-server owner-code"
+  step "Signing in to the KeyLease Console"
+  "$kl" cloud console </dev/tty || true
+  say ""
+  say "Done. This vault owns $link_url."
+  say "Add a VPS:  keylease cloud invite NAME   (then on the VPS: keylease cloud join --url $link_url)"
+}
+
 main() {
   server=0
+  link_url=""
+  link_code=""
   version=""
   bin_dir="${KEYLEASE_BIN_DIR:-$HOME/.local/bin}"
   setup_args=""
@@ -109,6 +135,11 @@ main() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --server) server=1 ;;
+      --link)
+        link_url="${2:?--link needs the server URL and the setup code}"
+        link_code="${3:?--link needs the server URL and the setup code}"
+        shift 2
+        ;;
       --version) version="${2:?--version needs a value}"; version="${version#v}"; shift ;;
       --bin-dir) bin_dir="${2:?--bin-dir needs a value}"; shift ;;
       -h | --help) sed -n '2,17p' "$0" 2>/dev/null || say "see https://github.com/$REPO"; exit 0 ;;
@@ -200,6 +231,11 @@ main() {
       say "  export PATH=\"$bin_dir:\$PATH\""
       ;;
   esac
+
+  if [ -n "$link_url" ]; then
+    link_vault "$bin_dir/keylease"
+    return
+  fi
 
   if [ "$server" = 1 ]; then
     step "Setting up the server"

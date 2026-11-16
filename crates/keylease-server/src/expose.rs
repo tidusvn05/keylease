@@ -338,7 +338,18 @@ pub fn plan_proxy(
             target.display()
         )];
         let import = format!("import {}", target.display());
-        if !current.lines().any(|line| line.trim() == import) {
+        let imported = current.lines().any(|line| line.trim() == import);
+        if imported && fs::read_to_string(&target).ok() == Some(caddy_site(domain, port, tls)) {
+            // Enabled by an earlier run, unchanged: nothing to do.
+            return Ok(ProxyPlan {
+                kind: "Caddy",
+                file,
+                commands: Vec::new(),
+                notes,
+                blockers: Vec::new(),
+            });
+        }
+        if !imported {
             commands.push(format!(
                 "echo '{import}' | {sudo}tee -a {} >/dev/null",
                 caddyfile.display()
@@ -416,6 +427,10 @@ fn caddy_install_hint() -> String {
 /// ran (and succeeded).
 pub fn offer(plan: &ProxyPlan) -> Result<bool> {
     println!();
+    if plan.commands.is_empty() {
+        println!("{} already serves this site.", plan.kind);
+        return Ok(true);
+    }
     println!(
         "{} will serve HTTPS. Site file: {}",
         plan.kind,
