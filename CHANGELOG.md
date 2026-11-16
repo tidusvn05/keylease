@@ -5,6 +5,17 @@ All notable changes to KeyLease are listed here. The format follows
 [Semantic Versioning](https://semver.org/) (see docs/releasing.md). This file is
 generated from commit messages by git-cliff.
 
+## [0.5.1] - 2026-11-16
+
+### Features
+
+- **server:** Step-by-step setup and one-time setup codes (c31b5f5)
+- One command on the server, one on the laptop (bf60a65)
+
+### Bug fixes
+
+- **server:** --version prints the version; an unknown command no longer starts the server (c2541c0)
+
 ## [0.5.0] - 2026-11-16
 
 ### Features
