@@ -277,6 +277,7 @@ impl KeyLeaseService {
         name: &str,
         expected_revision: u64,
     ) -> Result<VaultGroup> {
+        refuse_mirror_group(id)?;
         self.with_vault(|vault| {
             let groups = self.store.list_groups(vault)?;
             validate_group(name, None, &groups)?;
@@ -301,6 +302,7 @@ impl KeyLeaseService {
         })
     }
     pub fn delete_group(&self, id: &GroupId, expected_revision: u64) -> Result<()> {
+        refuse_mirror_group(id)?;
         self.with_vault(|vault| {
             let groups = self.store.list_groups(vault)?;
             let group = groups.iter().find(|group| &group.id == id).ok_or_else(|| {
@@ -340,6 +342,7 @@ impl KeyLeaseService {
         idempotency_key: &str,
         dry_run: bool,
     ) -> Result<VaultGroup> {
+        refuse_mirror_group(id)?;
         self.with_vault(|vault| {
             validate_idempotency_key(idempotency_key)?;
             let request_material = operation_material(&serde_json::json!({
@@ -423,6 +426,7 @@ impl KeyLeaseService {
         idempotency_key: &str,
         dry_run: bool,
     ) -> Result<()> {
+        refuse_mirror_group(id)?;
         self.with_vault(|vault| {
             validate_idempotency_key(idempotency_key)?;
             let request_material = operation_material(&serde_json::json!({
@@ -576,6 +580,7 @@ impl KeyLeaseService {
                     .get_item_at_revision(vault, &replay.item_id, replay.result_revision)?
                     .metadata());
             }
+            refuse_mirror_group(&input.group_id)?;
             if !self
                 .store
                 .list_groups(vault)?
@@ -867,6 +872,9 @@ impl KeyLeaseService {
                     .store
                     .get_item_at_revision(vault, id, replay.result_revision)?
                     .metadata());
+            }
+            if let Some(group_id) = &patch.group_id {
+                refuse_mirror_group(group_id)?;
             }
             if let Some(group_id) = &patch.group_id
                 && !self

@@ -90,3 +90,68 @@ public struct OrgJoinOutcome: Decodable, Equatable, Sendable {
         case policyVersion = "policy_version"
     }
 }
+
+/// `cloud_nodes`: a node (a VPS) or another device linked to this vault.
+/// Mirrors `CloudNodeView` in `crates/keylease-service/src/cloud_remote.rs`.
+public struct CloudNodeView: Decodable, Equatable, Sendable, Identifiable {
+    public let memberId: String
+    public let name: String
+    /// `node` or `device`.
+    public let role: String
+    public let fingerprint: String
+    public let verifiedAt: String
+    /// Read-only copies of this node's own items on this Mac.
+    public let copies: Int
+
+    public var id: String { memberId }
+    public var isNode: Bool { role == "node" }
+
+    enum CodingKeys: String, CodingKey {
+        case name, role, fingerprint, copies
+        case memberId = "member_id"
+        case verifiedAt = "verified_at"
+    }
+}
+
+/// `cloud_requests`: an agent on a node asked for an item.
+public struct CloudShareRequest: Decodable, Equatable, Sendable, Identifiable {
+    public let requestId: String
+    public let agentId: String
+    public let purpose: String
+    public let hint: String?
+    public let nodeMemberId: String?
+    public let nodeName: String?
+    public let createdAt: String
+    /// `pending`, `approved` or `denied`.
+    public let status: String
+    public let shareId: String?
+
+    public var id: String { requestId }
+    public var isPending: Bool { status == "pending" }
+
+    enum CodingKeys: String, CodingKey {
+        case purpose, hint, status
+        case requestId = "request_id"
+        case agentId = "agent_id"
+        case nodeMemberId = "node_member_id"
+        case nodeName = "node_name"
+        case createdAt = "created_at"
+        case shareId = "share_id"
+    }
+}
+
+/// `cloud_adopt`: what moved from a node to this Mac.
+public struct AdoptReport: Decodable, Equatable, Sendable {
+    public let node: String
+    public let adopted: [String]
+    /// Project slugs shared back with the node.
+    public let projects: [String]
+    /// Items without a project, shared one by one.
+    public let itemShares: Int
+    public let skipped: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case node, adopted, projects, skipped
+        case itemShares = "item_shares"
+    }
+}

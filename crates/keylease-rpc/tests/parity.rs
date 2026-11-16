@@ -483,3 +483,37 @@ async fn a_key_bound_agent_signs_every_request_and_a_legacy_token_still_works() 
     .await;
     assert_eq!(response["ok"], json!(true), "{response}");
 }
+
+#[tokio::test]
+async fn only_the_desktop_owner_reaches_nodes_requests_and_adopt() {
+    let (_dir, desktop, desktop_auth) = service_with_role(LocalOwnerRole::DesktopOwner);
+    let (_dir_m, mobile, mobile_auth) = service_with_role(LocalOwnerRole::MobileOwner);
+    let requests = |auth: &Value| {
+        [
+            json!({"command": "cloud_nodes", "auth": auth}),
+            json!({"command": "cloud_requests", "auth": auth}),
+            json!({"command": "cloud_request_decide", "auth": auth,
+                   "request_id": "req_1", "approve": false}),
+            json!({"command": "cloud_adopt", "auth": auth, "node": "vps"}),
+        ]
+    };
+    for request in requests(&mobile_auth) {
+        let response = call(&mobile, request.clone()).await;
+        assert_eq!(
+            response["error"]["error"], "denied",
+            "{} must be denied for a phone: {response}",
+            request["command"]
+        );
+    }
+    // The desktop reaches the handlers, which then say the vault is not
+    // linked (not denied).
+    for request in requests(&desktop_auth) {
+        let response = call(&desktop, request.clone()).await;
+        assert_eq!(response["ok"], json!(false));
+        assert_ne!(
+            response["error"]["error"], "denied",
+            "{}: {response}",
+            request["command"]
+        );
+    }
+}

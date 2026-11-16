@@ -132,6 +132,15 @@ public enum RpcRequest: Encodable, Sendable {
     /// Join an organization as a managed node (ADR 0012).
     case orgJoin(code: SecretValue)
     case orgLeave
+    /// Owner: the linked nodes and devices.
+    case cloudNodes
+    /// Owner: share requests from node agents.
+    case cloudRequests
+    /// Owner: approve (sharing `itemId`) or deny a node's request.
+    case cloudRequestDecide(
+        requestId: String, approve: Bool, itemId: String?, ttlMinutes: UInt32?)
+    /// Owner: manage a node's own items on this Mac.
+    case cloudAdopt(node: String, items: [String])
     case agentEnroll(name: String)
     case sshIdentities
     case entriesInject(program: String, fields: [InjectField])
@@ -232,6 +241,10 @@ public enum RpcRequest: Encodable, Sendable {
         case .consoleApprovalsDisable: "console_approvals_disable"
         case .orgJoin: "org_join"
         case .orgLeave: "org_leave"
+        case .cloudNodes: "cloud_nodes"
+        case .cloudRequests: "cloud_requests"
+        case .cloudRequestDecide: "cloud_request_decide"
+        case .cloudAdopt: "cloud_adopt"
         case .auditQuery: "audit_query"
         case .leaseRequest: "lease_request"
         case .gateExecute: "gate_execute"
@@ -259,7 +272,7 @@ public enum RpcRequest: Encodable, Sendable {
         case .status, .groupsList, .templatesList, .migrationsStatus,
             .projectsList, .connectionsList, .trustsList, .sshIdentities,
             .lock, .cloudOverview, .cloudConsoleSignIn,
-            .consoleApprovalsDisable, .orgLeave:
+            .consoleApprovalsDisable, .orgLeave, .cloudNodes, .cloudRequests:
             break
         case .unlock(let password, let sessionTtlSeconds):
             try c.encode(password, forKey: key("password"))
@@ -424,6 +437,14 @@ public enum RpcRequest: Encodable, Sendable {
             try c.encode(shareAudit, forKey: key("share_audit"))
         case .orgJoin(let code):
             try c.encode(code, forKey: key("code"))
+        case .cloudRequestDecide(let requestId, let approve, let itemId, let ttlMinutes):
+            try c.encode(requestId, forKey: key("request_id"))
+            try c.encode(approve, forKey: key("approve"))
+            try c.encodeIfPresent(itemId, forKey: key("item_id"))
+            try c.encodeIfPresent(ttlMinutes, forKey: key("ttl_minutes"))
+        case .cloudAdopt(let node, let items):
+            try c.encode(node, forKey: key("node"))
+            try c.encode(items, forKey: key("items"))
         case .entriesInject(let program, let fields):
             try c.encode(program, forKey: key("program"))
             try c.encode(fields, forKey: key("fields"))

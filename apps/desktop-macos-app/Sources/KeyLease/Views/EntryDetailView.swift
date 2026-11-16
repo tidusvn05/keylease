@@ -21,6 +21,12 @@ struct EntryDetailView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     header(item)
 
+                    if let origin = item.origin {
+                        MessageBanner(
+                            message: Self.readOnlyNotice(origin),
+                            tone: .info)
+                    }
+
                     if hasLoginDetails(item) {
                         loginDetails(item)
                     }
@@ -53,12 +59,14 @@ struct EntryDetailView: View {
             .navigationTitle(item.title)
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
-                    IconAction(
-                        label: item.favorite
-                            ? "Remove from favorites" : "Add to favorites",
-                        icon: item.favorite ? "star.slash" : "star")
-                    {
-                        Task { await app.vault.toggleFavorite(item) }
+                    if item.origin == nil {
+                        IconAction(
+                            label: item.favorite
+                                ? "Remove from favorites" : "Add to favorites",
+                            icon: item.favorite ? "star.slash" : "star")
+                        {
+                            Task { await app.vault.toggleFavorite(item) }
+                        }
                     }
                     Menu {
                         Button("Copy prompt for agent",
@@ -77,15 +85,18 @@ struct EntryDetailView: View {
                     .labelStyle(.iconOnly)
                     .menuIndicator(.hidden)
                     .help("More actions")
-                    IconAction(label: "Edit", icon: "square.and.pencil") {
-                        guard app.vault.confirmDiscardIfDirty()
-                        else { return }
-                        app.vault.beginEdit(item)
-                    }
-                    IconAction(
-                        label: "Delete", icon: "trash", danger: true)
-                    {
-                        deleting = true
+                    // A read-only copy changes only where it comes from.
+                    if item.origin == nil {
+                        IconAction(label: "Edit", icon: "square.and.pencil") {
+                            guard app.vault.confirmDiscardIfDirty()
+                            else { return }
+                            app.vault.beginEdit(item)
+                        }
+                        IconAction(
+                            label: "Delete", icon: "trash", danger: true)
+                        {
+                            deleting = true
+                        }
                     }
                 }
             }
@@ -251,6 +262,28 @@ struct EntryDetailView: View {
             FieldGroup {
                 TotpRow(app: app, entry: item)
             }
+        }
+    }
+
+    // MARK: Read-only copies
+
+    static func readOnlyNotice(_ origin: ItemOrigin) -> UserMessage {
+        switch origin.kind {
+        case "node":
+            let node = origin.source ?? "a node"
+            return UserMessage(
+                title: "Read-only copy from \(node)",
+                detail: "It is kept up to date from \(node). Copy what you "
+                    + "need; to manage it here, run `keylease cloud adopt "
+                    + "\(node)` in Terminal.")
+        case "shared":
+            return UserMessage(
+                title: "Shared with this vault by its owner",
+                detail: "Change it on the owner's device.")
+        default:
+            return UserMessage(
+                title: "Imported read-only",
+                detail: "Change it on the node it came from and export it again.")
         }
     }
 

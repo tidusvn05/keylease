@@ -281,8 +281,9 @@ so the job's logs never contain the secret.
 
 ## 8. Share with a VPS through your cloud, back it up, recover
 
-Status: ✅ implemented and tested on Linux (CLI); the macOS app does not show
-share requests yet.
+Status: ✅ implemented and tested on Linux (CLI). The macOS app lists the
+VPS's items read-only, decides share requests and adopts a VPS's items
+(verified in CI only).
 
 1. On your laptop: `keylease cloud init --url https://cloud.example.com
    --admin-token-file admin.token` and keep the printed recovery kit offline.
@@ -291,13 +292,16 @@ share requests yet.
    laptop.
 3. Share: `keylease cloud share ITEM --to vps-prod [--ttl 7d]`, or a project
    with `--project billing`.
-4. An agent on the VPS asks: `keylease cloud request "deploy billing" --hint
+4. The VPS's own items show up on the laptop, read-only, in a group named
+   `vps-prod`. To manage them on the laptop instead: `keylease cloud adopt
+   vps-prod` (they are shared back and keep their ids on the VPS).
+5. An agent on the VPS asks: `keylease cloud request "deploy billing" --hint
    "stripe key"`; you run `keylease cloud requests` and `keylease cloud approve
    REQ --item ITEM --ttl 1h`.
-5. The VPS backs up its own secrets sealed to you. If it dies: invite and join
+6. The VPS backs up its own secrets sealed to you. If it dies: invite and join
    a new VPS, `keylease cloud restore --from vps-prod --to vps-new`,
    `keylease cloud remove vps-prod`.
-6. If you lose the laptop: `keylease cloud recover --url … --account …` on the
+7. If you lose the laptop: `keylease cloud recover --url … --account …` on the
    new device with the recovery code.
 
 Details: [cloud sharing](cloud-sharing.md).

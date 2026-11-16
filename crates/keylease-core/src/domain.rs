@@ -365,9 +365,29 @@ pub struct ItemMetadata {
     pub environment: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub personal: bool,
+    /// Set on a read-only copy that changes only where it comes from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<ItemOrigin>,
     pub revision: u64,
     pub updated_at: DateTime<Utc>,
 }
+
+/// Where a read-only copy comes from. Apps show it and offer no edit.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ItemOrigin {
+    /// `shared`: shared here by the vault owner. `node`: on the owner, a copy
+    /// of one of a node's own items. `bundle`: imported from another node.
+    pub kind: String,
+    /// The node's name for `node`; empty otherwise.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+}
+
+/// Extensions that make an item a read-only copy (see `ItemOrigin`).
+pub const CLOUD_SHARE_EXTENSION: &str = "keylease.cloud_share";
+pub const CLOUD_MIRROR_EXTENSION: &str = "keylease.cloud_mirror";
+pub const BUNDLE_ORIGIN_EXTENSION: &str = "keylease.bundle_origin";
 
 impl VaultItem {
     pub fn metadata(&self) -> ItemMetadata {
@@ -414,9 +434,33 @@ impl VaultItem {
             favorite,
             environment: self.environment.clone(),
             personal: self.personal,
+            origin: self.origin(),
             revision: self.revision,
             updated_at: self.updated_at,
         }
+    }
+
+    /// Set when this item is a read-only copy.
+    pub fn origin(&self) -> Option<ItemOrigin> {
+        if let Some(mirror) = self.extensions.get(CLOUD_MIRROR_EXTENSION) {
+            return Some(ItemOrigin {
+                kind: "node".into(),
+                source: mirror["node_name"].as_str().unwrap_or_default().into(),
+            });
+        }
+        if self.extensions.contains_key(CLOUD_SHARE_EXTENSION) {
+            return Some(ItemOrigin {
+                kind: "shared".into(),
+                source: String::new(),
+            });
+        }
+        if self.extensions.contains_key(BUNDLE_ORIGIN_EXTENSION) {
+            return Some(ItemOrigin {
+                kind: "bundle".into(),
+                source: String::new(),
+            });
+        }
+        None
     }
 
     pub fn secret_reference(&self, field: &ItemField) -> String {

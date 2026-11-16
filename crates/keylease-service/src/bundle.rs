@@ -19,7 +19,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
 pub const BUNDLE_FORMAT: &str = "keylease-bundle/v1";
 /// Extension on a read-only imported item: `{sender, origin_id, revision}`.
-pub const BUNDLE_EXTENSION: &str = "keylease.bundle_origin";
+pub const BUNDLE_EXTENSION: &str = keylease_core::BUNDLE_ORIGIN_EXTENSION;
 const SIGNATURE_CONTEXT: &[u8] = b"keylease-bundle-v1\n";
 const MAX_BUNDLE_ITEMS: usize = 1000;
 const MAX_BUNDLE_BYTES: usize = 16 * 1024 * 1024;
@@ -269,7 +269,10 @@ impl KeyLeaseService {
                     .is_some_and(|project| item.project_id.as_ref() == Some(&project.id))
                     && !item.personal
                     && item.status == ItemStatus::Active;
-                if (by_id || by_project) && !item.extensions.contains_key(cloud::SHARE_EXTENSION) {
+                if (by_id || by_project)
+                    && !item.extensions.contains_key(cloud::SHARE_EXTENSION)
+                    && !item.extensions.contains_key(cloud::MIRROR_EXTENSION)
+                {
                     items.push(item);
                 }
             }

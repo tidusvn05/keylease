@@ -10,6 +10,7 @@ struct ServerView: View {
     let app: AppController
     @State private var joining = false
     @State private var shareAudit = true
+    @State private var approving: CloudShareRequest?
 
     private var controller: ServerController { app.server }
 
@@ -31,6 +32,12 @@ struct ServerView: View {
             if let overview = controller.overview {
                 if overview.linked {
                     linkCard(overview)
+                    if overview.isOwner {
+                        if !controller.pendingRequests.isEmpty {
+                            requestsCard
+                        }
+                        nodesCard
+                    }
                     approvalsCard(overview)
                     organizationCard(overview)
                 } else {
@@ -42,6 +49,11 @@ struct ServerView: View {
         }
         .sheet(isPresented: $joining) {
             JoinOrganizationSheet(controller: controller)
+        }
+        .sheet(item: $approving) { request in
+            ApproveRequestSheet(
+                controller: controller, request: request,
+                items: app.vault.entries.filter { $0.origin == nil })
         }
     }
 
@@ -132,6 +144,103 @@ struct ServerView: View {
             controller.error = UserMessage(
                 title: "Could not open the browser",
                 detail: "The server returned an unexpected console address.")
+        }
+    }
+
+    // MARK: - Requests from nodes
+
+    private var requestsCard: some View {
+        KLCard {
+            VStack(alignment: .leading, spacing: KL.Space.m) {
+                HStack {
+                    Image(systemName: "tray.and.arrow.down")
+                    Text("Requests from your nodes")
+                        .font(.callout.weight(.semibold))
+                    Spacer()
+                }
+                ForEach(controller.pendingRequests) { request in
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: KL.Space.xxs) {
+                            Text(request.purpose).font(.callout.weight(.medium))
+                            Text(
+                                [
+                                    request.nodeName ?? "a node",
+                                    request.agentId,
+                                    request.hint.map { "needs: \($0)" },
+                                ].compactMap { $0 }.joined(separator: " · ")
+                            )
+                            .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        KLButton(title: "Deny", role: .ghost) {
+                            Task { await controller.deny(request) }
+                        }
+                        KLButton(title: "Share an item…", role: .primary) {
+                            approving = request
+                        }
+                    }
+                    .disabled(controller.busy != nil)
+                }
+            }
+        }
+    }
+
+    // MARK: - Nodes
+
+    private var nodesCard: some View {
+        KLCard {
+            VStack(alignment: .leading, spacing: KL.Space.m) {
+                HStack {
+                    Image(systemName: "server.rack")
+                    Text("Nodes and devices").font(.callout.weight(.semibold))
+                    Spacer()
+                }
+                if controller.nodes.isEmpty {
+                    Text(
+                        "Add a VPS with `keylease cloud invite NAME` here, then "
+                            + "`keylease cloud join` on the VPS. Its own items "
+                            + "then show up in your vault, read-only, in a "
+                            + "group named after it."
+                    )
+                    .font(.caption).foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                }
+                ForEach(controller.nodes) { node in
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: KL.Space.xxs) {
+                            Text(node.name).font(.callout.weight(.medium))
+                            Text(
+                                node.isNode
+                                    ? "VPS · \(node.copies) items shown read-only · \(node.fingerprint)"
+                                    : "Your device, synced two-way · \(node.fingerprint)"
+                            )
+                            .font(.caption).foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                        }
+                        Spacer()
+                        if node.isNode && node.copies > 0 {
+                            KLButton(
+                                title: controller.busy == .adopt(node.memberId)
+                                    ? "Moving…" : "Manage here"
+                            ) {
+                                guard
+                                    confirmAction(
+                                        title: "Manage \(node.name)'s items on this Mac?",
+                                        message: "Its \(node.copies) items become "
+                                            + "yours, in the same projects, and are "
+                                            + "shared back with \(node.name). They keep "
+                                            + "working there under the same ids but "
+                                            + "can then only be changed here.",
+                                        confirmLabel: "Manage here",
+                                        destructive: false)
+                                else { return }
+                                Task { await controller.adopt(node) }
+                            }
+                            .disabled(controller.busy != nil)
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -266,6 +375,83 @@ struct ServerView: View {
                 }
             }
         }
+    }
+}
+
+/// Approve a node's request by choosing the item to share.
+private struct ApproveRequestSheet: View {
+    let controller: ServerController
+    let request: CloudShareRequest
+    let items: [ItemMetadata]
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var selected: String?
+    @State private var ttlMinutes: UInt32? = 60
+
+    /// What the search asks for, else the request's hint; everything when
+    /// the hint matches nothing.
+    private var matches: [ItemMetadata] {
+        let typed = query.trimmingCharacters(in: .whitespaces)
+        let needle = typed.isEmpty ? (request.hint ?? "") : typed
+        let found = needle.isEmpty
+            ? items
+            : items.filter { $0.title.localizedCaseInsensitiveContains(needle) }
+        return Array((found.isEmpty && typed.isEmpty ? items : found).prefix(50))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Share with \(request.nodeName ?? "the node")").font(.headline)
+            Text(request.purpose).font(.callout)
+            if let hint = request.hint {
+                Text("Asked for: \(hint)").font(.caption).foregroundStyle(.secondary)
+            }
+            if let error = controller.error {
+                MessageBanner(
+                    message: error, onDismiss: { controller.error = nil })
+            }
+            TextField("Search your items", text: $query)
+                .textFieldStyle(.roundedBorder)
+            List(matches, id: \.id, selection: $selected) { item in
+                VStack(alignment: .leading) {
+                    Text(item.title)
+                    if let username = item.username {
+                        Text(username).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .tag(item.id)
+            }
+            .frame(height: 220)
+            Picker("For", selection: $ttlMinutes) {
+                Text("1 hour").tag(UInt32?.some(60))
+                Text("1 day").tag(UInt32?.some(60 * 24))
+                Text("7 days").tag(UInt32?.some(60 * 24 * 7))
+                Text("Until I unshare it").tag(UInt32?.none)
+            }
+            HStack {
+                Spacer()
+                KLButton(title: "Cancel", role: .ghost) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                KLButton(
+                    title: controller.busy == .decide(request.requestId)
+                        ? "Sharing…" : "Share",
+                    role: .primary
+                ) {
+                    guard let selected else { return }
+                    Task {
+                        if await controller.approve(
+                            request, itemId: selected, ttlMinutes: ttlMinutes)
+                        {
+                            dismiss()
+                        }
+                    }
+                }
+                .disabled(selected == nil || controller.busy != nil)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(KL.Space.xxxl)
+        .frame(width: 520)
     }
 }
 
