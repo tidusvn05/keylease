@@ -35,4 +35,25 @@ final class CloudModelsTests: XCTestCase {
         XCTAssertNil(overview.org)
         XCTAssertFalse(overview.consoleApprovals.enabled)
     }
+
+    /// `test-vectors/rpc/cloud/nodes.json`, written by the Rust test
+    /// `node_request_and_adopt_wires_match_the_shared_vector`.
+    func testNodesRequestsAndAdoptDecodeTheSharedVector() throws {
+        let url = rpcTestVectors.appendingPathComponent("cloud/nodes.json")
+        let vector = try JSONDecoder().decode(
+            JSONValue.self, from: Data(contentsOf: url))
+        let nodes = try XCTUnwrap(vector["nodes"]).decoded(as: [CloudNodeView].self)
+        XCTAssertEqual(nodes.first?.name, "vps-prod")
+        XCTAssertEqual(nodes.first?.isNode, true)
+        XCTAssertEqual(nodes.first?.copies, 4)
+        let requests = try XCTUnwrap(vector["requests"])
+            .decoded(as: [CloudShareRequest].self)
+        XCTAssertEqual(requests.first?.isPending, true)
+        XCTAssertEqual(requests.first?.hint, "stripe live key")
+        XCTAssertNil(requests.first?.shareId)
+        let adopt = try XCTUnwrap(vector["adopt"]).decoded(as: AdoptReport.self)
+        XCTAssertEqual(adopt.adopted.count, 2)
+        XCTAssertEqual(adopt.projects, ["billing"])
+        XCTAssertEqual(adopt.itemShares, 1)
+    }
 }

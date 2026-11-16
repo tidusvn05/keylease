@@ -63,13 +63,13 @@ pub use bundle::{
     NodeIdentity,
 };
 pub use cloud::{
-    CloudLink, CloudNode, CloudRole, CloudShare, CloudShareRequest, CloudStatus, InboxOutcome,
-    InviteSetup, OwnerSetup, PendingBackup, RelaySignature, RequestStatus, RestoreReport,
-    ShareScope,
+    AdoptReport, CloudLink, CloudNode, CloudRole, CloudShare, CloudShareRequest, CloudStatus,
+    InboxOutcome, InviteSetup, MirrorReport, OwnerSetup, PendingBackup, RelaySignature,
+    RequestStatus, RestoreReport, ShareScope,
 };
 pub use cloud_remote::{
-    CloudOverview, CloudRelay, ConsoleApprovalsOverview, ConsoleSignInLink, OrgJoinOutcome,
-    OrgOverview,
+    CloudNodeView, CloudOverview, CloudRelay, ConsoleApprovalsOverview, ConsoleSignInLink,
+    OrgJoinOutcome, OrgOverview,
 };
 pub use console_approvals::ConsoleApprovalsConfig;
 pub use db::{DbTarget, ScramClientFinal};

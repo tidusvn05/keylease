@@ -86,18 +86,14 @@ impl KeyLeaseService {
                 .store
                 .list_items(vault)?
                 .into_iter()
-                .filter(|item| {
-                    !item.extensions.contains_key(SHARE_EXTENSION)
-                        && !item
-                            .extensions
-                            .contains_key(crate::bundle::BUNDLE_EXTENSION)
-                })
+                .filter(|item| item.origin().is_none())
                 .collect();
             let mut objects: Vec<(String, u64, SyncObject)> = Vec::new();
-            for group in groups
-                .iter()
-                .filter(|group| group.id.0 != SHARED_GROUP && group.id.0 != RESTORED_GROUP)
-            {
+            for group in groups.iter().filter(|group| {
+                group.id.0 != SHARED_GROUP
+                    && group.id.0 != RESTORED_GROUP
+                    && !is_mirror_group(&group.id)
+            }) {
                 objects.push((
                     group.id.0.clone(),
                     group.revision,
@@ -258,6 +254,7 @@ impl KeyLeaseService {
                 if !group.id.0.starts_with("group_")
                     || group.id.0 == SHARED_GROUP
                     || group.id.0 == RESTORED_GROUP
+                    || is_mirror_group(&group.id)
                 {
                     return Err(invalid("sync group id"));
                 }

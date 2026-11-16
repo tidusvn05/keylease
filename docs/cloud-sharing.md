@@ -2,6 +2,8 @@
 
 Link your vaults to a self-hosted **KeyLease Cloud** to:
 
+- **see** every VPS's own items on your device, read-only, and take over
+  managing them with one command;
 - **share** an item, or a whole project, from your own device with a VPS;
 - let an agent on a VPS **ask** you for an item, and approve it on your device;
 - **back up** a VPS's own secrets, so a dead VPS can be rebuilt;
@@ -90,7 +92,37 @@ deleting one is refused; change or unshare it on your device.
 Unsharing stops future copies; it cannot make the VPS forget a value it
 already had. When you stop trusting a VPS, remove it and rotate what it had.
 
-## 5. Let an agent ask
+## 5. See your nodes' items on your device
+
+Once a VPS has joined, its own items show up on your laptop, read-only, in a
+group named after it (in the macOS app and to `keylease` on the laptop). They
+come from the backups the VPS already sends, sealed to you, so nothing new
+crosses the cloud. Each sync updates them: an edit on the VPS shows up, a
+deletion removes the copy, removing the VPS removes them all.
+
+You can view and copy them. Editing, deleting, sharing or exporting one is
+refused: it changes only on the VPS. Your laptop does not back them up again
+or sync them to your other devices.
+
+### Manage them on your device instead
+
+```sh
+keylease cloud adopt vps-prod              # every item of vps-prod
+keylease cloud adopt vps-prod ITEM_ID      # or only some (the copy's id or the VPS's)
+```
+
+In the macOS app: **Server → Nodes and devices → Manage here**.
+
+The items become your own, in the same projects (created on your laptop with
+the same ids when you have none with that slug), and are shared back with
+the VPS: a project as a project share, the rest one by one. On the VPS each
+original becomes the shared copy **under the same id**, so `kl://`
+references, `.keylease.json` projects and scripts keep working. From then on
+you change them on your laptop and the VPS follows; there they are
+read-only. A VPS on a version before 0.5 keeps its originals and gets the
+shared copies beside them.
+
+## 6. Let an agent ask
 
 An agent on the VPS needs no master password:
 
@@ -98,7 +130,8 @@ An agent on the VPS needs no master password:
 keylease cloud request "deploy the billing service" --hint "stripe live key"
 ```
 
-On the laptop:
+On the laptop, in the macOS app (**Server → Requests from your nodes**: pick
+the item and for how long), or:
 
 ```sh
 keylease cloud requests                                  # syncs, then lists who asked for what
@@ -110,7 +143,7 @@ Approving creates an item share for the VPS that asked. The agent then finds
 the item with `keylease entries search` and uses it through `keylease ssh`,
 `db` or `run`, which still ask for the agent's own approval.
 
-## 6. Backups and a dead VPS
+## 7. Backups and a dead VPS
 
 Once linked, every member backs up its own items and projects, sealed to the
 owner key: the VPS backs up the secrets it created (not the copies you
@@ -132,7 +165,7 @@ keylease cloud remove vps-prod                     # its shares end; it can no l
 Re-share what the old VPS received from you (its shares stay listed under the
 old node).
 
-## 7. A lost laptop
+## 8. A lost laptop
 
 On the new device, create a vault, then:
 
@@ -155,6 +188,7 @@ the owner from then on; `keylease cloud sync` resumes everything.
 | `cloud share`, `shares`, `unshare` | owner | item or project shares |
 | `cloud request PURPOSE` | node agent | ask the owner (RPC, no master password) |
 | `cloud requests`, `approve`, `deny` | owner (node: own requests) | decide requests |
+| `cloud adopt NODE [ITEM…]` | owner | manage a node's items here; share them back |
 | `cloud restore --from M [--to NODE]` | owner | restore a member's backup |
 | `cloud recover` | new owner device | recovery kit |
 | `cloud status`, `cloud sync`, `cloud unlink` | both | state, sync now, forget the link |
@@ -175,8 +209,6 @@ else.
 
 - Full live sync between two personal devices editing the same vault is not
   supported; a second device recovers from the backup.
-- Approving share requests is done from the CLI; the macOS app does not show
-  them yet.
 - A node removed from the cloud keeps the copies it already had.
 - The node is trusted with what you share: a fully compromised VPS can read
   every item shared with it while its vault is unlocked.

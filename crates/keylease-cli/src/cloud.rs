@@ -106,6 +106,11 @@ pub(crate) enum CloudCommand {
     },
     /// Owner: deny a request.
     Deny { request_id: String },
+    /// Owner: manage a node's own items here. Its items (all, or the ones
+    /// named, by the id of the copy here or on the node) become this
+    /// device's items, in the node's projects, and are shared back; on the
+    /// node they keep their ids and become read-only copies.
+    Adopt { node: String, items: Vec<String> },
     /// Owner: restore a member's backup to a node, or into this vault.
     Restore {
         /// The member whose backup to restore (a node's name or member id,
@@ -243,6 +248,29 @@ async fn sync_round(
             .await?;
     }
     problems.extend(applied.rejected.iter().cloned());
+    // Owner: read-only copies of each node's own items, from its backups.
+    let mut node_items = 0;
+    if link.role == CloudRole::Owner {
+        for node in service.cloud_nodes()? {
+            if node.role != CloudRole::Node || node.removed_at.is_some() {
+                continue;
+            }
+            let list: RelayBackupList = relay
+                .send(
+                    Method::GET,
+                    &format!("/v1/relay/backups?member={}", node.member_id),
+                    None,
+                    true,
+                    None,
+                )
+                .await?;
+            match service.cloud_mirror_node(&node.member_id, &list.backups) {
+                Ok(report) => node_items += report.items,
+                Err(error @ KeyLeaseError::VaultLocked { .. }) => return Err(error),
+                Err(error) => problems.push(format!("copies of {}: {error:?}", node.name)),
+            }
+        }
+    }
     Ok(json!({
         "linked": true,
         "role": link.role,
@@ -250,6 +278,7 @@ async fn sync_round(
         "sent": sent,
         "backed_up": backed_up,
         "received": applied.applied,
+        "node_items": node_items,
         "problems": problems,
     }))
 }
@@ -429,6 +458,24 @@ pub(crate) async fn cloud_command(cli: &Cli, socket: &Path, command: CloudComman
             }))
         }
         CloudCommand::Status => print_json(&service.cloud_status()?),
+        CloudCommand::Adopt { node, items } => {
+            require_link(&service)?;
+            // Copy the node's newest items first.
+            sync_once(&service).await?;
+            let report = service.cloud_adopt(&node, &items)?;
+            let synced = sync_once(&service).await.ok();
+            print_json(&json!({
+                "adopted": report.adopted.len(),
+                "projects_shared": report.projects,
+                "items_shared": report.item_shares,
+                "skipped": report.skipped,
+                "next": format!(
+                    "{} receives them on its next sync; until then nothing changes there",
+                    report.node
+                ),
+                "sync": synced,
+            }))
+        }
         CloudCommand::Sync => print_json(&sync_once(&service).await?),
         CloudCommand::ConsoleApprovals(command) => {
             crate::console_approvals::command(&service, command).await

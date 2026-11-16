@@ -598,7 +598,10 @@ public struct ItemMetadata: Codable, Equatable, Sendable {
     public let updatedAt: String
     public let urls: [String]
     public let username: String?
-    public init(favorite: Bool, groupId: String, hasNotes: Bool, hasPassword: Bool, hasTotp: Bool, id: String, kind: String, projectId: String?, revision: UInt64, title: String, updatedAt: String, urls: [String], username: String?) {
+    /// Set on a read-only copy (shared by the owner, a node's item, a bundle).
+    public let origin: ItemOrigin?
+    public init(favorite: Bool, groupId: String, hasNotes: Bool, hasPassword: Bool, hasTotp: Bool, id: String, kind: String, projectId: String?, revision: UInt64, title: String, updatedAt: String, urls: [String], username: String?, origin: ItemOrigin? = nil) {
+        self.origin = origin
         self.favorite = favorite
         self.groupId = groupId
         self.hasNotes = hasNotes
@@ -627,6 +630,18 @@ public struct ItemMetadata: Codable, Equatable, Sendable {
         case updatedAt = "updated_at"
         case urls = "urls"
         case username = "username"
+        case origin = "origin"
+    }
+}
+
+public struct ItemOrigin: Codable, Equatable, Sendable {
+    /// `shared`, `node` or `bundle`.
+    public let kind: String
+    /// The node's name for `node`.
+    public let source: String?
+    public init(kind: String, source: String?) {
+        self.kind = kind
+        self.source = source
     }
 }
 

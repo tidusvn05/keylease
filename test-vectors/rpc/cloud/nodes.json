@@ -1,0 +1,32 @@
+{
+  "nodes": [
+    {
+      "member_id": "mem_vps",
+      "name": "vps-prod",
+      "role": "node",
+      "fingerprint": "ef56-7890",
+      "verified_at": "2026-11-15T09:00:00Z",
+      "copies": 4
+    }
+  ],
+  "requests": [
+    {
+      "request_id": "req_1",
+      "agent_id": "agent_deploy",
+      "purpose": "deploy the billing service",
+      "hint": "stripe live key",
+      "node_member_id": "mem_vps",
+      "node_name": "vps-prod",
+      "created_at": "2026-11-15T09:10:00Z",
+      "status": "pending",
+      "share_id": null
+    }
+  ],
+  "adopt": {
+    "node": "vps-prod",
+    "adopted": ["item_a", "item_b"],
+    "projects": ["billing"],
+    "item_shares": 1,
+    "skipped": []
+  }
+}
