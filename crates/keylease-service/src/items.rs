@@ -1221,10 +1221,31 @@ pub(crate) fn refuse_shared_copy(item: &VaultItem) -> Result<()> {
                     .into(),
         });
     }
+    if let Some(mirror) = item.extensions.get(cloud::MIRROR_EXTENSION) {
+        return Err(KeyLeaseError::Denied {
+            reason: format!(
+                "this is a read-only copy of an item on the node {}; change it there, or run \
+                 `keylease cloud adopt` to manage it here",
+                mirror["node_name"].as_str().unwrap_or("that owns it")
+            ),
+        });
+    }
     if item.extensions.contains_key(bundle::BUNDLE_EXTENSION) {
         return Err(KeyLeaseError::Denied {
             reason: "this item was imported read-only from another node; change it there and \
                      export it again"
+                .into(),
+        });
+    }
+    Ok(())
+}
+
+/// The group holding a node's copies is kept by the cloud sync alone.
+pub(crate) fn refuse_mirror_group(id: &GroupId) -> Result<()> {
+    if cloud::is_mirror_group(id) {
+        return Err(KeyLeaseError::Denied {
+            reason: "this group holds read-only copies of a node's items; it changes only \
+                     through the node"
                 .into(),
         });
     }

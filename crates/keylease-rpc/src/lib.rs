@@ -385,6 +385,32 @@ pub enum RpcRequest {
     OrgLeave {
         auth: RpcAuth,
     },
+    /// Owner: the nodes and devices linked to this vault.
+    CloudNodes {
+        auth: RpcAuth,
+    },
+    /// Owner: share requests from node agents (every status).
+    CloudRequests {
+        auth: RpcAuth,
+    },
+    /// Owner: approve a request by sharing `item_id` with the node that
+    /// asked (for `ttl_minutes`, or until unshared), or deny it.
+    CloudRequestDecide {
+        auth: RpcAuth,
+        request_id: String,
+        approve: bool,
+        #[serde(default)]
+        item_id: Option<String>,
+        #[serde(default)]
+        ttl_minutes: Option<u32>,
+    },
+    /// Owner: manage a node's own items on this device (all, or `items`).
+    CloudAdopt {
+        auth: RpcAuth,
+        node: String,
+        #[serde(default)]
+        items: Vec<String>,
+    },
     AgentEnroll {
         auth: RpcAuth,
         name: String,
@@ -1046,6 +1072,38 @@ pub async fn handle_rpc(
         RpcRequest::OrgLeave { auth } => {
             let actor = actor(service, &auth)?;
             Ok(json!({"left": service.org_leave_authorized(&actor)?}))
+        }
+        RpcRequest::CloudNodes { auth } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.cloud_nodes_authorized(&actor)?)
+                .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::CloudRequests { auth } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.cloud_requests_authorized(&actor)?)
+                .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::CloudRequestDecide {
+            auth,
+            request_id,
+            approve,
+            item_id,
+            ttl_minutes,
+        } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.cloud_request_decide_authorized(
+                &actor,
+                &request_id,
+                approve,
+                item_id.map(ItemId),
+                ttl_minutes,
+            )?)
+            .map_err(|_| KeyLeaseError::Storage)
+        }
+        RpcRequest::CloudAdopt { auth, node, items } => {
+            let actor = actor(service, &auth)?;
+            serde_json::to_value(service.cloud_adopt_authorized(&actor, &node, &items)?)
+                .map_err(|_| KeyLeaseError::Storage)
         }
         RpcRequest::EntriesInject {
             auth,

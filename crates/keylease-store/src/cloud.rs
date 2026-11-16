@@ -26,6 +26,12 @@ pub mod record {
     pub const APPLIED: &str = "applied";
     /// A message waiting to be sent.
     pub const OUTBOX: &str = "outbox";
+    /// Owner: the local read-only copy of a node's item
+    /// (`NODE_MEMBER_ID/NODE_ITEM_ID`), or the state of a node's copies
+    /// (`NODE_MEMBER_ID/`).
+    pub const MIRROR: &str = "mirror";
+    /// Owner: a node item now managed here (`NODE_MEMBER_ID/ITEM_ID`).
+    pub const ADOPTED: &str = "adopted";
 }
 
 fn local_secret_key(unlocked: &UnlockedVault) -> SecretKey {

@@ -152,6 +152,19 @@ pub struct ConsoleApprovalsOverview {
     pub enabled_at: Option<DateTime<Utc>>,
 }
 
+/// `cloud_nodes`: one linked node or device.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudNodeView {
+    pub member_id: String,
+    pub name: String,
+    /// `node` or `device`.
+    pub role: CloudRole,
+    pub fingerprint: String,
+    pub verified_at: DateTime<Utc>,
+    /// Read-only copies of this node's own items on this device.
+    pub copies: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrgOverview {
     pub org_id: String,
@@ -386,6 +399,73 @@ impl KeyLeaseService {
         self.authorize_cloud(actor, "org_leave")?;
         self.org_leave()
     }
+
+    /// Owner: the nodes and devices still linked, with how many of each
+    /// node's items have a read-only copy here.
+    pub fn cloud_nodes_authorized(&self, actor: &ActorContext) -> Result<Vec<CloudNodeView>> {
+        self.authorize_cloud(actor, "nodes")?;
+        self.cloud_require_link()?;
+        self.cloud_nodes()?
+            .into_iter()
+            .filter(|node| node.removed_at.is_none())
+            .map(|node| {
+                Ok(CloudNodeView {
+                    copies: self.cloud_node_copies(&node.member_id)?,
+                    member_id: node.member_id,
+                    name: node.name,
+                    role: node.role,
+                    fingerprint: node.fingerprint,
+                    verified_at: node.verified_at,
+                })
+            })
+            .collect()
+    }
+
+    pub fn cloud_requests_authorized(
+        &self,
+        actor: &ActorContext,
+    ) -> Result<Vec<CloudShareRequest>> {
+        self.authorize_cloud(actor, "requests")?;
+        self.cloud_require_link()?;
+        self.cloud_requests()
+    }
+
+    /// Owner: approves (sharing `item_id`) or denies a node's request.
+    /// Returns the request as decided.
+    pub fn cloud_request_decide_authorized(
+        &self,
+        actor: &ActorContext,
+        request_id: &str,
+        approve: bool,
+        item_id: Option<ItemId>,
+        ttl_minutes: Option<u32>,
+    ) -> Result<CloudShareRequest> {
+        self.authorize_cloud(actor, "request_decide")?;
+        if !approve {
+            return self.cloud_deny_request(request_id);
+        }
+        let item_id = item_id.ok_or_else(|| KeyLeaseError::InvalidRequest {
+            reason: "choose the item to share with the node".into(),
+        })?;
+        let ttl = ttl_minutes.map(|minutes| Duration::minutes(i64::from(minutes)));
+        self.cloud_approve_request(request_id, &item_id, ttl)?;
+        self.cloud_requests()?
+            .into_iter()
+            .find(|request| request.request_id == request_id)
+            .ok_or_else(|| KeyLeaseError::NotFound {
+                resource: request_id.into(),
+            })
+    }
+
+    pub fn cloud_adopt_authorized(
+        &self,
+        actor: &ActorContext,
+        node: &str,
+        items: &[String],
+    ) -> Result<AdoptReport> {
+        self.authorize_cloud(actor, "adopt")?;
+        self.cloud_adopt(node, items)
+    }
 }
 
 #[cfg(test)]
@@ -433,5 +513,41 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(serde_json::to_value(&overview).unwrap(), vector);
+    }
+
+    #[test]
+    fn node_request_and_adopt_wires_match_the_shared_vector() {
+        let vector: Value =
+            serde_json::from_str(include_str!("../../../test-vectors/rpc/cloud/nodes.json"))
+                .unwrap();
+        let nodes = vec![CloudNodeView {
+            member_id: "mem_vps".into(),
+            name: "vps-prod".into(),
+            role: CloudRole::Node,
+            fingerprint: "ef56-7890".into(),
+            verified_at: at("2026-11-15T09:00:00Z"),
+            copies: 4,
+        }];
+        assert_eq!(serde_json::to_value(&nodes).unwrap(), vector["nodes"]);
+        let requests = vec![CloudShareRequest {
+            request_id: "req_1".into(),
+            agent_id: "agent_deploy".into(),
+            purpose: "deploy the billing service".into(),
+            hint: Some("stripe live key".into()),
+            node_member_id: Some("mem_vps".into()),
+            node_name: Some("vps-prod".into()),
+            created_at: at("2026-11-15T09:10:00Z"),
+            status: crate::cloud::RequestStatus::Pending,
+            share_id: None,
+        }];
+        assert_eq!(serde_json::to_value(&requests).unwrap(), vector["requests"]);
+        let adopt = AdoptReport {
+            node: "vps-prod".into(),
+            adopted: vec![ItemId("item_a".into()), ItemId("item_b".into())],
+            projects: vec!["billing".into()],
+            item_shares: 1,
+            skipped: vec![],
+        };
+        assert_eq!(serde_json::to_value(&adopt).unwrap(), vector["adopt"]);
     }
 }

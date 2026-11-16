@@ -135,6 +135,11 @@ final class WireCommandParityTests: XCTestCase {
             .consoleApprovalsDisable,
             .orgJoin(code: SecretValue("klnode_x")),
             .orgLeave,
+            .cloudNodes,
+            .cloudRequests,
+            .cloudRequestDecide(
+                requestId: "req_1", approve: true, itemId: "item_1", ttlMinutes: 60),
+            .cloudAdopt(node: "vps-prod", items: []),
             .auditQuery(limit: 50),
             .leaseRequest(
                 request: ActionRequest(

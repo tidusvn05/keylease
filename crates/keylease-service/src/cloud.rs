@@ -21,7 +21,9 @@ use keylease_crypto::sealed::{
 use keylease_crypto::{SecretKey, keyed_digest};
 use keylease_store::cloud::record;
 
+mod mirror;
 mod sync;
+pub use mirror::{AdoptReport, MIRROR_EXTENSION, MirrorReport, is_mirror_group};
 use sync::SyncObject;
 
 const LINK_ID: &str = "self";
@@ -30,7 +32,7 @@ const SECRET_LABEL: &str = "cloud-relay-keys";
 const INVITE_TTL_MINUTES: i64 = 30;
 const MAX_PENDING_REQUESTS_PER_AGENT: usize = 10;
 /// Extension on an item received through a share.
-pub const SHARE_EXTENSION: &str = "keylease.cloud_share";
+pub const SHARE_EXTENSION: &str = keylease_core::CLOUD_SHARE_EXTENSION;
 /// Groups that hold shared-in and restored items.
 pub const SHARED_GROUP: &str = "group_cloud_shared";
 pub const RESTORED_GROUP: &str = "group_cloud_restored";
@@ -270,6 +272,10 @@ enum MessagePayload {
         share_id: String,
         item: Box<VaultItem>,
         expires_at: Option<DateTime<Utc>>,
+        /// The owner adopted the node's own item with this id: the node's
+        /// original becomes this shared copy (same id). Older nodes ignore it.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        adopted: bool,
     },
     Unshare {
         share_id: String,
@@ -1067,6 +1073,7 @@ impl KeyLeaseService {
                     .cloud_put(record::SHARE, &share.share_id, &to_json(&share)?)?;
             }
         }
+        self.cloud_unmirror_node(&node.member_id)?;
         self.cloud_audit(
             "cloud:node:remove",
             &format!("kl://cloud/nodes/{}", node.member_id),
@@ -1106,6 +1113,11 @@ impl KeyLeaseService {
                     let item = self.store.get_item(vault, item_id)?;
                     if item.extensions.contains_key(SHARE_EXTENSION) {
                         return Err(invalid("this item was itself shared to this vault"));
+                    }
+                    if item.extensions.contains_key(MIRROR_EXTENSION) {
+                        return Err(invalid(
+                            "this is a copy of a node's item; adopt it first (keylease cloud adopt)",
+                        ));
                     }
                 }
                 ShareScope::Project { project_id } => {
@@ -1440,7 +1452,7 @@ impl KeyLeaseService {
                                 item.project_id.as_ref() == Some(project_id)
                             }
                         })
-                        .filter(|item| !item.extensions.contains_key(SHARE_EXTENSION))
+                        .filter(|item| item.origin().is_none())
                         .collect()
                 };
                 let prefix = format!("{}/", share.share_id);
@@ -1483,6 +1495,14 @@ impl KeyLeaseService {
                     {
                         continue;
                     }
+                    let adopted = previous.is_none()
+                        && self
+                            .store
+                            .cloud_get(
+                                record::ADOPTED,
+                                &format!("{}/{}", node.member_id, item.id.0),
+                            )?
+                            .is_some();
                     let revision =
                         next_message_revision(previous.map_or(0, |p| p.message_revision));
                     let mut copy = item.clone();
@@ -1500,6 +1520,7 @@ impl KeyLeaseService {
                             share_id: share.share_id.clone(),
                             item: Box::new(copy),
                             expires_at: share.expires_at,
+                            adopted,
                         },
                     )?;
                     self.store.cloud_put(
@@ -1620,6 +1641,7 @@ impl KeyLeaseService {
                     share_id,
                     item,
                     expires_at,
+                    adopted,
                 },
             ) if item.id.0 == message.object_id => self.receive_shared_item(
                 vault,
@@ -1628,6 +1650,7 @@ impl KeyLeaseService {
                 *item,
                 message.revision,
                 expires_at,
+                adopted,
             ),
             (CloudRole::Node, kind::UNSHARE, MessagePayload::Unshare { share_id, item_id })
                 if item_id.0 == message.object_id =>
@@ -1707,6 +1730,7 @@ impl KeyLeaseService {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn receive_shared_item(
         &self,
         vault: &keylease_store::UnlockedVault,
@@ -1715,6 +1739,7 @@ impl KeyLeaseService {
         owner_item: VaultItem,
         message_revision: u64,
         expires_at: Option<DateTime<Utc>>,
+        adopted: bool,
     ) -> Result<()> {
         let key = format!("{share_id}/{}", owner_item.id.0);
         let existing: Option<ReceivedRecord> = self
@@ -1734,6 +1759,13 @@ impl KeyLeaseService {
             Some(record) if !record.closed => {
                 self.store.get_item(vault, &record.local_item_id).ok()
             }
+            // The owner adopted this node's own item: the original becomes
+            // the shared copy, keeping its id (and every reference to it).
+            None if adopted => self
+                .store
+                .get_item(vault, &owner_item.id)
+                .ok()
+                .filter(|item| item.origin().is_none()),
             _ => None,
         };
         let local_id = current
@@ -1949,7 +1981,10 @@ impl KeyLeaseService {
             let keys = self.load_keys(vault)?;
             let mut objects: Vec<(String, BackupPayload, Option<u64>)> = Vec::new();
             for item in self.store.list_items(vault)? {
-                if item.extensions.contains_key(SHARE_EXTENSION) {
+                // Copies belong to where they come from.
+                if item.extensions.contains_key(SHARE_EXTENSION)
+                    || item.extensions.contains_key(MIRROR_EXTENSION)
+                {
                     continue;
                 }
                 let revision = item.revision;
@@ -2151,13 +2186,15 @@ impl KeyLeaseService {
     /// Owner: opens the backups of `from` (a node, or this owner), checking
     /// each signature, that each payload is the object it claims to be, and
     /// the set against the signed manifest.
-    fn open_backups(
+    /// Every live backup object of `from_member_id`, each checked against its
+    /// sender's signature and label (not against the manifest).
+    fn open_backup_objects(
         &self,
         link: &CloudLink,
         keys: &Keys,
         from_member_id: &str,
         backups: &[RelayBackup],
-    ) -> Result<(Vec<BackupPayload>, RestoreReport)> {
+    ) -> Result<Vec<(String, u64, BackupPayload)>> {
         let sender_sign = if from_member_id == link.member_id {
             link.sign_public_b64.clone()
         } else {
@@ -2198,6 +2235,17 @@ impl KeyLeaseService {
             }
             opened.push((backup.object_id.clone(), backup.revision, payload));
         }
+        Ok(opened)
+    }
+
+    fn open_backups(
+        &self,
+        link: &CloudLink,
+        keys: &Keys,
+        from_member_id: &str,
+        backups: &[RelayBackup],
+    ) -> Result<(Vec<BackupPayload>, RestoreReport)> {
+        let opened = self.open_backup_objects(link, keys, from_member_id, backups)?;
         let mut report = RestoreReport::default();
         let manifest = opened.iter().find_map(|(_, _, payload)| match payload {
             BackupPayload::Manifest { entries, as_of } => Some((entries.clone(), *as_of)),
@@ -3238,5 +3286,233 @@ mod tests {
         }
         // The node got nothing.
         assert_eq!(title_of(&vps, &id), None);
+    }
+
+    fn put_project(service: &KeyLeaseService, slug: &str) -> VaultProject {
+        service
+            .with_vault(|vault| {
+                let now = Utc::now();
+                let project = VaultProject {
+                    id: ProjectId::new(),
+                    vault_id: vault.vault_id.clone(),
+                    slug: slug.into(),
+                    name: slug.to_uppercase(),
+                    revision: 1,
+                    created_by: AgentId("test".into()),
+                    updated_by: AgentId("test".into()),
+                    created_at: now,
+                    updated_at: now,
+                    archived_at: None,
+                    environments: Vec::new(),
+                };
+                service.store.put_project(
+                    vault,
+                    &project,
+                    Some(0),
+                    MutationContext {
+                        actor: "test",
+                        idempotency_key: &format!("project-{slug}"),
+                        request_material: slug.as_bytes(),
+                        audit_event: None,
+                    },
+                )?;
+                Ok(project)
+            })
+            .unwrap()
+    }
+
+    fn move_to_project(service: &KeyLeaseService, id: &ItemId, project: &ProjectId) {
+        service
+            .with_vault(|vault| {
+                let mut item = service.store.get_item(vault, id)?;
+                let base = item.revision;
+                item.project_id = Some(project.clone());
+                item.revision += 1;
+                service.store.put_item(
+                    vault,
+                    &item,
+                    Some(base),
+                    MutationContext {
+                        actor: "test",
+                        idempotency_key: &format!("move-{}-{}", id.0, item.revision),
+                        request_material: b"m",
+                        audit_event: None,
+                    },
+                )
+            })
+            .unwrap();
+    }
+
+    fn copies(service: &KeyLeaseService) -> Vec<VaultItem> {
+        items(service)
+            .into_iter()
+            .filter(|item| item.extensions.contains_key(MIRROR_EXTENSION))
+            .collect()
+    }
+
+    #[test]
+    fn a_nodes_items_show_on_the_owner_read_only_and_follow_the_node() {
+        let (_a, owner) = service();
+        let (_b, node) = service();
+        owner_linked(&owner);
+        let node_id = join(&owner, &node, "vps-prod");
+        let id = ItemId::new();
+        put_item(&node, &id, "node db password");
+        let mut stored = backups(&node);
+
+        let report = owner.cloud_mirror_node(&node_id, &stored).unwrap();
+        assert_eq!((report.items, report.updated), (1, 1));
+        let copy = copies(&owner).remove(0);
+        assert_eq!(copy.title, "node db password");
+        assert_ne!(copy.id, id, "a copy has its own id here");
+        let origin = copy.metadata().origin.unwrap();
+        assert_eq!(
+            (origin.kind.as_str(), origin.source.as_str()),
+            ("node", "vps-prod")
+        );
+        let group = owner
+            .list_groups()
+            .unwrap()
+            .into_iter()
+            .find(|group| group.id == copy.group_id)
+            .unwrap();
+        assert_eq!(group.name, "vps-prod");
+        assert!(
+            crate::items::refuse_shared_copy(&copy).is_err(),
+            "read-only"
+        );
+        assert!(owner.delete_group(&group.id, group.revision).is_err());
+        assert!(
+            owner
+                .cloud_share(
+                    ShareScope::Item {
+                        item_id: copy.id.clone()
+                    },
+                    "vps-prod",
+                    None,
+                    None
+                )
+                .is_err(),
+            "a copy is not shared on"
+        );
+        assert!(
+            !backups(&owner).iter().any(|b| b.object_id == copy.id.0),
+            "the owner does not back up a node's copy"
+        );
+        let unchanged = owner.cloud_mirror_node(&node_id, &stored).unwrap();
+        assert_eq!((unchanged.items, unchanged.updated), (1, 0));
+
+        // An edit on the node reaches the same copy.
+        put_item(&node, &id, "node db password v2");
+        for backup in backups(&node) {
+            stored.retain(|b| b.object_id != backup.object_id);
+            stored.push(backup);
+        }
+        owner.cloud_mirror_node(&node_id, &stored).unwrap();
+        let edited = copies(&owner);
+        assert_eq!(edited.len(), 1);
+        assert_eq!(
+            (edited[0].id.clone(), edited[0].title.as_str()),
+            (copy.id.clone(), "node db password v2")
+        );
+
+        // A deletion on the node removes it.
+        node.with_vault(|vault| {
+            node.store.delete_item(
+                vault,
+                &id,
+                2,
+                MutationContext {
+                    actor: "test",
+                    idempotency_key: "delete",
+                    request_material: b"d",
+                    audit_event: None,
+                },
+            )
+        })
+        .unwrap();
+        for backup in backups(&node) {
+            stored.retain(|b| b.object_id != backup.object_id);
+            stored.push(backup);
+        }
+        let report = owner.cloud_mirror_node(&node_id, &stored).unwrap();
+        assert_eq!((report.items, report.removed), (0, 1));
+        assert!(copies(&owner).is_empty());
+
+        // Removing the node drops its copies and group.
+        put_item(&node, &ItemId::new(), "another");
+        owner.cloud_mirror_node(&node_id, &backups(&node)).unwrap();
+        assert_eq!(copies(&owner).len(), 1);
+        owner.cloud_remove_node("vps-prod").unwrap();
+        assert!(copies(&owner).is_empty());
+        assert!(
+            !owner
+                .list_groups()
+                .unwrap()
+                .iter()
+                .any(|g| g.id == group.id)
+        );
+    }
+
+    #[test]
+    fn adopting_a_nodes_items_shares_them_back_under_the_same_ids() {
+        let (_a, owner) = service();
+        let (_b, node) = service();
+        owner_linked(&owner);
+        let node_id = join(&owner, &node, "vps-prod");
+        let loose = ItemId::new();
+        put_item(&node, &loose, "deploy key");
+        let billing = put_project(&node, "billing");
+        let in_project = ItemId::new();
+        put_item(&node, &in_project, "stripe key");
+        move_to_project(&node, &in_project, &billing.id);
+        let mut stored = backups(&node);
+        owner.cloud_mirror_node(&node_id, &stored).unwrap();
+        assert_eq!(copies(&owner).len(), 2);
+
+        let report = owner.cloud_adopt("vps-prod", &[]).unwrap();
+        assert_eq!(report.adopted.len(), 2, "{report:?}");
+        assert_eq!(report.projects, vec!["billing".to_string()]);
+        assert_eq!(report.item_shares, 1);
+        assert!(copies(&owner).is_empty());
+        let mine = items(&owner);
+        assert_eq!(mine.len(), 2);
+        assert!(mine.iter().all(|item| item.origin().is_none()));
+        let adopted = mine.iter().find(|item| item.id == in_project).unwrap();
+        assert_eq!(
+            adopted.project_id.as_ref(),
+            Some(&billing.id),
+            "same project id"
+        );
+
+        owner.cloud_publish_shares().unwrap();
+        deliver(&owner, &node);
+        let on_node = items(&node);
+        assert_eq!(on_node.len(), 2, "the originals became the shared copies");
+        for id in [&loose, &in_project] {
+            let item = on_node.iter().find(|item| &item.id == id).unwrap();
+            assert_eq!(item.origin().unwrap().kind, "shared");
+        }
+
+        // The node no longer backs them up, and the owner does not copy them
+        // back.
+        let tombstones = node.cloud_backup_batch(100).unwrap();
+        assert!(
+            tombstones
+                .iter()
+                .any(|p| p.backup.object_id == loose.0 && p.backup.deleted)
+        );
+        for backup in backups(&node) {
+            stored.retain(|b| b.object_id != backup.object_id);
+            stored.push(backup);
+        }
+        owner.cloud_mirror_node(&node_id, &stored).unwrap();
+        assert!(copies(&owner).is_empty());
+
+        // Changes now flow from the owner.
+        put_item(&owner, &loose, "deploy key (rotated)");
+        owner.cloud_publish_shares().unwrap();
+        deliver(&owner, &node);
+        assert!(titles(&node).contains(&"deploy key (rotated)".to_string()));
     }
 }
