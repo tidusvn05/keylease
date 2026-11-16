@@ -29,6 +29,14 @@ fail() {
 }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# Asks yes/no at the terminal (also under `curl | sh`); no terminal means no.
+ask() {
+  [ -t 1 ] && (: </dev/tty) 2>/dev/null || return 1
+  printf '%s [Y/n] ' "$1"
+  read -r answer </dev/tty || return 1
+  case "$answer" in "" | y | Y | yes) return 0 ;; *) return 1 ;; esac
+}
+
 fetch() { # URL DEST
   if have curl; then
     curl -fsSL --retry 3 -o "$2" "$1"
@@ -124,8 +132,17 @@ main() {
     fail "sha256sum or shasum is needed to verify the download."
   fi
   if [ "$server" = 1 ] && [ "$external_db" = 0 ] && ! find_postgres; then
-    fail "the server needs PostgreSQL's programs (it runs its own private database with them)." \
-      "Install them, then run this again:  $(postgres_hint)" \
+    hint=$(postgres_hint)
+    say "The server needs PostgreSQL's programs (it runs its own private database with them)."
+    case "$hint" in
+      sudo* | brew*)
+        if ask "Install them now ($hint)?"; then
+          sh -c "$hint" </dev/tty || fail "installing PostgreSQL failed."
+        fi
+        ;;
+    esac
+    find_postgres || fail "PostgreSQL's programs are still missing." \
+      "Install them, then run this again:  $hint" \
       "Or use a database you already have:  --database-url-file FILE"
   fi
   say "Platform: $target"

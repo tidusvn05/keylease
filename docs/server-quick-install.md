@@ -6,9 +6,41 @@ One command on Linux or macOS. No root, no Docker, no Rust.
 curl -fsSL https://raw.githubusercontent.com/tidusvn05/keylease/main/install.sh | sh -s -- --server
 ```
 
-You need PostgreSQL's programs installed, not a running database: the server
-runs its own private one. If they are missing, the installer stops before
-downloading anything and prints the command for your system:
+Run it in a terminal on the server. It walks you through the rest:
+
+1. **PostgreSQL's programs** (not a running database: the server runs its own
+   private one). When they are missing, it offers to install them
+   (`sudo apt install postgresql`, `dnf`, `pacman` or `brew`).
+2. **Where your devices will reach the server**:
+   - **A domain name with HTTPS.** It shows the DNS record to add, then
+     checks it again until it resolves.
+   - **Tailscale**, for a machine with no public address.
+   - **Only this machine**, reached over an SSH tunnel.
+3. **For a domain, the web server.** It finds Caddy or nginx; with neither,
+   it offers to install Caddy. When Caddy has automatic HTTPS turned off, it
+   lets you pick a certificate another site on the machine already uses.
+   It then shows the commands that enable the site and runs them after a
+   yes (they use sudo).
+4. **Linking your laptop.** It prints a one-time **setup code**. On the
+   laptop:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/tidusvn05/keylease/main/install.sh | sh
+keylease cloud init --url https://keys.example.com      # asks for the setup code
+keylease cloud console                                  # a one-time sign-in link for the console
+```
+
+A setup code works once, for 30 minutes, and only to link a vault as an
+owner; `keylease-server owner-code` on the server makes a new one. The admin
+token never has to leave the server.
+
+Every answer is also an option (`--domain`, `--tunnel`, `--tls-cert`…, see
+below), so scripts and CI run setup without questions; with no terminal it
+asks nothing and keeps `http://localhost:8080`.
+
+The installer puts `keylease` and `keylease-server` in `~/.local/bin` (after
+checking the download's SHA-256). Without a terminal, it stops when
+PostgreSQL's programs are missing and prints the command for your system:
 
 | System | Command |
 |---|---|
@@ -17,30 +49,11 @@ downloading anything and prints the command for your system:
 | Arch | `sudo pacman -S postgresql` |
 | macOS | `brew install postgresql@17` |
 
-The installer puts `keylease` and `keylease-server` in `~/.local/bin` (after
-checking the download's SHA-256), then runs `keylease-server setup`, which
-starts the server as a service and prints what to do next:
-
-```text
-KeyLease server is set up in ~/.local/share/keylease-server
-  Running:     keylease-server.service (systemctl --user status keylease-server)
-  Console:     http://localhost:8080/console/
-  Admin token: ~/.local/share/keylease-server/secrets/admin_token
-  Database:    private PostgreSQL in ~/.local/share/keylease-server/pg (Unix socket only)
-```
-
-Then make your vault the owner and sign in to the console:
-
-```sh
-keylease vault init        # once, if you have no vault yet
-keylease cloud init --url http://localhost:8080 --admin-token-file ~/.local/share/keylease-server/secrets/admin_token
-keylease cloud console     # prints a one-time sign-in link
-```
-
 ## Day to day
 
 ```sh
 keylease-server status       # running or not, the console address, the admin token file
+keylease-server owner-code   # a new one-time setup code for `keylease cloud init`
 keylease-server uninstall    # stop and remove the service; your data stays
 ```
 

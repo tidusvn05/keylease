@@ -33,14 +33,19 @@ to use one.
 
 The Cloud is `keylease-server` (PostgreSQL), as in the
 [single-VPS install](self-hosted-vps.md), or the image
-`ghcr.io/tidusvn05/keylease-server`. Put it behind HTTPS. You need its admin
-token (`KEYLEASE_ADMIN_TOKEN_FILE`) once, to create your account.
+`ghcr.io/tidusvn05/keylease-server`. Put it behind HTTPS (`keylease-server
+setup` asks). Creating your account takes a one-time setup code or the admin
+token (`KEYLEASE_ADMIN_TOKEN_FILE`).
 
 ## 2. Link your laptop as the owner
 
 ```sh
-keylease cloud init --url https://cloud.example.com --admin-token-file ./admin.token --name laptop
+keylease cloud init --url https://cloud.example.com --name laptop
 ```
+
+It asks for the one-time setup code that `keylease-server setup` printed
+(`keylease-server owner-code` on the server makes a new one). With the admin
+token at hand instead, pass `--admin-token-file FILE`.
 
 It asks for your master password and prints a **recovery kit** once: the
 cloud URL, your account id and a 28-character code. Store it offline (a

@@ -181,7 +181,25 @@ async fn create_account(
     headers: HeaderMap,
     Json(body): Json<CreateRelayAccount>,
 ) -> ApiResult<Json<RelayAccountCreated>> {
-    authorize(&state, &headers)?;
+    if authorize(&state, &headers).is_err() {
+        // A one-time setup code from `keylease-server setup` also creates
+        // an account (and nothing else).
+        let presented = headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .unwrap_or_default();
+        let accepted = crate::owner_code::looks_like_code(presented)
+            && std::env::var_os("KEYLEASE_OWNER_CODES_FILE").is_some_and(|file| {
+                crate::owner_code::consume(std::path::Path::new(&file), presented)
+            });
+        if !accepted {
+            return Err(denied(
+                "invalid admin token or setup code (a code works once, for 30 minutes; \
+                 make a new one with `keylease-server owner-code`)",
+            ));
+        }
+    }
     if !valid_id(&body.account_id)
         || !valid_name(&body.owner_name)
         || !valid_keys(&body.owner)

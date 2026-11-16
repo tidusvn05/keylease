@@ -18,6 +18,7 @@ mod machine;
 mod managed;
 mod managed_nodes;
 mod oidc;
+pub mod owner_code;
 mod relay;
 mod siem;
 mod store;

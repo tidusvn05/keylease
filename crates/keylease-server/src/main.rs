@@ -9,13 +9,14 @@ use zeroize::Zeroizing;
 
 mod expose;
 mod setup;
+mod wizard;
 
 fn main() -> Result<()> {
     // Before the runtime starts any thread: setup's server.env becomes the
     // environment unless it is already set.
     if !matches!(
         env::args().nth(1).as_deref(),
-        Some("setup" | "status" | "uninstall" | "-h" | "--help" | "help")
+        Some("setup" | "status" | "uninstall" | "owner-code" | "-h" | "--help" | "help")
     ) {
         setup::load_env_file()?;
     }
@@ -31,12 +32,14 @@ async fn async_main() -> Result<()> {
         Some("setup") => return setup::run(env::args().skip(2).collect()).await,
         Some("status") => return setup::status(env::args().skip(2).collect()).await,
         Some("uninstall") => return setup::uninstall(env::args().skip(2).collect()),
+        Some("owner-code") => return setup::owner_code(env::args().skip(2).collect()),
         Some("-h" | "--help" | "help") => {
             println!(
                 "keylease-server — the self-hosted KeyLease server\n\n\
                  \x20 keylease-server setup       install: secrets, a private PostgreSQL, a service\n\
                  \x20 keylease-server status      is it running, and where\n\
                  \x20 keylease-server uninstall   stop and remove the service (data is kept)\n\
+                 \x20 keylease-server owner-code  a one-time code to link your laptop's vault\n\
                  \x20 keylease-server             run in the foreground (what the service runs)\n\
                  \x20 keylease-server migrate | healthcheck | kms …\n\n\
                  Docs: https://github.com/tidusvn05/keylease/blob/main/docs/server-quick-install.md"
