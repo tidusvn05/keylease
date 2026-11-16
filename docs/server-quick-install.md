@@ -60,8 +60,10 @@ Pass them after `--server`, or to `keylease-server setup` directly:
 
 | Option | Default | |
 |---|---|---|
+| `--domain NAME` | | Serve `https://NAME`; see [A real address](#a-real-address). With `--tls-cert FILE --tls-key FILE` when Caddy's automatic HTTPS is off. |
+| `--tunnel tailscale` | | No public address: serve `https://MACHINE.TAILNET.ts.net` to your tailnet. |
 | `--listen ADDR:PORT` | `127.0.0.1:8080` | Setup stops early and suggests a free port when this one is taken. |
-| `--public-url URL` | `http://localhost:PORT` | The address browsers and vaults use. Set it when a reverse proxy serves a real name. |
+| `--public-url URL` | `http://localhost:PORT` | The address browsers and vaults use, when you run the proxy yourself. Running setup again keeps the last one. |
 | `--database-url-file FILE` | a private cluster | Use a PostgreSQL you already run (a file holding its URL). |
 | `--dir DIR` | `~/.local/share/keylease-server` | Where the secrets, database and settings live. |
 | `--no-service` | | Only prepare; start it yourself with `keylease-server`. |
@@ -83,23 +85,64 @@ The installer also takes `--version X.Y.Z` and `--bin-dir DIR`.
   as root, which needs `--database-url-file`), a launchd agent on macOS. It
   will not replace a service that belongs to another install directory.
 
-## Reaching it from another computer
+## A real address
 
-It listens on the machine only. For a quick look, tunnel it:
+The server listens on the machine only. To put it on a name with HTTPS:
+
+```sh
+keylease-server setup --domain keys.example.com
+# or, during the install:
+curl -fsSL https://raw.githubusercontent.com/tidusvn05/keylease/main/install.sh | sh -s -- --server --domain keys.example.com
+```
+
+Setup then:
+
+1. checks where `keys.example.com` points: this machine, Cloudflare's proxy,
+   somewhere else, or nowhere yet (it continues either way and says what to
+   fix);
+2. writes a site for the proxy the machine has: **Caddy** (it gets and renews
+   the certificate itself) or **nginx** (with `certbot` for the certificate).
+   With neither, it stops and prints how to install Caddy;
+3. prints the two or three commands that enable the site and, at a terminal,
+   asks before running them with sudo:
+
+```text
+Caddy will serve HTTPS. Site file: ~/.local/share/keylease-server/proxy/keylease.caddy
+To enable it:
+  sudo install -m 644 …/proxy/keylease.caddy /etc/caddy/keylease.caddy
+  echo 'import /etc/caddy/keylease.caddy' | sudo tee -a /etc/caddy/Caddyfile >/dev/null
+  sudo systemctl reload caddy
+Run these now? [Y/n]
+```
+
+4. checks that `https://keys.example.com/healthz` answers.
+
+It does not run anything when the site would not work as written. Two cases:
+- The Caddyfile turns automatic HTTPS off, as with a Cloudflare origin
+  certificate. Pass the files with `--tls-cert` and `--tls-key`; setup shows a
+  certificate other sites on the machine already use.
+- The name already has a site.
+
+**No public address** (a Mac at home, a box behind NAT): use Tailscale. It
+serves `https://MACHINE.TAILNET.ts.net` with a real certificate to your
+devices on the tailnet (your laptop, your phone with the Tailscale app):
+
+```sh
+keylease-server setup --tunnel tailscale
+```
+
+**Changing the address later**:
+- Passkeys belong to an address, so register them again in the console.
+- Each linked vault follows with `keylease cloud set-url https://NEW`. One
+  sync checks it, and nothing changes if the server there does not know the
+  vault.
+- If console approvals were on, turn them on again.
+
+For a quick look without a name, tunnel the port over SSH. Passkeys work
+because the browser sees `localhost`:
 
 ```sh
 ssh -N -L 8080:127.0.0.1:8080 you@server     # then open http://localhost:8080/console/
-```
-
-Passkeys work through the tunnel because the browser sees `localhost`. For a
-real name, put a TLS reverse proxy in front and run setup again with
-`--public-url https://keys.example.com` (passkeys registered on `localhost`
-need registering again):
-
-```text
-keys.example.com {
-    reverse_proxy 127.0.0.1:8080
-}
 ```
 
 ## From source

@@ -7,6 +7,7 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 use zeroize::Zeroizing;
 
+mod expose;
 mod setup;
 
 fn main() -> Result<()> {

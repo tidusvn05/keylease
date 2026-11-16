@@ -55,6 +55,10 @@ pub(crate) enum CloudCommand {
     },
     /// Link, fingerprints and counters.
     Status,
+    /// The server moved (localhost to a domain, a new name): point this
+    /// vault's link at its new address. Checked with one sync; nothing
+    /// changes if the server there does not know this vault.
+    SetUrl { url: String },
     /// Owner: a one-time link (15 minutes) that signs this account in to the
     /// KeyLease Console in a browser. Register a passkey there for next time.
     Console {
@@ -458,6 +462,23 @@ pub(crate) async fn cloud_command(cli: &Cli, socket: &Path, command: CloudComman
             }))
         }
         CloudCommand::Status => print_json(&service.cloud_status()?),
+        CloudCommand::SetUrl { url } => {
+            require_link(&service)?;
+            let previous = service.cloud_set_url(&url)?;
+            match sync_once(&service).await {
+                Ok(sync) => print_json(&json!({
+                    "url": service.cloud_link()?.map(|link| link.url),
+                    "previous": previous,
+                    "sync": sync,
+                    "next": "If console approvals were on, turn them on again: they are signed for one \
+                             address (macOS: Server page; CLI: keylease cloud console-approvals enable).",
+                })),
+                Err(error) => {
+                    service.cloud_set_url(&previous)?;
+                    Err(error)
+                }
+            }
+        }
         CloudCommand::Adopt { node, items } => {
             require_link(&service)?;
             // Copy the node's newest items first.

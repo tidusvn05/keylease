@@ -38,16 +38,27 @@ struct Options {
     public_url: Option<String>,
     database_url_file: Option<PathBuf>,
     service: bool,
+    domain: Option<String>,
+    tailscale: bool,
+    tls_cert: Option<PathBuf>,
+    tls_key: Option<PathBuf>,
 }
 
 fn usage() -> &'static str {
-    "usage: keylease-server setup [--dir DIR] [--listen ADDR:PORT] [--public-url URL]\n\
+    "usage: keylease-server setup [--dir DIR] [--listen ADDR:PORT]\n\
+     \x20                            [--domain NAME [--tls-cert FILE --tls-key FILE]\n\
+     \x20                             | --tunnel tailscale | --public-url URL]\n\
      \x20                            [--database-url-file FILE] [--no-service]\n\
      \n\
      Generates the secrets, prepares PostgreSQL (a private cluster in DIR unless\n\
      --database-url-file is given), writes DIR/server.env and starts the server\n\
-     as a service (systemd, or launchd on macOS). Safe to run again: secrets\n\
-     and data are kept.\n\
+     as a service (systemd, or launchd on macOS). Safe to run again: secrets,\n\
+     data and the public address are kept.\n\
+     \n\
+     --domain NAME        serve https://NAME: checks the DNS record, writes the\n\
+     \x20                    Caddy (or nginx) site and offers to enable it\n\
+     --tunnel tailscale   no public address: https://MACHINE.TAILNET.ts.net,\n\
+     \x20                    for your devices on the tailnet\n\
      \n\
      Later:  keylease-server status | keylease-server uninstall"
 }
@@ -80,6 +91,10 @@ fn parse(args: Vec<String>) -> Result<Options> {
         public_url: None,
         database_url_file: None,
         service: true,
+        domain: None,
+        tailscale: false,
+        tls_cert: None,
+        tls_key: None,
     };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -99,12 +114,33 @@ fn parse(args: Vec<String>) -> Result<Options> {
                 options.database_url_file = Some(PathBuf::from(value("--database-url-file")?))
             }
             "--no-service" => options.service = false,
+            "--domain" => options.domain = Some(crate::expose::valid_domain(&value("--domain")?)?),
+            "--tunnel" => match value("--tunnel")?.as_str() {
+                "tailscale" => options.tailscale = true,
+                other => bail!("--tunnel supports tailscale, not {other}"),
+            },
+            "--tls-cert" => options.tls_cert = Some(PathBuf::from(value("--tls-cert")?)),
+            "--tls-key" => options.tls_key = Some(PathBuf::from(value("--tls-key")?)),
             "-h" | "--help" => {
                 println!("{}", usage());
                 std::process::exit(0);
             }
             other => bail!("unknown option {other}\n\n{}", usage()),
         }
+    }
+    let addresses = [
+        options.domain.is_some(),
+        options.tailscale,
+        options.public_url.is_some(),
+    ];
+    if addresses.iter().filter(|given| **given).count() > 1 {
+        bail!("choose one of --domain, --tunnel and --public-url");
+    }
+    if options.tls_cert.is_some() != options.tls_key.is_some() {
+        bail!("--tls-cert and --tls-key go together");
+    }
+    if options.tls_cert.is_some() && options.domain.is_none() {
+        bail!("--tls-cert and --tls-key need --domain");
     }
     if !options.dir.is_absolute() {
         options.dir = env::current_dir()?.join(&options.dir);
@@ -124,6 +160,21 @@ pub async fn run(args: Vec<String>) -> Result<()> {
     let options = parse(args)?;
     let dir = &options.dir;
     check_port(options.listen).await?;
+    let previous_url = read_env(dir)
+        .into_iter()
+        .find(|(key, _)| key == "KEYLEASE_SERVER_PUBLIC_URL")
+        .map(|(_, value)| value);
+    let dns = options.domain.as_deref().map(|domain| {
+        let dns = crate::expose::check_dns(domain);
+        report_dns(domain, &dns);
+        dns
+    });
+    // Before anything is written: a missing Tailscale fails here.
+    let tunnel_url = if options.tailscale {
+        Some(crate::expose::tailscale_serve(options.listen.port())?)
+    } else {
+        None
+    };
     if options.service {
         if cfg!(target_os = "macos") {
             refuse_foreign_service(&launchd_plist()?, dir)?;
@@ -164,9 +215,14 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         }
     };
 
+    // Running setup again (an upgrade) keeps the address it had.
     let public_url = options
-        .public_url
-        .clone()
+        .domain
+        .as_ref()
+        .map(|domain| format!("https://{domain}"))
+        .or(tunnel_url.clone())
+        .or(options.public_url.clone())
+        .or(previous_url.clone())
         .unwrap_or_else(|| format!("http://localhost:{}", options.listen.port()));
     let mut env_text = format!(
         "# Written by `keylease-server setup`; it rewrites this file when run again.\n\
@@ -239,10 +295,52 @@ pub async fn run(args: Vec<String>) -> Result<()> {
             secrets.join("kms_root_key").display()
         );
     }
-    if options.listen.ip().is_loopback() && !public_url.contains("localhost") {
+    if previous_url
+        .as_deref()
+        .is_some_and(|previous| previous != public_url)
+    {
         println!();
         println!(
-            "It listens on {} only: put a reverse proxy for {public_url} in front of it.",
+            "The address changed from {}: passkeys registered there need registering again \
+             in the console; on each linked vault run:  keylease cloud set-url {public_url}",
+            previous_url.as_deref().unwrap_or_default()
+        );
+    }
+    if let (Some(domain), Some(dns)) = (&options.domain, &dns) {
+        let tls = options
+            .tls_cert
+            .clone()
+            .zip(options.tls_key.clone())
+            .map(|(cert, key)| crate::expose::TlsFiles { cert, key });
+        let plan =
+            crate::expose::plan_proxy(dir, domain, options.listen.port(), tls.as_ref(), dns)?;
+        if crate::expose::offer(&plan)? {
+            if crate::expose::answers(&public_url).await {
+                println!("{public_url} answers. HTTPS is set up.");
+            } else {
+                println!(
+                    "{public_url} does not answer yet (DNS or the certificate may take a minute). \
+                     Check:  curl {public_url}/healthz"
+                );
+            }
+        } else {
+            println!("Then check:  curl {public_url}/healthz");
+        }
+    } else if tunnel_url.is_some() {
+        println!();
+        if crate::expose::answers(&public_url).await {
+            println!("{public_url} answers on your tailnet (Tailscale serves it with HTTPS).");
+        } else {
+            println!(
+                "Tailscale serves {public_url} on your tailnet; the first request may take a few \
+                 seconds while it gets the certificate."
+            );
+        }
+    } else if options.listen.ip().is_loopback() && !public_url.contains("localhost") {
+        println!();
+        println!(
+            "It listens on {} only: put a reverse proxy for {public_url} in front of it \
+             (or run setup with --domain NAME to have it written for you).",
             options.listen
         );
     } else if options.listen.ip().is_loopback() {
@@ -250,6 +348,10 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         println!(
             "It listens on this machine only. From another computer:  ssh -N -L {port}:127.0.0.1:{port} THIS_HOST",
             port = options.listen.port()
+        );
+        println!(
+            "For a real address:  keylease-server setup --domain keys.example.com   \
+             (or --tunnel tailscale)"
         );
     }
     println!();
@@ -259,6 +361,27 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         admin_token.display()
     );
     Ok(())
+}
+
+fn report_dns(domain: &str, dns: &crate::expose::Dns) {
+    use crate::expose::Dns;
+    match dns {
+        Dns::Here => println!("DNS: {domain} points to this machine."),
+        Dns::Cloudflare => println!("DNS: {domain} goes through Cloudflare's proxy."),
+        Dns::Elsewhere(addresses) => println!(
+            "DNS: {domain} points to {}, not an address of this machine. Fine if this machine \
+             is behind NAT with that public address; otherwise fix the record.",
+            addresses
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Dns::Missing => println!(
+            "DNS: {domain} does not resolve yet. Add an A (or AAAA) record pointing to this \
+             machine; setup continues, and HTTPS starts working once it resolves."
+        ),
+    }
 }
 
 // ---- files -------------------------------------------------------------------
@@ -404,6 +527,16 @@ async fn prepare_postgres(dir: &Path) -> Result<Cluster> {
         );
     };
     let data = dir.join("pg");
+    // PostgreSQL listens on a Unix socket in the data directory; the kernel
+    // caps socket paths at 107 bytes.
+    let socket = data.join(".s.PGSQL.5432");
+    if socket.as_os_str().len() > 107 {
+        bail!(
+            "{} is too long a path for PostgreSQL's socket (at most 107 characters).\n\
+             \x20 Choose a shorter --dir, e.g. ~/keylease-server.",
+            dir.display()
+        );
+    }
     let cluster = Cluster {
         data: data.clone(),
         pg_ctl: bin.join("pg_ctl"),

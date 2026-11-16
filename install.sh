@@ -6,8 +6,9 @@
 #
 # Options:
 #   --server            also set up a server on this machine (keylease-server setup);
-#                       setup options such as --listen, --public-url,
-#                       --database-url-file and --no-service are passed on
+#                       setup options such as --domain NAME, --tunnel tailscale,
+#                       --listen, --public-url, --database-url-file and
+#                       --no-service are passed on
 #   --version X.Y.Z     a specific release (default: the latest)
 #   --bin-dir DIR       where the binaries go (default: ~/.local/bin)
 #
@@ -104,7 +105,8 @@ main() {
       --bin-dir) bin_dir="${2:?--bin-dir needs a value}"; shift ;;
       -h | --help) sed -n '2,17p' "$0" 2>/dev/null || say "see https://github.com/$REPO"; exit 0 ;;
       --database-url-file) external_db=1; setup_args="$setup_args $1 ${2:?$1 needs a value}"; shift ;;
-      --listen | --public-url | --dir) setup_args="$setup_args $1 ${2:?$1 needs a value}"; shift ;;
+      --listen | --public-url | --dir | --domain | --tunnel | --tls-cert | --tls-key)
+        setup_args="$setup_args $1 ${2:?$1 needs a value}"; shift ;;
       --no-service) setup_args="$setup_args $1" ;;
       *) fail "unknown option $1 (see --help)" ;;
     esac
@@ -184,7 +186,13 @@ main() {
 
   if [ "$server" = 1 ]; then
     step "Setting up the server"
-    # shellcheck disable=SC2086 # setup_args is a list of words built above
+    # Under `curl | sh` stdin is this script: give setup the terminal so it
+    # can ask before running sudo commands (--domain).
+    if [ -t 1 ] && (: </dev/tty) 2>/dev/null; then
+      # shellcheck disable=SC2086 # setup_args is a list of words built above
+      exec "$bin_dir/keylease-server" setup $setup_args </dev/tty
+    fi
+    # shellcheck disable=SC2086
     exec "$bin_dir/keylease-server" setup $setup_args
   fi
 

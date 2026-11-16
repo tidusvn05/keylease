@@ -873,6 +873,18 @@ impl KeyLeaseService {
         })
     }
 
+    /// Points the link at the same server under a new address (it moved from
+    /// localhost to a domain, say). Returns the previous URL. The caller
+    /// syncs once and calls this again with the old URL if that fails.
+    pub fn cloud_set_url(&self, url: &str) -> Result<String> {
+        let url = valid_url(url)?;
+        let mut link = self.require_link()?;
+        let previous = std::mem::replace(&mut link.url, url);
+        self.save_link(&link)?;
+        self.cloud_audit("cloud:set_url", "kl://cloud/link", &link.url)?;
+        Ok(previous)
+    }
+
     pub fn cloud_record_sync(&self, error: Option<String>) -> Result<()> {
         if let Some(mut link) = self.cloud_link()? {
             link.last_sync_at = Some(Utc::now());
